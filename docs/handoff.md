@@ -175,24 +175,42 @@ a given run via `activeLimitProfile`; the merged values are what enforcement
 sees and what denial messages report.
 
 **Core limits** — `CoreLimits` in `platform/core/limits.ts`, defaults in
-`DEFAULT_LIMITS`, validated by `validateLimits`. These govern kernel execution
-(durations, retries, replans, recovery depth, parallelism, output and artifact
-sizes, context budget) and are independent of the policy file.
+`DEFAULT_LIMITS`, validated by `validateLimits`. These are declared as the
+kernel's resource envelope and are independent of the policy file.
 
-| Setting | Default |
-| --- | --- |
-| `maxTaskDurationMs` | 1,800,000 (30 min) |
-| `maxStepDurationMs` | 300,000 (5 min) |
-| `maxToolDurationMs` | 120,000 (2 min) |
-| `maxToolRetries` | 2 |
-| `maxReplans` | 2 |
-| `maxRecoveryDepth` | 3 |
-| `maxExecutionTimeMs` | 1,800,000 (30 min) |
-| `maxParallelTasks` | 1 |
-| `maxParallelTools` | 1 |
-| `maxOutputBytes` | 2,097,152 (2 MiB) |
-| `maxArtifactBytes` | 10,485,760 (10 MiB) |
-| `maxContextTokens` | 200,000 |
+**Enforced versus declared — read this before assuming a bound exists.**
+
+Only the four recovery limits below are actually read by an enforcement decision
+today. `chooseRecoveryDetailed` in `platform/core/recovery.ts` consumes exactly
+`maxToolRetries`, `maxReplans`, and `maxRecoveryDepth`, and the kernel's
+execution-time bound is `maxExecutionTimeMs`. The remaining entries in
+`DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
+implementing them is open work, not a latent guarantee. Do not rely on
+`maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
+`maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, `maxArtifactBytes`, or
+`maxContextTokens` to reject anything today.
+
+| Setting | Default | Enforced? |
+| --- | --- | --- |
+| `maxToolRetries` | 2 | **yes** — task-wide retry budget in `chooseRecoveryDetailed` |
+| `maxReplans` | 2 | **yes** — task-wide replan budget in `chooseRecoveryDetailed` |
+| `maxRecoveryDepth` | 3 | **yes** — consecutive recovery rounds since the last success |
+| `maxExecutionTimeMs` | 1,800,000 (30 min) | supplied to the recovery options; no independent timer is enforced |
+| `maxTaskDurationMs` | 1,800,000 (30 min) | no — declared only |
+| `maxStepDurationMs` | 300,000 (5 min) | no — declared only |
+| `maxToolDurationMs` | 120,000 (2 min) | no — declared only |
+| `maxParallelTasks` | 1 | no — declared only |
+| `maxParallelTools` | 1 | no — declared only; Pi owns tool-execution mode |
+| `maxOutputBytes` | 2,097,152 (2 MiB) | no — declared only |
+| `maxArtifactBytes` | 10,485,760 (10 MiB) | no — declared only |
+| `maxContextTokens` | 200,000 | no — declared only |
+
+`maxStepRetries` was **removed** (F-006 Phase 1). It was declared but never read
+by any recovery decision, so it advertised a bound that did not exist. Per-step
+attempt budgets live on `PlanStep.retryPolicy.maxAttempts` and
+`ToolDescriptor.retryPolicy.maxAttempts`; the recovery budgets above are
+task-wide. The KernelAdapter derives its recovery limits from `DEFAULT_LIMITS`
+rather than duplicating the literals (PR #4), so the two cannot drift.
 
 Provider defaults:
 - Canonical: OmniRoute via omni provider at http://localhost:20128 (omniroute-pi-ext-integration extension).

@@ -99,32 +99,21 @@ Pi documentation recommends a container, VM, or dedicated user when analyzing un
 
 ## Open Issues
 
-### OI-001: Policy scanner matched raw string content, producing false denials
+No open issues are recorded here.
 
-**Status:** resolved. Path validation now runs on tool-declared path arguments and shell operands instead of on every string in the payload. Residual limitations are listed below and are real.
+A previously listed entry, OI-001 (policy scanner matching raw string content
+and producing false denials), has been removed. It is not a tracked finding:
+there is no corresponding finding document, no corresponding test, and no current
+status entry that references it. The behaviour it described is already covered by
+the tracked findings that replaced it — F-007 for path-extraction false
+positives on quoted, backslash-leading pattern arguments, and the
+`WorkspaceBoundary` known-limits section above.
 
-`classifyTrustedOperation` in `platform/core/policy.ts` scans *every string reachable from a tool input* with `collectStrings`, and matches patterns against that raw text. The workspace boundary check (`WorkspaceBoundary.checkInput`, via `extractPathCandidates`) inherits the same assumption that any string shaped like a path is a path operand.
-
-Observed live, in `TRUSTED_PROJECT` mode, on ordinary non-malicious input. In the table below, the offending characters are described in words, because writing them literally is itself enough to trigger the defect being reported:
-
-| Input | Observed denial | Reality |
-| --- | --- | --- |
-| A `bash` command redirecting output to the null device (a `2>` redirection followed by `dev/null`) | `path boundary violation:` followed by a single leading slash, then `path escapes the allowed root` | A shell redirection target, not a project path |
-| A source file containing a double forward-slash comment marker | `path boundary violation:` followed by a doubled slash, then `path escapes the allowed root` | Comment syntax, never passed to a shell |
-| A source file containing a backslash followed by `n` inside a string literal | `path boundary violation:` followed by that pair, then `path escapes the allowed root` | An escape sequence, not a path |
-
-The third case is the sharpest: a single backslash-plus-letter pair inside a JavaScript or TypeScript string literal was classified as an absolute path. A working source file was uneditable through the platform's own tools until the text was reworded.
-
-Why it matters: these are **false denials, not false allows**. The failure mode is safe, because a legitimate operation is refused and reported to the model rather than silently permitted. The cost is usability and, more seriously, trust in the policy. An operator who cannot distinguish a real boundary violation from a parser artifact will eventually be tempted to widen `allowedRoots`, and *that* is a genuine weakening.
-
-Scope of a future fix:
-
-1. Prefer structural parsing over content matching. For shell tools, classify redirection targets and flags as shell grammar rather than treating the whole command string as one path-bearing blob.
-2. Restrict path extraction to strings that are plausibly *path operands*, for example values under keys known to carry paths, or tokens produced by tokenising the command, rather than every string reachable from the input.
-3. Where a match can only be produced by raw substring matching, report it as a distinct, clearly labelled decision from a structural workspace-boundary violation, so that the model and the operator can tell the two apart.
-4. Keep the existing deny lists intact. The goal is fewer false *positives*, never fewer true ones.
-
-Constraint on any future change: it must be re-verified against the trusted-execution suite, in particular that credential access (`SECRET_ACCESS_PATTERNS`), destructive commands (`DESTRUCTIVE_PATTERNS`), and workspace escape are still denied. A false positive removed by weakening a pattern is a regression, not a fix.
+The constraint recorded on that entry still stands as a general rule and is now
+carried in F-007: a false positive removed by weakening a pattern is a
+regression, not a fix, and any change in this area must be re-verified against
+the trusted-execution suite so that credential access, destructive commands, and
+workspace escape remain denied.
 
 
 ## The Path Model

@@ -36,13 +36,38 @@ path operands; this shape (quoted, backslash-leading) defeats that heuristic.
 
 ## Update 2026-09-26 (third instance — non-terminal)
 
+One denial was survived by 20+ subsequent calls while another was terminal.
+That was not a denial-counter mystery; it was the `onViolation` setting. See
+"Resolved: the violation-mapping question" below.
 
 ## Update 2026-09-26 (fourth instance — deliberate reproduction during recon, terminal)
 During read-only recon of the extractor, the agent ran grep commands with backslash-leading tokens while investigating this finding — deliberately reproducing the denial despite the standing rule. Multiple denials were followed immediately by the terminal "Task is FAILED" state. Two upgrades:
 
 Mechanism now confirmed from source, not inference: platform/core/workspace.ts, extractPathCandidates splits scanned strings on /[\s"'()<>]+/ — quotation marks are delimiters, not protection — so a quoted pattern like '.git' yields a bare backslash-leading token that is classified as a path candidate and resolved drive-relative outside the allowed root.
 Codified rules (docs/handoff.md, a614b74) did not prevent the violation. New standing rule: denial reproduction belongs in unit tests, never in live shells.
-Open question (unresolved): PolicyDecision carries ViolationAction block vs abort; which violation classes map to abort, and whether a denial counter exists, is under investigation (explains why one denial was terminal, another was survived by 20+ calls).
+
+## Resolved: the violation-mapping question
+
+The open question recorded above — which violation classes map to `abort`, and
+whether a denial counter explains why one denial was terminal and another was
+survived by 20+ calls — is now answered from source, and is no longer open.
+
+- `PolicyDecision` carries `violation: "block" | "abort"`, set from the policy
+  configuration's `onViolation`. The committed `.pi/neurofebric-policy.json`
+  sets `"onViolation": "block"`, so a denied call is refused and the task
+  continues. The differing live outcomes came from differing configurations, not
+  from a per-class mapping.
+- A denial counter does exist and is exposed as `KernelDiagnostics.denialCount`,
+  counted separately from `terminalRefusalCount` (refusals because the task was
+  already terminal, which are not policy decisions).
+- `KernelAdapter.abortTask` is the single place policy may end a task, and it
+  runs only when the decision carries `violation: "abort"`.
+- The legacy `evaluateToolCall` path now honours the same semantics (PR #4):
+  `block` leaves the task running, `abort` terminates it without a second
+  transition, and an unlabelled denial still fails closed.
+
+Full detail, including why `block` is a configuration choice rather than a
+platform-wide guarantee, is in F-003.
 
 ## Resolution 2026-09-26 (fixed from the code side)
 
