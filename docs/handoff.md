@@ -9,11 +9,97 @@ Never read the same file region twice. One whole-file read is cheaper than three
 No backslash-leading tokens in shell text — not '\r', '\n', '\.git', no escape sequences at all. The path-boundary guard reads them as rooted paths and denies the whole command (F-007). Use file tools or git built-ins instead.
 Prefer file tools over shell for reads and listings. Shell only for git and the test runner.
 One-strike edits. A failed exact-match edit is never retried with the same oldText. One failure → full-file reconstruction, gated by git diff <file> showing changes only in the intended region (F-006).
-A policy denial is never retried. Note it and move on; STOP if it was a required step. Denials have been observed both terminal and non-terminal (F-003, F-007).
+A policy denial is never retried. Note it and move on; STOP if it was a required step. A denial is terminal or not according to the policy's `onViolation` setting, not according to the kernel — see "Policy-denial semantics" below (F-003, F-007).
 Stay inside the repo. Never read outside the repo root; NEVER modify .pi/neurofebric-policy.json (D-004); no .ps1 files.
 Stop and report on anything unexpected. Do not improvise.
 If the brief contradicts the code, STOP and report. Do not expand scope on your own authority — the operator resolves scope conflicts.
 Quote code in fenced code blocks in reports — inline backticks have been mangled in transport before.
+
+## 0. Current finding status
+
+As of `194e03c` on `main` (PR #4 merged). Full detail in `verification/findings/`.
+
+| ID | Status |
+| --- | --- |
+| F-003 | **Partially resolved.** Lifecycle and re-entrancy protection are implemented and verified: a denial never binds an execution, `precheckToolCall` does not advance the lifecycle for a DENY, a blocked turn finalises as completed rather than as a dead stream, terminal refusals carry `refusal` and never `violation`, and any handler that yields re-checks task identity before mutating. Denial *continuation* is a separate matter and is configuration-driven — see the next section. |
+| F-006 | **Phase 1 merged (PR #3).** `maxStepRetries` removed from `RecoveryLimits` and `DEFAULT_LIMITS`; `chooseRecoveryDetailed` returns a machine-readable `RecoveryReason`; `describeTerminalRecovery` names the budget actually exhausted; `TASK_FAILED` carries `reasonCode`, `strategy`, `failure`, and the live counters. **Remaining Phase 2 work:** real retryability propagation from Pi errors (`recordToolResult` currently forces `retryable: false`, so a genuinely transient failure is classified `TOOL_FAILURE` and the `TRANSIENT` retry path is never reached by a real tool error), and strategy-change-aware recovery (recovery still cannot distinguish "retry the same failing call" from "try a different strategy"). |
+| F-008 | **Resolved (PR #2).** Advisory `BUDGET_LOW` at 75% and 90% of `maxToolCallsPerTask`, fired once per band per task, plus `TOOL_CALL_REPEATED` for repeated identical calls. Both are purely observational; the terminal limit denial is unchanged. |
+| F-007 | Resolved. The violation-mapping question is answered — see below. Residuals accepted as backlog. |
+| F-005 | Resolved. |
+| F-000, F-001, F-002, F-004 | See their own documents. |
+
+## 0a. Policy-denial semantics (separate from F-003 lifecycle protection)
+
+These are two different things and are easy to conflate. Keep them apart.
+
+**F-003 lifecycle/re-entrancy protection** is a kernel property. It is
+implemented and verified, and it holds regardless of configuration: a denied
+call never becomes an execution, preflight does not mutate the lifecycle, a
+blocked turn is a completed turn, and a handler that resumes after a newer task
+has replaced its own is refused rather than allowed to act.
+
+**Policy-denial semantics** are a *configuration* choice, carried on
+`PolicyDecision.violation`:
+
+- `onViolation: "block"` — the denial is non-terminal and continuation is
+  allowed. The call is refused, the task keeps running, and a later compliant
+  call may proceed.
+- `onViolation: "abort"` — the denial may terminate the task, with a `FAILED`
+  transition traced as `POLICY_VIOLATION`, `POLICY_ABORTED`, `TASK_FAILED`.
+
+The committed `.pi/neurofebric-policy.json` sets `"onViolation": "block"`, which
+is why denials in this repository are survivable. **That is a configuration
+choice, not a platform-wide guarantee.** A project configured with
+`onViolation: "abort"` will see the same denial terminate its task, by design.
+
+The legacy `evaluateToolCall` entry point follows the same rule (PR #4): `block`
+leaves the task running, `abort` terminates it without a second transition, and
+an *unlabelled* denial — for example a tier-policy approval refusal, which
+carries no `violation` — still fails closed as it always did.
+
+`KernelAdapter.diagnostics` separates `denialCount` (policy denials, whatever
+`onViolation` they carried) from `terminalRefusalCount` (refusals because the
+task was already terminal, which are not policy decisions).
+
+## 0b. Current verification baseline
+
+Measured on `main` at `194e03c` and re-run in CI on every pull request:
+
+| Suite | Command | Result |
+| --- | --- | --- |
+| Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 |
+| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 262 / 262 |
+| **Unit/integration total** | | **284 / 284** |
+| F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed |
+
+The 21 live-proof checks are **counted separately** from the 284. They are
+assertions driven by a standalone script rather than `node:test` cases, so
+284 + 21 is not a suite total of 305. The proof is headless and self-contained —
+it drives the real `KernelAdapter` and the real recovery decision function with
+stubbed tool results, uses no model and no network, and runs unchanged on a CI
+runner.
+
+The step labels in `.github/workflows/ci.yml` carry the test counts as of when
+they were written and are cosmetic; a job passes or fails on each command's
+exit code, not on the label.
+
+## 0c. `workspace/head-baseline`
+
+A **registered linked Git worktree** at `workspace/head-baseline`, listed by
+`git worktree list`. It is **detached at its baseline commit** (`ce93aa4`), so
+it has no branch of its own and will not be moved by commits made on `main`.
+
+It is covered by the existing `workspace/*` rule at `.gitignore` line 17, so it
+is untracked by design and never appears in `git status` or in a commit.
+
+It is **not** part of the build, the test suites, or any verification run.
+
+Operator-visibility implication: a repository-wide search will surface this
+directory alongside real working files, and a directory listing of the workspace
+will show a second, older copy of the platform sources. It is a deliberate
+baseline for comparison, not a duplicate install, not a stray build artifact,
+and not a defect. When reading or searching the repository, exclude it unless you
+specifically want to diff against the baseline.
 
 ## 1. Directory Tree
 
@@ -52,6 +138,7 @@ agent-harness/
 |   |-- fixes/
 |   `-- scenarios/
 `-- workspace/
+    `-- head-baseline/     # Linked git worktree, detached at its baseline commit; ignored by workspace/*
 ```
 
 ## 2. Orchestrator Core Contents (platform/core/)
@@ -175,24 +262,42 @@ a given run via `activeLimitProfile`; the merged values are what enforcement
 sees and what denial messages report.
 
 **Core limits** — `CoreLimits` in `platform/core/limits.ts`, defaults in
-`DEFAULT_LIMITS`, validated by `validateLimits`. These govern kernel execution
-(durations, retries, replans, recovery depth, parallelism, output and artifact
-sizes, context budget) and are independent of the policy file.
+`DEFAULT_LIMITS`, validated by `validateLimits`. These are declared as the
+kernel's resource envelope and are independent of the policy file.
 
-| Setting | Default |
-| --- | --- |
-| `maxTaskDurationMs` | 1,800,000 (30 min) |
-| `maxStepDurationMs` | 300,000 (5 min) |
-| `maxToolDurationMs` | 120,000 (2 min) |
-| `maxToolRetries` | 2 |
-| `maxReplans` | 2 |
-| `maxRecoveryDepth` | 3 |
-| `maxExecutionTimeMs` | 1,800,000 (30 min) |
-| `maxParallelTasks` | 1 |
-| `maxParallelTools` | 1 |
-| `maxOutputBytes` | 2,097,152 (2 MiB) |
-| `maxArtifactBytes` | 10,485,760 (10 MiB) |
-| `maxContextTokens` | 200,000 |
+**Enforced versus declared — read this before assuming a bound exists.**
+
+Only the four recovery limits below are actually read by an enforcement decision
+today. `chooseRecoveryDetailed` in `platform/core/recovery.ts` consumes exactly
+`maxToolRetries`, `maxReplans`, and `maxRecoveryDepth`, and the kernel's
+execution-time bound is `maxExecutionTimeMs`. The remaining entries in
+`DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
+implementing them is open work, not a latent guarantee. Do not rely on
+`maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
+`maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, `maxArtifactBytes`, or
+`maxContextTokens` to reject anything today.
+
+| Setting | Default | Enforced? |
+| --- | --- | --- |
+| `maxToolRetries` | 2 | **yes** — task-wide retry budget in `chooseRecoveryDetailed` |
+| `maxReplans` | 2 | **yes** — task-wide replan budget in `chooseRecoveryDetailed` |
+| `maxRecoveryDepth` | 3 | **yes** — consecutive recovery rounds since the last success |
+| `maxExecutionTimeMs` | 1,800,000 (30 min) | supplied to the recovery options; no independent timer is enforced |
+| `maxTaskDurationMs` | 1,800,000 (30 min) | no — declared only |
+| `maxStepDurationMs` | 300,000 (5 min) | no — declared only |
+| `maxToolDurationMs` | 120,000 (2 min) | no — declared only |
+| `maxParallelTasks` | 1 | no — declared only |
+| `maxParallelTools` | 1 | no — declared only; Pi owns tool-execution mode |
+| `maxOutputBytes` | 2,097,152 (2 MiB) | no — declared only |
+| `maxArtifactBytes` | 10,485,760 (10 MiB) | no — declared only |
+| `maxContextTokens` | 200,000 | no — declared only |
+
+`maxStepRetries` was **removed** (F-006 Phase 1). It was declared but never read
+by any recovery decision, so it advertised a bound that did not exist. Per-step
+attempt budgets live on `PlanStep.retryPolicy.maxAttempts` and
+`ToolDescriptor.retryPolicy.maxAttempts`; the recovery budgets above are
+task-wide. The KernelAdapter derives its recovery limits from `DEFAULT_LIMITS`
+rather than duplicating the literals (PR #4), so the two cannot drift.
 
 Provider defaults:
 - Canonical: OmniRoute via omni provider at http://localhost:20128 (omniroute-pi-ext-integration extension).

@@ -34,14 +34,17 @@ User → Pi agent runtime → platform-orchestrator extension → native Pi skil
 3. **OmniRoute is the canonical provider** — all model calls go through `localhost:20128`; fallbacks are documented escape hatches.
 4. **Trust model is `TRUSTED_PROJECT`** — dangerous operations are denied outright (fail‑closed), not prompted.
 5. **Redaction is centralized** — enforced at the event bus, artifact layer, and orchestrator; never relies on the model to hide credentials.
-6. **Max file writes per task = 50** (temporarily raised for the Verification Gauntlet).
+6. **Max file writes per task = 10** — the committed policy keeps the conservative base budget. A temporary global bump to 50 (D-006) was reverted; per-run overrides now use operator-selected `limitProfiles` (D-007).
 
 ## 3. Current State
 
 ### Code Health
-- **All unit tests pass** (22/22 core, 100/100 platform/Pi integration, 80/80 skill conformance).
-- **Verification Gauntlet (Phase 1) is COMPLETED** — all 8 scenarios (A–H) passed with detailed reports in `reports/`.
-- **Platform/Kernel tests pass** (180/180 subtests covering approval, policy enforcement, redaction, etc.).
+- **All tests pass: 284 total.**
+  - `node --test platform/*.test.mjs` — **22/22**
+  - `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` — **262/262**
+  - `verification/live-f006-proof.mjs` — **21 checks, 0 failed** (headless, runs in CI)
+- **Verification Gauntlet (Phase 1) is COMPLETED** — all 8 scenarios (A–H) passed with detailed reports in `reports/`.
+- Core/Pi coverage includes approval, policy enforcement and porting, redaction and the persistence boundary, artifact verification, workspace boundaries, lifecycle and re-entrancy (F-003), recovery budgets and diagnostics (F-006 Phase 1), and budget telemetry (F-008).
 
 ### Project Structure
 
@@ -91,16 +94,18 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 - **LLM Backend:** `OmniRoute` (default) via `~/.pi/agent/models.json` with `omni` provider at `http://localhost:20128`.
 - **Workspace Isolation:** Agents may only write to `workspace/**`; writes outside are denied with a reason.
 - **Policy Mode:** `TRUSTED_PROJECT` — dangerous operations are denied outright (fail‑closed), not prompted for approval.
-- **Max File Writes per Task:** Raised to **50** temporarily for the Verification Gauntlet (original limit was 10).
+- **Max File Writes per Task:** **10** in the committed policy. The temporary Verification Gauntlet bump to 50 (D-006) was reverted under D-007; an operator selects a `limitProfiles` override for a run instead of editing the policy file.
 - **Provider Setup:** `omniroute-pi-ext-integration` extension handles provider metadata; Pi owns the model call chain.
 
 ## 6. Verification & Testing
 
-- **Unit Tests:** 22/22 pass (core, platform/Pi integration, skill conformance).
-- **Platform/Pi Integration Tests:** 100/100 pass.
-- **Skill Registry Test:** 80/80 pass.
+- **Platform .mjs suites:** 22/22 pass.
+- **Core and Pi TypeScript suites:** 262/262 pass.
+- **F-006 live recovery proof:** 21 checks, 0 failed. Headless and self-contained, so it runs unchanged on a CI runner.
+- **Canonical total: 284 tests**, up from the 253-era baseline as F-003, F-006 Phase 1, F-007, F-008 and the PR #4 hardening landed.
+- **CI:** `ci.yml` runs all three commands above on every pull request and on push to `main`. The step labels carry the test counts as of when they were written and are cosmetic; the job's verdict comes from each command's exit code.
 - **Verification Gauntlet (Phases A–H):** All passed — coverage includes cross‑skill chained analysis, parallel multi‑file analysis, structured‑data audits, policy bypass protection, prompt‑injection defense, skill conformance, artifact integrity, and resiliency/error recovery.
-- **Gauntlet Report:** `reports/REPORT.md` confirms **READY FOR PHASE 2** with operational hardening recommendations.
+- **Gauntlet Report:** `reports/REPORT.md` confirms **READY FOR PHASE 2** with operational hardening recommendations.
 
 ## 7. Roadmap (Phase 2)
 
@@ -110,7 +115,7 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 
 ## 8. Key Takeaways
 
-- The platform is **fully tested** (all unit and integration tests pass) and **verified** (gauntlet A–H all PASSED).
+- The platform is **fully tested** (284 tests pass) and **verified** (gauntlet A–H all PASSED).
 - **OmniRoute** is the sole production‑ready model provider; fallbacks are documented escape hatches.
 - **Pi** is the central runtime — the orchestrator is a thin extension that never makes model calls directly.
 - The **file‑analysis skill** is the first proof‑of‑concept and demonstrates the bounded‑inspection philosophy (read only, no full‑file loading).
