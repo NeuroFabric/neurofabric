@@ -16,6 +16,7 @@ import {
   WorkspaceBoundary,
   type ApprovalProvider,
   type Artifact,
+  type BudgetLevel,
   type Plan,
   type PlanStep,
   type PolicyDecision,
@@ -23,6 +24,7 @@ import {
   type SkillDescriptor,
   type Task,
   type TaskStatus,
+  type ToolBudgetTelemetry,
   type ToolDescriptor,
   type ToolResult,
   type ValidationResult,
@@ -206,6 +208,22 @@ export class KernelAdapter {
   private readonly observedExecutionIds = new Set<string>();
   /** Output references declared at preflight, keyed by Pi toolCallId. */
   private readonly declaredOutputs = new Map<string, string[]>();
+  /**
+   * Budget bands already warned about for the CURRENT task.
+   *
+   * The point of a warning is that it arrives while there is still room to act,
+   * so it is sent once when the band is crossed rather than on every later call:
+   * ten identical "you are low" messages between 90% and the limit would be
+   * noise, and would bury the signal it exists to provide. Cleared by
+   * `beginTask`, because a new turn has a new budget and needs its own warnings.
+   */
+  private readonly budgetWarned = new Set<BudgetLevel>();
+  /**
+   * Budget telemetry from the most recent counted call, for diagnostics and the
+   * status command. Read-only: nothing in the kernel may turn this into a
+   * decision, and the limit itself is enforced in the policy, not here.
+   */
+  private lastBudget: ToolBudgetTelemetry | undefined;
   /** Artifacts confirmed for this task. */
   private artifactList: Artifact[] = [];
   /**
@@ -272,6 +290,19 @@ export class KernelAdapter {
   /** Operations refused as stale, oldest first. */
   get staleHandlerOperations(): readonly StaleOperation[] {
     return [...this.staleOperations];
+  }
+
+  /**
+   * Budget telemetry for the most recent counted call, if the installed policy
+   * meters calls at all.
+   *
+   * Read-only, and deliberately NOT part of `diagnostics`: that object is
+   * snapshotted into every transition record, so a field that changes on every
+   * tool call would rewrite the history of every task. This is a live view for
+   * the status command and for tests.
+   */
+  get budget(): ToolBudgetTelemetry | undefined {
+    return this.lastBudget;
   }
 
   /**
@@ -451,6 +482,10 @@ export class KernelAdapter {
     this.denialCount = 0;
     this.terminalRefusalCount = 0;
     this.staleOperations.length = 0;
+    // A new turn starts with a fresh budget, so it must also start with no
+    // warning already sent for the previous one's usage.
+    this.budgetWarned.clear();
+    this.lastBudget = undefined;
     // The lifecycle states are moved WITHOUT awaiting in between.
     //
     // `events.emit` yields to Pi (its sink reaches `pi.appendEntry`). An
@@ -590,6 +625,40 @@ export class KernelAdapter {
         violation: decision.violation,
       }));
       if (decision.violation === "abort") await this.abortTask(decision.reason, toolName, toolCallId);
+    }
+
+    // Budget telemetry (F-008). Everything above has already decided this call;
+    // nothing here may change that. There is no `advance`, no counter, and no
+    // branch on the result — the only effects are two advisory trace events, so
+    // a task that is running low is told while it can still act on it, instead
+    // of learning about the limit only when the next call is denied.
+    //
+    // It runs AFTER the stale guard above, so a superseded handler can neither
+    // read nor write the newer task's budget state, and only when the installed
+    // policy is the one that actually evaluated the call: passing an approval
+    // provider substitutes a tier policy, and that one does not meter.
+    if (decision.decision === "ALLOW" && policy === this.policy) {
+      const budget = this.policy.toolBudget?.(request);
+      if (budget) {
+        this.lastBudget = budget;
+        if (budget.level !== "ok" && !this.budgetWarned.has(budget.level)) {
+          this.budgetWarned.add(budget.level);
+          await this.events.emit(event("BUDGET_LOW", this.task.taskId, {
+            tool: toolName,
+            level: budget.level,
+            used: budget.used,
+            limit: budget.limit,
+            remaining: budget.remaining,
+          }));
+        }
+        if (budget.repeatCount > 1) {
+          await this.events.emit(event("TOOL_CALL_REPEATED", this.task.taskId, {
+            tool: toolName,
+            toolCallId,
+            repeatCount: budget.repeatCount,
+          }));
+        }
+      }
     }
     return { decision, task: this.task };
   }

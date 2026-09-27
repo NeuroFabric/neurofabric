@@ -3,7 +3,14 @@ import { collectStrings } from "./policy.ts";
 import { extractCommandText, extractToolPathCandidates } from "./tool-paths.ts";
 import { globToRegExp, normalizeForMatch, type PolicyConfig, type RuleVerdict } from "./policy-config.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
-import type { PolicyDecision, PolicyEngine, PolicyMode, PolicyRequest } from "./types.ts";
+import type {
+  BudgetLevel,
+  PolicyDecision,
+  PolicyEngine,
+  PolicyMode,
+  PolicyRequest,
+  ToolBudgetTelemetry,
+} from "./types.ts";
 
 /**
  * Policy driven by a validated declarative config.
@@ -34,6 +41,44 @@ const CONTENT_PARAM_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Where a metered budget starts warning, as a fraction of the limit.
+ *
+ * Two thresholds rather than one, so the agent is told while there is still room
+ * to finish a plan (F-008). They are advisory only: nothing here can deny a
+ * call, and the limit is still enforced exactly where it always was.
+ */
+const LOW_BUDGET_FRACTION = 0.75;
+const CRITICAL_BUDGET_FRACTION = 0.9;
+
+/** Which warning band a used count falls in. Rounded UP, so a small limit warns early. */
+function budgetLevel(used: number, limit: number): BudgetLevel {
+  if (used >= Math.ceil(limit * CRITICAL_BUDGET_FRACTION)) return "critical";
+  if (used >= Math.ceil(limit * LOW_BUDGET_FRACTION)) return "low";
+  return "ok";
+}
+
+/**
+ * A stable identity for one call, used only to count repeats.
+ *
+ * Object keys are sorted so two structurally identical calls compare equal
+ * regardless of construction order, and the result is never returned, logged or
+ * traced — only the count derived from it is. The separator is a control
+ * character that cannot appear in a tool name, so distinct calls cannot collide.
+ */
+function callSignature(request: PolicyRequest): string {
+  return `${request.tool?.name ?? ""}\u0000${request.operation}\u0000${stableStringify(request.input)}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
+  return `{${entries.join(",")}}`;
+}
+
+/**
  * Split command text into candidate program tokens.
  *
  * Shell quoting, redirection and separators are removed so that `bash -c "rm -rf
@@ -55,6 +100,15 @@ export class ConfiguredPolicy implements PolicyEngine {
   private readonly base: PolicyEngine;
   /** Per-task accounting, mirroring the legacy engine's per-run counters. */
   private readonly counters = new Map<string, { toolCalls: number; fileWrites: number }>();
+  /**
+   * Per-task count of each distinct call signature, so a repeated identical call
+   * is visible as a count instead of only as a growing total.
+   *
+   * The SIGNATURE is derived from the call's input, which may contain file
+   * contents. Only the signature is stored, only the resulting count is ever
+   * returned, and the signature is never emitted to a trace or a log.
+   */
+  private readonly callRepeats = new Map<string, Map<string, number>>();
   private readonly matchers: RegExp[];
 
   constructor(config: PolicyConfig, options: { mode: PolicyMode; base: PolicyEngine; allowedRoots: string[] }) {
@@ -68,6 +122,31 @@ export class ConfiguredPolicy implements PolicyEngine {
   /** Drop the accounting for a finished task. Called when a new task begins. */
   forgetTask(taskId: string): void {
     this.counters.delete(taskId);
+    this.callRepeats.delete(taskId);
+  }
+
+  /**
+   * Budget telemetry for the call `evaluate` has just counted (F-008).
+   *
+   * Reports the position in the budget and how many times this exact call has
+   * been made, so a task that is running low says so BEFORE the terminal denial,
+   * and wasted reads are visible. Purely observational: the thresholds below
+   * never deny, and the limit check in `evaluateRules` is untouched.
+   */
+  toolBudget(request: PolicyRequest): ToolBudgetTelemetry | undefined {
+    const counts = this.counters.get(request.taskId);
+    if (!counts) return undefined; // this engine never counted the call
+    const limit = this.config.limits.maxToolCallsPerTask;
+    const signature = callSignature(request);
+    const repeats = this.callRepeats.get(request.taskId);
+    const repeatCount = repeats?.get(signature) ?? 0;
+    return {
+      used: counts.toolCalls,
+      limit,
+      remaining: Math.max(0, limit - counts.toolCalls),
+      level: budgetLevel(counts.toolCalls, limit),
+      repeatCount,
+    };
   }
 
   evaluate(request: PolicyRequest): PolicyDecision {
@@ -79,6 +158,11 @@ export class ConfiguredPolicy implements PolicyEngine {
     const counts = this.countsFor(request.taskId);
     counts.toolCalls += 1;
     if (request.tool.riskLevel === "WRITE") counts.fileWrites += 1;
+    // Counted at the same moment as the budget, so the repeat count a caller
+    // reads afterwards always describes the call that was just allowed.
+    const repeats = this.repeatsFor(request.taskId);
+    const signature = callSignature(request);
+    repeats.set(signature, (repeats.get(signature) ?? 0) + 1);
 
     return this.base.evaluate(request);
   }
@@ -97,6 +181,15 @@ export class ConfiguredPolicy implements PolicyEngine {
       this.counters.set(taskId, counts);
     }
     return counts;
+  }
+
+  private repeatsFor(taskId: string): Map<string, number> {
+    let repeats = this.callRepeats.get(taskId);
+    if (!repeats) {
+      repeats = new Map<string, number>();
+      this.callRepeats.set(taskId, repeats);
+    }
+    return repeats;
   }
 
   /** Accounting for a task, for tests and for the trace. */
