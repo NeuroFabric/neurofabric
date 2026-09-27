@@ -101,10 +101,12 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
       tool: event.toolName,
       toolCallId: event.toolCallId,
       decision,
-      // `violation` is present only on a denial that the declarative policy
-      // escalated with on_violation: abort; the kernel has already terminated
-      // the task by the time this is recorded.
-      violation: decision.decision === "DENY" ? (decision.violation ?? "block") : undefined,
+      // `violation` is present ONLY when policy actually evaluated the call and
+      // escalated the denial. A terminal-state refusal carries `refusal` instead:
+      // nothing was evaluated, so no rule was broken. The two must never be
+      // conflated, and there is deliberately no `?? "block"` fallback.
+      violation: decision.decision === "DENY" ? decision.violation : undefined,
+      refusal: decision.decision === "DENY" ? decision.refusal : undefined,
       declaredOutputs: declared.length,
       taskStatus: kernel.currentTask.status,
     });
