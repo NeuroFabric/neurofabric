@@ -35,6 +35,12 @@ User → Pi agent runtime → platform-orchestrator extension → native Pi skil
 4. **Trust model is `TRUSTED_PROJECT`** — dangerous operations are denied outright (fail‑closed), not prompted.
 5. **Redaction is centralized** — enforced at the event bus, artifact layer, and orchestrator; never relies on the model to hide credentials.
 6. **Max file writes per task = 10** — the committed policy keeps the conservative base budget. A temporary global bump to 50 (D-006) was reverted; per-run overrides now use operator-selected `limitProfiles` (D-007).
+7. **Standing git rules are recorded, not remembered** — three rules govern agent-driven git operations, and a blocked command earns a deliberate recorded decision change, never an improvised workaround (D-008; rule 3 mechanized by D-010, rule 4 added by D-013).
+8. **A declared limit is an enforced limit** — a limit on the public interface with no choke point was removed rather than documented, and the six that remain are enforced in code (D-009).
+9. **Merge authority is mechanized, not delegated** — `main` is protected and advances only by a pull-request merge whose required checks have passed; agents request auto-merge and the operator keeps post-hoc review and revert authority (D-010).
+10. **A claim about remote state names the endpoint it came from** — two of D-010's claims were false when written, and the correction is recorded rather than the superseded text reworded to look right (D-011).
+11. **Operator rulings on the residual findings** — the `+refspec` force-push gap is accepted and open with a fix specified but unimplemented, the scratch-file deletion permit is rejected in favour of the deny-only design, and the operator-only policy boundary is a convention rather than an enforced control (D-012; spec in `docs/REFSPEC_GUARD_SPEC.md`).
+12. **Local-state claims require same-session evidence** — the ruleset status-check dedup is closed, and two inventory defects of opposite sign produced a standing rule that branches, files, and working tree are asserted only from same-session command output (D-013).
 
 ## 3. Current State
 
