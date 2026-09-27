@@ -1,9 +1,10 @@
 // Regression matrix for the force-refspec push guard.
 //
 // Contract source: docs/REFSPEC_GUARD_SPEC.md (D-013), with row 9 added by
-// operator ruling 2. The spec's `after (target)` column becomes a claim only
-// once this file runs green, so these nine rows are the enforcement mechanism
-// for the rule — not an illustration of it.
+// operator ruling 2 and rows 10-11 added by the D-015 operator ruling
+// (Option 3). The spec's `after (target)` column becomes a claim only once
+// this file runs green, so these eleven rows are the enforcement mechanism for
+// the rule — not an illustration of it.
 //
 // Runner: `node --experimental-strip-types --test platform/core/*.test.ts`
 // (see .github/workflows/ci.yml — "Core and Pi .ts suites").
@@ -102,4 +103,37 @@ test("row 8: a '+' inside a branch name is allowed", async () => {
 // that requires the quote arm of the anchor.
 test("row 9: a quote-wrapped '+main' is denied", async () => {
   assert.equal(await decision(`${PREFIX} origin "+main"`), "DENY");
+});
+
+// Rows 10-11 close the delete-refspec gap recorded OPEN in D-014 ruling 3.
+// A branch-removal push is not a force-push: it carries no '+' and no --force,
+// so nothing in the array reached it. D-015 ruling (Option 3) adds one entry
+// per surface, and these rows pin both the denials and the anchors that keep
+// them from reaching ordinary work.
+
+// Row 10 is the flag form, entry 28. The over-match assertion is deliberate:
+// the trailing \b matches an option merely beginning with --delete, since '-'
+// is a non-word character and therefore itself a word boundary. No such
+// option exists in git; accepted deny-safe per ruling 7.
+test("row 10: the --delete branch-removal flag form is denied", async () => {
+  assert.equal(await decision(`${PREFIX} origin --delete main`), "DENY");
+  assert.equal(await decision(`${PREFIX} origin --delete refs/heads/main`), "DENY");
+  assert.equal(await decision(`${PREFIX} origin --delete-feature`), "DENY");
+  // The flag-form entry must not reach ordinary src:dst refspecs.
+  assert.equal(await decision(`${PREFIX} origin HEAD:main`), "ALLOW");
+  assert.equal(await decision(`${PREFIX} origin feature:main`), "ALLOW");
+});
+
+// Row 11 is the colon form, entry 29. The two ALLOW assertions here are the
+// disqualification guards for the entry: a legitimate refspec has a non-space
+// character before its colon, so anchoring on whitespace-or-quote is what
+// keeps 'HEAD:main' clean. If either ever measures DENY the anchor is wrong
+// and the entry is denying real work.
+test("row 11: the empty-source colon form is denied", async () => {
+  assert.equal(await decision(`${PREFIX} origin :refs/heads/main`), "DENY");
+  assert.equal(await decision(`${PREFIX} origin :main`), "DENY");
+  assert.equal(await decision(`${PREFIX} origin HEAD:main`), "ALLOW");
+  assert.equal(await decision(`${PREFIX} origin feature:main`), "ALLOW");
+  // X1 over-match is pinned in row 10 by the flag-form entry; per-entry
+  // pins are inexpressible through the whole-array engine, D-015 finding.
 });

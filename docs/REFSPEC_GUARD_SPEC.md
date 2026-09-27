@@ -1,7 +1,7 @@
 # Refspec force-push guard — fix specification
 
-- **Status:** PROPOSED. Not implemented. No code change accompanies this
-  document.
+- **Status:** IMPLEMENTED. D-014 baseline at 3551303; D-015 extension adds
+  the flag-form and colon-form delete-refspec patterns and matrix rows 10-11.
 - **Decision:** D-013 (rulings 1–3), D-012 (ruling 1, accepted and open)
 - **Target file (for the implementer, not this change):**
   `platform/core/policy.ts` — the `DESTRUCTIVE_PATTERNS` array
@@ -27,11 +27,11 @@ string because the ruleset's bypass actor is set to `always`, so platform
 protection does not constrain the agent identity on this path. The TypeScript
 pattern is the only force-push control acting on the agent identity.
 
-## 2. Proposed anchor
+## 2. Anchor
 
-Add a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which is
-**preceded by whitespace and begins a refspec argument**, rather than matching
-the flag.
+D-014 added a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which
+is **preceded by whitespace and begins a refspec argument**, rather than
+matching the flag.
 
 Shipped pattern:
 
@@ -61,8 +61,9 @@ whitespace arm.
 
 ## 3. Behavior matrix
 
-`before` is the measured current state. `after` is the **target**, and is not
-implemented.
+`before` is the measured current state. `after` is the resulting behavior, and
+it is implemented: the D-014 baseline at `3551303` plus the D-015 extension,
+enforced as eleven rows in `platform/core/refspec-guard.test.ts`.
 
 | # | Command | before (measured) | after (target) | Rationale |
 |---|---------|-------------------|----------------|-----------|
@@ -75,6 +76,15 @@ implemented.
 | 7 | `git push --force-with-lease origin +main` | ALLOWED | **DENIED** | Operator ruling. See §4. |
 | 8 | `git push origin feature+name` | ALLOWED | ALLOWED | A `+` inside a branch name, not a refspec prefix. Must not be denied. |
 | 9 | `git push origin "+main"` | ALLOWED | **DENIED** | *(addendum — operator ruling 2.)* Quote-evasion hole found in operator design review: the `+` is preceded by a quote, not whitespace, so the row-2 anchor alone would miss it. The pre-change `--force`-only pattern cannot match this string at all, so `before` is ALLOWED by construction and was not part of the eight-row measured baseline. |
+| 10 | `git push origin --delete main` | ALLOWED | **DENIED** | *(D-015, Option 3 — array entry 28, 0-based 27.)* Branch-removal flag form. Measured ALLOWED against all 27 entries that preceded this change. |
+| 10 | `git push origin --delete refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3 — array entry 28.)* Fully-qualified flag form, same entry. |
+| 10 | `git push origin --delete-feature` | ALLOWED | **DENIED** | *(D-015, Option 3 — array entry 28.)* Pinned over-match: the trailing `\b` matches any `--delete`-prefixed option, and `-` is a non-word character, so it is itself a word boundary. No such option exists in git. Accepted deny-safe per ruling 7. |
+| 10 | `git push origin HEAD:main` | ALLOWED | ALLOWED | Disqualification guard. The flag-form entry must not reach an ordinary src:dst refspec. |
+| 10 | `git push origin feature:main` | ALLOWED | ALLOWED | Disqualification guard, same reason. |
+| 11 | `git push origin :refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3 — array entry 29, 0-based 28.)* Empty-source refspec: the destination branch is deleted rather than updated. |
+| 11 | `git push origin :main` | ALLOWED | **DENIED** | *(D-015, Option 3 — array entry 29.)* Short form, same entry. |
+| 11 | `git push origin HEAD:main` | ALLOWED | ALLOWED | Disqualification guard. The colon must be preceded by whitespace or a quote; here it is preceded by a letter. |
+| 11 | `git push origin feature:main` | ALLOWED | ALLOWED | Disqualification guard, same reason. |
 
 Row 8 is the row that justifies the whitespace anchor. It is the cheapest way
 to turn this fix into a false positive on ordinary branch names.
@@ -104,14 +114,44 @@ The `after` column is a **target, not a measurement**. It becomes a claim only
 when someone measures it.
 
 1. Add the pattern to `DESTRUCTIVE_PATTERNS`. Change nothing else in the file.
-2. Re-run the same nine-row evaluation used for the `before` column, against
+2. Re-run the same eleven-row evaluation used for the `before` column, against
    the exported array, in the same shape: one run, a throwaway script that is
    not committed.
 3. Record the measured results as a new `after (measured)` column alongside
    the `after (target)` column.
-4. Add all nine rows to `platform/core/refspec-guard.test.ts` as assertions, so the
+4. Add all eleven rows to `platform/core/refspec-guard.test.ts` as assertions, so the
    matrix is enforced by the suite rather than by this document.
 5. Run the core and Pi suites and record the counts.
+
+### D-015 addendum — branch-removal coverage (operator ruling, Option 3)
+
+`DESTRUCTIVE_PATTERNS` now carries **29 entries**. Entries 1 through 27 are
+the force-push control described in this document; entries 28 and 29 close the
+delete-refspec gap that D-014 ruling 3 left OPEN. A branch-removal push is not
+a force-push: it carries neither a `+` refspec prefix nor a `--force` flag, so
+no pre-existing entry could reach it.
+
+The two added literals:
+
+```
+/\bgit\s+push\b.*--delete\b/i
+/\bgit\s+push\b.*(?:\s|["']):\S/i
+```
+
+The matrix is now **eleven rows**. Rows 10 and 11 extend it:
+
+| 10 | `git push origin --delete main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Branch-removal flag form. Measured DENY on all 27 prior entries. |
+| 10 | `git push origin --delete refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Fully-qualified flag form, same entry. |
+| 11 | `git push origin :refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Empty-source refspec: the destination branch is deleted. |
+| 11 | `git push origin :main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Short form, same entry. |
+
+Row 11's anchor requires whitespace or a quote before the colon, so a legitimate
+`src:dst` refspec such as `HEAD:main` or `feature:main` measures ALLOW; row 11
+pins both as disqualification guards.
+
+The flag-form pattern matches any `--delete`-prefixed option, including
+hypothetical options that git does not define; this over-match is accepted as
+deny-safe per ruling 7 and is pinned by row 10.
 
 **Stop conditions.** Any of the following is a halt, not something to work
 around:
@@ -127,8 +167,16 @@ corrected. That is the same rule that governs a policy amendment.
 
 ## 6. Rollback
 
-The change is one added array entry. Rollback is removing that entry, which
-restores the current behavior exactly: rows 2, 3, 4, and 7 return to ALLOWED.
+The D-014 change is one added array entry; the D-015 extension adds two more,
+for 29 entries in total and matrix rows 10 and 11 in
+`platform/core/refspec-guard.test.ts`. Rollback of the extension alone is
+removing entries 28 and 29 together with rows 10 and 11. That reverts
+branch-removal coverage exactly and leaves the D-014 force-push baseline
+untouched: rows 2, 3, 4, and 7 remain denied rather than returning to
+ALLOWED.
+
+Rollback of D-014 as well — removing its single entry — restores the behavior
+that predates both changes: rows 2, 3, 4, and 7 return to ALLOWED.
 
 Rollback is a re-opening of a known, accepted hole, and should be recorded as
 such rather than treated as a neutral revert. No data or state is at risk in
