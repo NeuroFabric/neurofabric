@@ -61,6 +61,46 @@ Only three `DEFAULT_LIMITS` entries are enforced by the recovery decision:
 `maxToolRetries` 2, `maxReplans` 2, `maxRecoveryDepth` 3. The remaining
 declared limits are not yet read by any enforcement path.
 
+### Current status board
+
+Every GREEN and ORANGE entry cites its grounding: a merged PR, a decision ID, a
+findings document, or a verified test count. Entries that cannot be grounded in
+merged reality are WHITE and name-only.
+
+**GREEN — done and verified**
+
+- **Pi-based runtime with a thin orchestrator extension** — skill discovery, execution tracing, and a permission gate. No second agent loop or LLM client (design decision 1; `AGENTS.md`, `docs/DECISIONS.md`).
+- **TRUSTED_PROJECT fail-closed policy; artifact verification; centralized redaction; tool and path security** — traversal, symlinks, and destructive/credential denial (`platform/core/policy.ts`, `artifact.ts`, `redaction.ts`, `workspace.ts`; covered by `trusted-execution.test.ts`).
+- **Skills** — file-analysis active proof of concept; log-analysis, report-writer, and structured-data ready (§4).
+- **OmniRoute canonical provider, D-001 Gate 1 verified** — a real Pi turn pinned to auto/gemini completed (`docs/handoff.md`).
+- **Verification Gauntlet Phase 1** — scenarios A–H passed, reports in `reports/`.
+- **F-003 lifecycle and re-entrancy protection** — implemented and verified (`verification/findings/F-003-policy-violation-kills-task.md`, `platform/pi/f003-block-lifecycle.test.ts`). Denial *continuation* is configuration-driven via `onViolation`, not a kernel guarantee.
+- **F-006 Phase 1 (PR #3)**, **F-007 resolved**, **F-008 resolved (PR #2)**.
+- **PR #4 hardening** — production artifact boundary, provenance propagation, and policy recovery semantics.
+- **PR #5 documentation sync** — merged and verified.
+- **CI green on every pull request and on push to `main`** — 22 `.mjs` + 262 core/Pi `.ts` + 21 live-proof checks.
+- **Decisions D-001 through D-007 recorded**; `limitProfiles` (D-007); `maxFileWritesPerTask` = 10.
+
+**ORANGE — partially done, or awaiting an operator decision**
+
+- **Declared-but-unenforced `CoreLimits`** — 8 of the 12 `DEFAULT_LIMITS` entries are read by no enforcement path: `maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`, `maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, `maxArtifactBytes`, `maxContextTokens`. Only `maxToolRetries`, `maxReplans`, and `maxRecoveryDepth` are consulted by `chooseRecoveryDetailed`. Wire them into enforcement, or remove them from the contract.
+- **F-003 policy-denial semantics** — the distinction between the kernel property (lifecycle and re-entrancy protection) and the configuration choice (`onViolation`) is documented but not yet codified in the contract.
+- **Provenance persistence and audit boundary** — hardening landed in PR #4; where provenance persists and where the audit boundary sits is still undefined.
+- **APPROVAL-mode policy composition** — less exercised than `TRUSTED_PROJECT`.
+- **Windows CI coverage** — CI runs `ubuntu-latest` only.
+- **OmniRoute credential in `models.json`** — D-002 accepted risk; migration to Pi's credential store is pending.
+
+**WHITE — not started**
+
+- **F-006 Phase 2** — retryability propagation from Pi errors; strategy-change-aware recovery.
+- Capability routing — name only, pending operator definition.
+- Multi-step planning — name only, pending operator definition.
+- Delivery — name only, pending operator definition.
+- Git checkpointing — name only, pending operator definition.
+- Deferred per `docs/handoff.md` §4: MCP connectors, persistent memory store, optional human-approval gates.
+
+Next implementation priority (operator-set): CoreLimits enforcement / source-of-truth cleanup.
+
 ### Project Structure
 
 The platform is TypeScript under `platform/`. The Python directories below are a
