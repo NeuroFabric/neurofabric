@@ -501,3 +501,94 @@ Known residual: the policy file itself sits inside the agent-writable boundary
 (F-005), so D-004 remains a convention rather than an enforced boundary.
 
 
+## D-008: Three standing rules for agent-driven git operations
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Affects:** any agent session authorized to act on this repository
+
+### Context
+
+Merging PR #6 required the agent to push a merge commit to a protected `main`.
+A direct push was blocked by the transport guard, and closing the task required
+several rounds of verification against operator action claims. Those rounds
+surfaced recurring failure modes worth codifying rather than leaving to session
+memory.
+
+### Decision
+
+**Three standing rules govern every agent action on this repository.**
+
+1. **The guard outranks authorization.** A blocked action stops the task. It is
+   never routed around — not by retrying with different flags, not by choosing a
+   different transport, not by locating a path the guard does not cover.
+2. **Operator confirmations are claims to verify, not facts to assume.** A
+   reported action is unverified until the resulting state is read back with the
+   authoritative instrument for that state. A discrepancy is reported, never
+   reconciled on the operator's behalf.
+3. **Agents never push `main` directly.** `main` advances only via a PR merge or
+   an operator push. The guard is the transport boundary by design, not an
+   obstacle to be defeated.
+
+### Rationale
+
+Each rule is grounded in a specific event, not in general caution.
+
+1. **Rule 1 — the blocked push of `5b6eaa7`.** The agent created the PR #6 merge
+   commit locally and was refused by the direct-push guard. Authorization to
+   merge was explicit and the merge itself was fully verified, which is exactly
+   the condition under which a guard is most tempting to work around. Stopping
+   preserved the work: the merge commit survived intact and became the merge
+   commit of record once the operator landed the push. A rule that only holds
+   when the work is already lost is not a boundary.
+2. **Rule 2 — three deletion rounds that failed verification.** The operator
+   reported the merged branches deleted on three consecutive closeout rounds.
+   `git ls-remote --heads origin` and `git fetch --prune` showed both branches
+   live and unchanged every time. Reporting the discrepancy three times cost more
+   wall-clock time than reconciling it would have, and reconciling would have been
+   the worse outcome: the unverified claim would have become the recorded fact,
+   and the one commit on the hardening branch that was unreachable from `main`
+   would have been deleted before its safety was established. That commit's tree
+   was later proven byte-identical to `194e03c` on `main` — but only because the
+   deletion was held, not assumed.
+3. **Rule 3 — the same event as rule 1.** The blocked push is the concrete
+   evidence that the guard is doing its job, and is the reason rule 1 exists.
+
+### Consequence: branch deletion is optional housekeeping
+
+Following rule 2, the operator reclassified post-merge branch deletion as
+**optional, non-blocking housekeeping**. As of close, both branches are recorded
+as **PRESENT on the remote**, which is the verified state — not a claim that any
+deletion occurred:
+
+- `docs/followup-corrections` — fully merged; second parent of `5b6eaa7`.
+- `fix/platform-small-hardening` — tip tree byte-identical to `194e03c` on
+  `main`, so deletion is content-safe whenever the operator chooses.
+
+Neither deletion blocks anything.
+
+### Attribution correction: PR #4, not PR #5
+
+The single commit on the hardening branch that was unreachable from `main` was
+initially attributed to PR #5. It is the squash-merge artifact of **PR #4**,
+commit `194e03c` on `main`, verified against the live PR page. PR #5 is the
+later merge `28660de` (`docs/current-status-sync`), an unrelated change. The
+correction affects only the audit trail — `194e03c` is on `main` either way — but
+it is recorded so the branch-naming history is not wrong in writing.
+
+### Merge record
+
+PR #6, merge commit `5b6eaa7`, `MERGED` at 2026-09-27T10:40:41Z. The facts live in
+git history and on the PR page and are not duplicated here.
+
+### Alternatives rejected
+
+- **Write the rules into `memory/decisions.md`.** That file is a pointer stub and
+  states that decisions belong here. Adding to it would re-scatter what the
+  2026-09-26 consolidation deliberately centralized.
+- **Codify the rules only in operator config.** Considered while the agent could
+  not read `gh` from `PATH`; the failure mode behind rule 2 was a
+  tool-availability misdiagnosis, which argues the rules belong where a reviewer
+  finds them.
+
+
