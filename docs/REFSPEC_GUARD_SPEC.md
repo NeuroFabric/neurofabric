@@ -51,7 +51,7 @@ Design points the implementer should preserve:
   cover the flag form, and the existing with-lease negative lookahead is left
   exactly as it is.
 
-The implementer owns the final regex. This document proposes an anchor and a
+The implementer owns the final regex. This document states an anchor and a
 reasoning; it does not certify a pattern.
 
 The implemented anchor adds a **quote arm** to the leading condition: the
