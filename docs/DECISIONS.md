@@ -1015,6 +1015,117 @@ it expects.
   standing alternative. It is what the pre-mechanization state was, and it
   is why the `404` was worth a stop condition in the first place.
 
+## D-013: Operator rulings on the ruleset dedup, and a standing rule on verified inventory
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Amends:** D-008 (new standing rule 4)
+- **Affects:** every agent session that reports on this repository's state
+
+### Context
+
+Three findings reached the operator after D-012. One is closed housekeeping,
+one is a correction to the agent's own reporting, and the third is a rule
+that generalises the first two.
+
+1. **The duplicated status-check context in ruleset 24072761** was tracked as
+   operator action in D-012 ruling 4.
+2. **A second inventory defect in the agent's own housekeeping.** D-012's
+   closeout stated that two local branches remained from merged pull
+   requests. That statement was asserted without a same-session enumeration.
+   The branches had in fact been deleted before that run began; the first
+   commit of that session would have shown it. The operator's cross-check
+   caught it.
+3. **The two inventory defects point in opposite directions.** D-011's
+   enumeration omitted two stale branches, which flattered the report by
+   implying a cleaner state than existed. The D-012 claim asserted branches
+   that were no longer there. Both were caught only by operator cross-check,
+   and both were about local repository state rather than about any control
+   the platform enforces.
+
+D-008 established standing rules for agent-driven git operations because a
+guard that is not consulted gets bypassed. The pattern here is different and
+needs its own rule: nothing enforced these two statements, and the platform
+had no opportunity to catch either one.
+
+### Decision
+
+1. **The ruleset dedup is CLOSED.** The operator completed an API write on
+   2026-09-27 at 19:07:56 +05:30. Ruleset 24072761 now carries exactly one
+   required status check: the context `platform test suites` with
+   `integration_id` 15368. Evidence is the operator's full-state dump taken
+   after the write. This closes D-012 ruling 4 and its open item 2. Operator
+   action; no agent work.
+2. **The second inventory defect is recorded and closed.** No remediation.
+   `chore/d011-mechanization-completion` was deleted before the D-012 run
+   began, at the first command of that session, and the closeout stated its
+   presence anyway. The attribution is the agent's: the claim was made from a
+   prior read rather than from same-session output.
+3. **Standing rule 4 is added to D-008.** Claims about local repository state
+   — branches, files, working tree — require same-session command output. No
+   assertion about that state is made from memory or from a prior session's
+   read. The rule applies to the agent immediately and without exception,
+   including inside an operator brief that supplies such a claim as settled.
+   Rationale: two inventory defects in one day, of opposite sign, neither
+   caught by any automated control, both caught by operator cross-check.
+
+### Rationale
+
+1. **A closed item should say so once and stop.** The dedup was operator work
+   with operator evidence. Recording the closure with the timestamp and the
+   surviving check identity is enough; re-deriving it would repeat the
+   mistake D-010 corrected, where a remote claim was recorded without naming
+   the endpoint it came from.
+2. **The two defects are worth recording together, not separately.** Neither
+   is serious on its own. Together they show that a report about local state
+   has no enforcement behind it at all, which is the condition a standing rule
+   is the right response to. One omission and one stale assertion, in
+   opposite directions, both surviving to the operator, is a reliability
+   finding about the agent's reporting rather than about either repository.
+3. **The rule is about evidence, not about caution.** The failure is not that
+   the agent was careless; it is that a confident sentence and a checked
+   sentence look identical to the reader. Requiring the output to exist
+   before the claim does removes the ambiguity, and it is verifiable: the
+   claim either has command output behind it in the same session or it does
+   not.
+
+### Consequence
+
+**A statement about local state is either accompanied by same-session command
+output or it is not made.** The burden falls on the claim, not on the reader
+who might otherwise verify it. This applies to closeout summaries, PR
+descriptions, decision records, and anything a later session would rely on.
+
+**An operator brief does not launder an unverified claim.** Rule 4 binds the
+agent even where a brief presents a local-state claim as pre-verified, for
+the same reason the fences bind: the claim is either evidenced or it is
+nonsense, and a brief cannot supply evidence the session did not produce.
+
+### Open items
+
+1. **The `+refspec` force-push hole remains open.** D-012 accepted it; the
+   fix is operator-coded and pending. This decision does not change that
+   state. A specification for the fix is recorded in
+   `docs/REFSPEC_GUARD_SPEC.md`, which proposes an anchor, a measured
+   behavior matrix, an implementer protocol, and a rollback. It implements
+   nothing.
+2. Nothing else. Rulings 1 and 2 are closed, and the third is a rule rather
+   than a task.
+
+### Alternatives rejected
+
+- **Leave the standing rules as they were, on the grounds that a convention
+  was enough.** Rejected: a convention is what the two defects were written
+  against, and neither was caught by the platform. The rule's whole content is
+  that the evidence must exist, and that is checkable.
+- **Record the two inventory defects as one entry.** Rejected: they have
+  opposite signs, and collapsing them would hide the more useful half — that
+  the agent's own closeout can over-report as easily as it under-reports.
+- **Re-verify the ruleset dedup as part of this record.** Rejected: it is
+  operator-completed with operator evidence, and re-deriving a settled
+  operator action is the habit D-010's correction was about.
+
+
 ## D-012: Operator rulings on the residual force-push, deletion, and boundary findings
 
 - **Date:** 2026-09-27

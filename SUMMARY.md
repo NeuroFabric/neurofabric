@@ -131,6 +131,7 @@ agent-harness/
 - **`README.md`** — High‑level overview, architecture diagram, quick‑start guide.
 - **`AGENTS.md`** — Operating rules, plugin guidelines, and best practices.
 - **`DECISIONS.md`** — Canonical design decisions (OmniRoute canonical, D‑001 migration gated, D‑002 key risk accepted, etc.).
+- **`docs/REFSPEC_GUARD_SPEC.md`** — PROPOSED fix spec for the `+refspec` force-push gap in `DESTRUCTIVE_PATTERNS`. Proposes an anchor, a measured behavior matrix, an implementer protocol, and a rollback. Implements nothing (D‑013).
 - **`platform/core/`** — The heart of the platform: `planner.ts`, `validation.ts`, `tool-registry.ts`, `redaction.ts`, `workspace.ts`, `skill-catalog.ts`.
 - **`platform/pi/`** — Kernel adapter, lifecycle, policy port, trusted execution, and tool adapters.
 - **`skills/file-analysis/SKILL.md`** — Initial proof‑of‑concept skill: uses Pi's built‑in `read`, `bash`, `grep`, `find`, `ls` to inspect files, identify defects, and produce evidence‑based reports.
