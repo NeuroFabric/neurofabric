@@ -27,7 +27,7 @@ string because the ruleset's bypass actor is set to `always`, so platform
 protection does not constrain the agent identity on this path. The TypeScript
 pattern is the only force-push control acting on the agent identity.
 
-## 2. Proposed anchor
+## 2. Anchor
 
 Add a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which is
 **preceded by whitespace and begins a refspec argument**, rather than matching
