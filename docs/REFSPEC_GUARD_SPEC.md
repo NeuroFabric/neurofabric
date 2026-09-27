@@ -55,6 +55,11 @@ Design points the implementer should preserve:
 The implementer owns the final regex. This document proposes an anchor and a
 reasoning; it does not certify a pattern.
 
+The implemented anchor adds a **quote arm** to the leading condition: the
+`+` must be preceded by whitespace **or** a quote character, so a
+quote-wrapped `git push origin "+main"` is denied rather than evading the
+whitespace arm.
+
 ## 3. Behavior matrix
 
 `before` is the measured current state. `after` is the **target**, and is not
@@ -70,6 +75,7 @@ implemented.
 | 6 | `git push --force-with-lease origin main` | ALLOWED | ALLOWED | Lease makes the force safe: it refuses when the remote moved. |
 | 7 | `git push --force-with-lease origin +main` | ALLOWED | **DENIED** | Operator ruling. See §4. |
 | 8 | `git push origin feature+name` | ALLOWED | ALLOWED | A `+` inside a branch name, not a refspec prefix. Must not be denied. |
+| 9 | `git push origin "+main"` | ALLOWED | **DENIED** | *(addendum — operator ruling 2.)* Quote-evasion hole found in operator design review: the `+` is preceded by a quote, not whitespace, so the row-2 anchor alone would miss it. The pre-change `--force`-only pattern cannot match this string at all, so `before` is ALLOWED by construction and was not part of the eight-row measured baseline. |
 
 Row 8 is the row that justifies the whitespace anchor. It is the cheapest way
 to turn this fix into a false positive on ordinary branch names.

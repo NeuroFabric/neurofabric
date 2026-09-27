@@ -72,6 +72,11 @@ export const DESTRUCTIVE_PATTERNS: readonly RegExp[] = [
   // Registry / VCS history destruction.
   /\breg\s+delete\b/i,
   /\bgit\s+push\b.*--force(?!-with-lease)/i,
+  // Force-refspec: '+' prefix on a pushed ref ('+main', '+refs/heads/main',
+  // '+HEAD:main'). Anchored on whitespace or a quote before the '+' — a bare
+  // '+' search would false-positive on branch names like 'feature+name'
+  // (docs/REFSPEC_GUARD_SPEC.md row 8). Quote arm covers 'git push origin "+main"'.
+  /\bgit\s+push\b.*(?:\s|["'])\+\S/i,
   /\bgit\s+reset\s+--hard\b/i,
   /\bgit\s+clean\b.*-[a-z]*f/i,
   // Data-layer destruction.
