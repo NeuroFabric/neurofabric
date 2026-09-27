@@ -39,7 +39,7 @@ jobs:
       - name: Platform .mjs suites (22 tests)
         run: node --test platform/*.test.mjs
 
-      - name: Core and Pi .ts suites (253 tests)
+      - name: Core and Pi .ts suites (262 tests)
         run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
 
       # The F-006 live proof is INCLUDED: it is headless and self-contained.
