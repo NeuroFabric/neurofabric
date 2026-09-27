@@ -526,9 +526,18 @@ memory.
    reported action is unverified until the resulting state is read back with the
    authoritative instrument for that state. A discrepancy is reported, never
    reconciled on the operator's behalf.
-3. **Agents never push `main` directly.** `main` advances only via a PR merge or
-   an operator push. The guard is the transport boundary by design, not an
-   obstacle to be defeated.
+3. **Nobody pushes `main` directly.** `main` advances only via a merge of a pull
+   request whose required checks have passed. The guard is the transport boundary
+   by design, not an obstacle to be defeated. **(Amended by D-010: `main` is now
+   protected by branch protection, so the rule is enforced by the platform rather
+   than by discipline, and an agent may request auto-merge instead of waiting for
+   an operator to press the button. D-010 supersedes the "or an operator push"
+   clause and the "agents" qualifier. The rule as originally written is retained
+   below as the record of the state at D-008.)**
+
+   > **Rule 3 as written at D-008:** Agents never push `main` directly. `main`
+   > advances only via a PR merge or an operator push. The guard is the transport
+   > boundary by design, not an obstacle to be defeated.
 
 ### Rationale
 
@@ -590,5 +599,117 @@ git history and on the PR page and are not duplicated here.
   not read `gh` from `PATH`; the failure mode behind rule 2 was a
   tool-availability misdiagnosis, which argues the rules belong where a reviewer
   finds them.
+
+## D-010: Merge authority is mechanized, not delegated
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Amends:** D-008, standing rule 3
+- **Affects:** any agent session authorized to act on this repository, and the operator's merge step
+
+### Context
+
+D-008 rule 3 read: agents never push `main` directly; `main` advances only via a
+PR merge or an operator push. As written, that rule was held by nothing but the
+agent's own discipline. The transport guard blocks a direct push by an agent
+session, which is real, but the merge itself was performed by a human reading
+the agent's summary. Every PR in this repository therefore cost a manual
+operator step, and the rule's enforcement stopped at the push — the decision to
+land the commit was unmechanized.
+
+The cost is visible in the record. One session verified a branch, corrected two
+tests, authored a decision record, ran four suites, committed, and pushed — and
+then exhausted its tool-call budget on the command that would have opened the
+pull request. The work was complete and correct; the merge was the only thing
+missing, and it was missing because the last mile required a human who was not
+otherwise in the loop. A workflow whose final step is a human being present is a
+workflow whose final step sometimes does not happen.
+
+### Decision
+
+**Standing rule 3 is mechanized. `main` is protected by branch protection, and
+merge authority moves from the operator's button to the platform's checks.**
+
+1. `main` is protected by branch protection. It accepts no direct push from
+   anyone — no agent and no human. The D-008 escape clause "or an operator push"
+   is withdrawn: it was the one path around the rule that the rule could not
+   police.
+2. `main` advances only by merge of a pull request whose **required checks — the
+   CI suites — have passed.** The gate is the test result, not a reviewer's
+   confidence.
+3. **Agents may open pull requests and request auto-merge**
+   (`gh pr merge --auto --squash`). The platform performs the merge once the
+   required checks pass. The agent does not perform the merge and need not be
+   present when it happens.
+4. **The operator retains post-hoc review, revert authority, and the right to
+   revoke auto-merge for any class of change**, at any time, without consulting
+   anyone. Revocation is expected to be routine, not exceptional.
+
+Auto-merge is requested with `--squash` so `main` history stays linear and each
+change lands as one commit whose message says what it did.
+
+### Rationale
+
+1. **This is an operator delegation decision, and it is recorded as one.** The
+   operator holds the authority being delegated and chose to exercise it. A
+   delegation that no record captures is indistinguishable from an agent having
+   decided to take the authority, which is the failure this decision exists to
+   make impossible.
+2. **Pi's guard-stop record is the evidence that the unmechanized rule did not
+   hold.** Twice in two sessions the task stopped at the merge boundary: once on
+   a blocked direct push, once on an exhausted tool-call budget immediately
+   before the pull request could be opened. Both stops were correct. The pattern
+   they show is not that the guard misfired — it is that a correct stop and a
+   complete piece of work can still end with nothing landed, because the only
+   remaining step needed a person. A boundary that produces unrecoverable stalls
+   gets bypassed eventually; the honest repair is to remove the need for the
+   person, not to lower the boundary.
+3. **The F-006 principle, applied to the workflow itself, is the whole
+   argument.** F-006 found a limit declared on a public interface and enforced
+   by nothing — a promise the platform did not keep. D-009 closed that by
+   removing what could not be enforced and wiring what could. Rule 3 as written
+   was the same defect one level up: a boundary declared in a document and
+   enforced by the reader's good intentions. A rule enforced only by convention
+   is not a weaker rule; it is a rule with a countdown. Branch protection is the
+   enforcement mechanism, the required checks are the enforcement mechanism, and
+   the platform refusing the push is the report that the rule was violated —
+   the property D-008 asserted without having.
+
+### Consequence: post-hoc review replaces pre-merge review
+
+There is no human review before a merge. That is the deliberate trade, and the
+remedy is named rather than assumed: the required checks must pass for the merge
+to happen, and the operator reviews afterwards and reverts if the review
+disagrees with the merge. Revert is cheap on a squash-merged, linear history
+and the operator holds that authority unconditionally. Review moves from blocking
+the merge to correcting it, which is a different distribution of risk, not the
+absence of the control.
+
+The corollary is that the required checks must actually be required. A check
+marked optional on the branch rule is decoration, and the next honest reading of
+D-010 will be that the protection was never configured.
+
+**If the policy scanner blocks the merge command, the operator makes a
+deliberate, recorded policy change — never an improvised workaround.** This
+restates D-008 rule 1 for the new boundary, and it is stated here because
+auto-merge gives an agent a new way to encounter a guard it is not authorized to
+move. The correct response to a block is a new decision record naming the limit
+that was changed and why. The incorrect response is the one already forbidden: a
+different flag, a different transport, or a path the guard does not cover.
+
+### Alternatives rejected
+
+- **Trust-based delegation without branch protection.** Let the agent request
+  merges and rely on the operator to notice and revert the bad ones. Rejected
+  because it is D-008's defect unfixed: the boundary is then whatever the
+  operator's attention happens to be, which is a variable, not a control. It
+  also fails exactly when it matters most — a hurried session on a plausible
+  change.
+- **A permanent operator merge gate.** Keep every merge manual and simply accept
+  that work sometimes sits unlanded. Rejected because the stop record shows the
+  gate is already the most common terminal state of a correct task, and a gate
+  that is routinely the last step is a queue, not a control. It converts a
+  missing human into a stalled pull request, which is a worse failure to
+  diagnose than a bad merge the operator can see and revert.
 
 
