@@ -36,10 +36,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Platform .mjs suites (22 tests)
+      - name: Platform .mjs suites
         run: node --test platform/*.test.mjs
 
-      - name: Core and Pi .ts suites (262 tests)
+      - name: Core and Pi .ts suites
         run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
 
       # The F-006 live proof is INCLUDED: it is headless and self-contained.
@@ -47,5 +47,5 @@ jobs:
       # function with stubbed tool results. It uses no model, no gateway, and
       # no network, and it writes no files, so it depends on no local-only
       # resource and runs unchanged on a CI runner.
-      - name: F-006 live recovery proof (21 checks)
+      - name: F-006 live recovery proof
         run: node --experimental-strip-types verification/live-f006-proof.mjs
