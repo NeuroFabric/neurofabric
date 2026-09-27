@@ -29,9 +29,9 @@ pattern is the only force-push control acting on the agent identity.
 
 ## 2. Anchor
 
-Add a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which is
-**preceded by whitespace and begins a refspec argument**, rather than matching
-the flag.
+D-014 added a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which
+is **preceded by whitespace and begins a refspec argument**, rather than
+matching the flag.
 
 Shipped pattern:
 
