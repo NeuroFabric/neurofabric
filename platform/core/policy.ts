@@ -83,6 +83,18 @@ export const DESTRUCTIVE_PATTERNS: readonly RegExp[] = [
   /\bdrop\s+(database|table|schema)\b/i,
   /\btruncate\s+table\b/i,
   /\bdelete\s+from\b/i,
+  // Branch-removal, flag form (D-015, operator ruling Option 3): the --delete
+  // form deletes a remote branch and is not a force-push, so neither the
+  // --force entry nor the '+' refspec entry reaches it. The trailing \b also
+  // matches any --delete-prefixed option; accepted deny-safe per ruling 7 and
+  // pinned by docs/REFSPEC_GUARD_SPEC.md row 10. No such longer option exists.
+  /\bgit\s+push\b.*--delete\b/i,
+  // Branch-removal, colon form (D-015, operator ruling Option 3): a refspec
+  // whose source side is empty, as in ':refs/heads/main', deletes the
+  // destination branch. Anchored on whitespace or a quote before the colon so
+  // a legitimate 'src:dst' refspec such as 'HEAD:main' is untouched — that
+  // anchor is what row 11 pins.
+  /\bgit\s+push\b.*(?:\s|["']):\S/i,
 ];
 
 export const SECRET_ACCESS_PATTERNS: readonly RegExp[] = [

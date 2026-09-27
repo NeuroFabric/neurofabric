@@ -104,14 +104,44 @@ The `after` column is a **target, not a measurement**. It becomes a claim only
 when someone measures it.
 
 1. Add the pattern to `DESTRUCTIVE_PATTERNS`. Change nothing else in the file.
-2. Re-run the same nine-row evaluation used for the `before` column, against
+2. Re-run the same eleven-row evaluation used for the `before` column, against
    the exported array, in the same shape: one run, a throwaway script that is
    not committed.
 3. Record the measured results as a new `after (measured)` column alongside
    the `after (target)` column.
-4. Add all nine rows to `platform/core/refspec-guard.test.ts` as assertions, so the
+4. Add all eleven rows to `platform/core/refspec-guard.test.ts` as assertions, so the
    matrix is enforced by the suite rather than by this document.
 5. Run the core and Pi suites and record the counts.
+
+### D-015 addendum — branch-removal coverage (operator ruling, Option 3)
+
+`DESTRUCTIVE_PATTERNS` now carries **29 entries**. Entries 1 through 27 are
+the force-push control described in this document; entries 28 and 29 close the
+delete-refspec gap that D-014 ruling 3 left OPEN. A branch-removal push is not
+a force-push: it carries neither a `+` refspec prefix nor a `--force` flag, so
+no pre-existing entry could reach it.
+
+The two added literals:
+
+```
+/\bgit\s+push\b.*--delete\b/i
+/\bgit\s+push\b.*(?:\s|["']):\S/i
+```
+
+The matrix is now **eleven rows**. Rows 10 and 11 extend it:
+
+| 10 | `git push origin --delete main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Branch-removal flag form. Measured DENY on all 27 prior entries. |
+| 10 | `git push origin --delete refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Fully-qualified flag form, same entry. |
+| 11 | `git push origin :refs/heads/main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Empty-source refspec: the destination branch is deleted. |
+| 11 | `git push origin :main` | ALLOWED | **DENIED** | *(D-015, Option 3.)* Short form, same entry. |
+
+Row 11's anchor requires whitespace or a quote before the colon, so a legitimate
+`src:dst` refspec such as `HEAD:main` or `feature:main` measures ALLOW; row 11
+pins both as disqualification guards.
+
+The flag-form pattern matches any `--delete`-prefixed option, including
+hypothetical options that git does not define; this over-match is accepted as
+deny-safe per ruling 7 and is pinned by row 10.
 
 **Stop conditions.** Any of the following is a halt, not something to work
 around:
