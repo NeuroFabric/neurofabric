@@ -33,10 +33,10 @@ Add a second entry to `DESTRUCTIVE_PATTERNS` that matches a `+` which is
 **preceded by whitespace and begins a refspec argument**, rather than matching
 the flag.
 
-Proposed shape:
+Shipped pattern:
 
 ```
-\bgit\s+push\b[^|]*(?:\s)\+[^\s]
+/\bgit\s+push\b.*(?:\s|["'])\+\S/i
 ```
 
 Design points the implementer should preserve:
@@ -45,8 +45,7 @@ Design points the implementer should preserve:
   refspec prefix from a `+` embedded in a branch name such as
   `feature+name`. Anchoring on the presence of `+` alone would deny a branch
   name that is not a force-push at all.
-- **The `[^|]*` guard** keeps the match inside the command portion of the line,
-  so a `+` appearing after a shell pipe is not attributed to the push.
+- **The shipped pattern is `/\bgit\s+push\b.*(?:\s|["'])\+\S/i`** — anchored on whitespace or a quote before the `+`. This supersedes the proposed `[^|]*` pipe guard: the over-match direction is deny-safe (compound commands and mere mentions of `+`tokens also deny), and simplicity over permissiveness follows the row-7 precedent.
 - **It does not modify or relax the existing `--force` entry.** The two are
   independent: the new one covers the `+` form, the old one continues to
   cover the flag form, and the existing with-lease negative lookahead is left
@@ -105,12 +104,12 @@ The `after` column is a **target, not a measurement**. It becomes a claim only
 when someone measures it.
 
 1. Add the pattern to `DESTRUCTIVE_PATTERNS`. Change nothing else in the file.
-2. Re-run the same eight-row evaluation used for the `before` column, against
+2. Re-run the same nine-row evaluation used for the `before` column, against
    the exported array, in the same shape: one run, a throwaway script that is
    not committed.
 3. Record the measured results as a new `after (measured)` column alongside
    the `after (target)` column.
-4. Add all eight rows to `platform/core/policy.test.ts` as assertions, so the
+4. Add all nine rows to `platform/core/refspec-guard.test.ts` as assertions, so the
    matrix is enforced by the suite rather than by this document.
 5. Run the core and Pi suites and record the counts.
 

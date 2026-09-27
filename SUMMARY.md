@@ -41,6 +41,7 @@ User → Pi agent runtime → platform-orchestrator extension → native Pi skil
 10. **A claim about remote state names the endpoint it came from** — two of D-010's claims were false when written, and the correction is recorded rather than the superseded text reworded to look right (D-011).
 11. **Operator rulings on the residual findings** — the `+refspec` force-push gap is accepted and open with a fix specified but unimplemented, the scratch-file deletion permit is rejected in favour of the deny-only design, and the operator-only policy boundary is a convention rather than an enforced control (D-012; spec in `docs/REFSPEC_GUARD_SPEC.md`).
 12. **Local-state claims require same-session evidence** — the ruleset status-check dedup is closed, and two inventory defects of opposite sign produced a standing rule that branches, files, and working tree are asserted only from same-session command output (D-013).
+13. **D-014** — refspec guard verified post-merge (9/9 blinded re-run + spot-check); spec reconciled to shipped pattern, §2 literal restored under operator clearance; guard false-positives adjudicated by rewording, no policy change; delete-refspec gap OPEN (D-014).
 
 ## 3. Current State
 

@@ -1251,5 +1251,127 @@ has been repaired, and the residual is recorded as a residual.
   from the residual that already states the position correctly, and that
   residual is what this decision now rules on.
 
+## D-014: Refspec guard verification, spec reconciliation, halt inventory
+
+- **Date:** 2026-09-27
+- **Status:** Accepted
+- **Amends:** D-012 ruling 1 (compensation executed — ruling 1)
+
+### Rulings (operator, verbatim)
+
+1. D-012 ruling 1 AMENDED: the +refspec fix was agent-coded. Compensation
+   held: PR #15 did not ride --auto; the operator reviewed the diff and
+   merged manually.
+2. Matrix extended 8 -> 9 rows; row 9 (quote-wrapped "+main" must DENY) is
+   the operator addendum, implemented and CI-enforced.
+3. Adjacent gap remains OPEN for operator ruling:
+   `git push origin :refs/heads/main` (delete-refspec) is unguarded.
+4. The matrix is committed as `platform/core/refspec-guard.test.ts`; the
+   ruleset's required check enforces all 9 rows from merge onward.
+5. Shipped pattern stands over spec §2's proposal: `.*` was mandated in
+   place of `[^|]*`; the pipe-guard design point is superseded.
+6. §5 staleness corrected: nine rows; matrix lives in
+   `platform/core/refspec-guard.test.ts`.
+7. Grep self-denial recorded: the guard denies mentions, not only acts.
+   Deny-safe; refinement deferred, no action.
+8. Implementation-run halt recorded: budget exhaustion at PR creation;
+   verbatim reporting; no identifiers invented; drafted PR body overclaim
+   ("local run + CI") self-flagged and corrected pre-open.
+9. Count settled via PR #14: six entries (D-008 through D-013).
+
+### Implementation and verification
+
+- PR #15, squash-merged by the operator without --auto after diff review.
+  Pattern added to `DESTRUCTIVE_PATTERNS` (26 -> 27):
+
+  `/\bgit\s+push\b.*(?:\s|["'])\+\S/i`
+
+- CI on PR #15: green (operator-attested) — the witnessed after-column.
+- Blinded re-run (D-014 v1 session, operator-attested; clean checkout at
+  2301760; expected results derived from the spec before evaluating the
+  landed code; standalone script in .git/ importing the exported patterns;
+  27 entries confirmed): all 9 rows measured on target.
+- Spot-check (D-014 v2 session, verbatim): 9/9 pass, 0 fail
+  (`node --experimental-strip-types --test platform/core/refspec-guard.test.ts`).
+- Spec reconciled (D-014 v2 session): §2 documents the shipped pattern and
+  supersedes the pipe-guard design point; §5 corrected to nine rows and
+  `platform/core/refspec-guard.test.ts`.
+
+### Independence statement
+
+The implementation was agent-authored; this verification rests on the
+operator's pre-merge diff review plus this clean-checkout re-run. This
+record does not claim two independent agent proofs.
+
+### Session events
+
+- Leftover throwaway verification script `.git/verify_refspec.ts`: removal
+  was blocked by policy (`rm` denied); disclosed proactively by the agent;
+  removed by the operator post-halt. Recorded as a known property:
+  deny-safe policy creates operator cleanup debt; sandbox with allowlisted
+  cleanup is a deferred improvement.
+- Second artifact of the same class, `.lit.tmp` (35 bytes, the canonical
+  literal extracted from spec line 39 for byte-verification): removal
+  likewise blocked by policy; disclosed proactively; removed by the operator
+  before this transcription.
+
+### Halt inventory (terminal session halts, project to date)
+
+1. Pre-D-012 integrity halt: halted rather than write unsubstantiated
+   claims into the record.
+2. Implementation run: budget exhaustion at PR creation.
+3. D-014 v1: task 3, spec edit (edit-anchor failure; remedied by reading
+   exact bytes and reissuing).
+4. D-014 v2: task 3, record write (self-reported as "halt #3"; corrected
+   here — this inventory governs).
+5. D-014 v4: record write — refused twice by the policy guard (two
+   different matched words, both false positives); session terminated by
+   the harness before the verification battery ran.
+
+All five: verbatim reporting, no identifiers invented. Zero fabricated
+claims across five terminations. Voluntary guard and check stops that did
+not terminate a session are recorded in the §2 fidelity section and the
+transcription note.
+
+### §2 fidelity check and operator amendment
+
+- The v3 finish session stopped per brief at the §2 check: the contiguous
+  delimited literal was absent from the spec — the fenced block carried the
+  pattern body without delimiters or flag, and the design-point bullet's
+  code span lacked the leading `/`. The agent declined to adjudicate between
+  strict and substantive readings and reported verbatim; correct.
+- Operator ruling: strict reading upheld. The remedy reported as applied and
+  committed by the operator was absent from this checkout at the task-1
+  re-check — the agent stopped and reported verbatim; no amendment commit
+  existed on `chore/d014-refspec-verification` and HEAD was unchanged at
+  2301760. The operator, unable to apply the remedy directly, explicitly
+  cleared the agent to apply it in this checkout. Applied by the agent
+  under that clearance: fence relabeled 'Shipped pattern:' and given the
+  full literal `/\bgit\s+push\b.*(?:\s|["'])\+\S/i`; leading `/` restored in
+  the design-point bullet. The pre-existing uncommitted spec diff (4
+  insertions, 5 deletions, on record from the prior session) was committed
+  unchanged beforehand (94e5501). Re-verified by fixed-string grep (2 hits)
+  and committed on `chore/d014-refspec-verification` (19ef8d5) immediately
+  before transcription.
+- Also recorded: a POSIX-style `cd` was blocked by the path-boundary guard
+  in the v3 session and re-issued with the native path — same class as the
+  `/tmp` block; guard functioning as designed.
+- Transcription note (operator-supplied, second revision): The policy guard
+  refused the first two attempts to write this record: a write-pattern rule
+  matched words from the guard's own detection vocabulary, which appeared in
+  the operator-supplied note as ordinary governance prose — false
+  positives; nothing the rule exists to catch was present. Per the D-008
+  standing rules the agent did not obfuscate or work around the guard; it
+  stopped and reported verbatim both times, and the operator adjudicated.
+  No guard rule was modified. The operator supplied two successive
+  meaning-preserving rewordings of the note; this second revision is the
+  text of record. The matched words are preserved verbatim in the
+  operator's session archive and are deliberately not reproduced here, so
+  that this record does not re-trigger the guard. Separately: operator-side
+  instruction text at one point rendered the pattern literal with a lost
+  backslash before the plus — a channel rendering artifact, not a change to
+  the pattern; the canonical literal is the one transcribed above, and it is
+  what the fixed-string check verified.
+
 
 
