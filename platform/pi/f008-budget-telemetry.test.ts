@@ -253,6 +253,40 @@ test("I. a policy that does not meter is completely unchanged", async () => {
   assert.equal(repeatWarnings(adapter).length, 0, "and no repeat tracking");
 });
 
+test("K. per-task accounting does not outlive the task that produced it", async () => {
+  const root = await sandbox();
+  const adapter = await meteredAdapter(root);
+  const policy = adapter.policy as unknown as {
+    forgetTask: (taskId: string) => void;
+    usageFor: (taskId: string) => { toolCalls: number; fileWrites: number };
+    counters: Map<string, unknown>;
+    callRepeats: Map<string, unknown>;
+  };
+  assert.equal(typeof policy.forgetTask, "function", "the policy must expose the release hook");
+
+  const firstTaskId = adapter.currentTask!.taskId;
+  await readTimes(adapter, 5, "one");
+  assert.equal(policy.usageFor(firstTaskId).toolCalls, 5, "the live task is accounted for");
+
+  // Every turn releases the previous task's counters and repeat map. Without
+  // this both maps grew by one entry per turn for the life of the process,
+  // holding every call signature ever seen.
+  for (let turn = 0; turn < 5; turn += 1) {
+    await adapter.beginTask(`turn ${turn}`, `turn ${turn}`);
+    await readTimes(adapter, 3, `t${turn}`);
+  }
+
+  assert.equal(policy.usageFor(firstTaskId).toolCalls, 0, "a finished task's usage is released");
+  assert.equal(policy.usageFor(firstTaskId).fileWrites, 0);
+  assert.equal(policy.counters.size, 1, "only the live task may be counted");
+  assert.equal(policy.callRepeats.size, 1, "only the live task may carry repeat accounting");
+  assert.equal(adapter.currentTask!.taskId !== firstTaskId, true);
+
+  // Releasing accounting is bookkeeping only: the live task's budget is intact.
+  assert.equal(adapter.budget?.used, 3);
+  assert.equal(budgetWarnings(adapter).length, 0, "3 calls are far below the first warning band");
+});
+
 test("J. a superseded handler reports nothing for the task that replaced it", async () => {
   const root = await sandbox();
   // APPROVAL mode so a write escalates and the precheck yields at

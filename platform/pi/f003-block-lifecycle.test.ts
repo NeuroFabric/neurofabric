@@ -48,6 +48,76 @@ function blockedKernel(): KernelAdapter {
   return kernel;
 }
 
+/**
+ * A policy that aborts instead of blocking, used to pin the other half of the
+ * violation semantics: an abort is the one denial that may end a run.
+ */
+class AbortingPolicy {
+  readonly mode = "TRUSTED_PROJECT" as const;
+  evaluate(request: { tool: { name: string } }): PolicyDecision {
+    if (request.tool.name === "bash") {
+      return { decision: "DENY", reason: "aborted by test policy", violation: "abort" };
+    }
+    return { decision: "ALLOW" };
+  }
+  async evaluateWithApproval(request: { tool: { name: string } }): Promise<PolicyDecision> {
+    return this.evaluate(request);
+  }
+}
+
+// --- G. the legacy entry point honours the declared violation ---------------
+
+test("G. a legacy `block` denial does not fail the task", async () => {
+  const kernel = blockedKernel();
+  await kernel.beginTask("legacy blocked call");
+  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "rm -rf ." });
+  assert.equal(decision.decision, "DENY");
+  assert.equal(decision.violation, "block");
+
+  const task = kernel.currentTask!;
+  assert.notEqual(task.status, "FAILED", "a blocked call is not a failed task");
+  assert.equal(task.failureReason, undefined, "no failure may be recorded for a block");
+  assert.equal(kernel.recentEvents().some((e) => e.type === "TASK_FAILED"), false);
+  // The denial is still fully traced, and the task can still be finalised.
+  assert.ok(kernel.recentEvents().some((e) => e.type === "APPROVAL_DENIED"));
+  assert.equal(kernel.diagnostics.denialCount, 1, "and it is still counted as a policy denial");
+  // Finalising the turn must not report a failure either. The legacy path
+  // planned the call, so the task sits in EXECUTING with an execution counted
+  // and no result ever observed; that is the state it is honestly reported in.
+  const finished = await kernel.finishTask(toolCallOnly("b1", "bash"));
+  assert.notEqual(finished.status, "FAILED", "a blocked turn is never reported as failed");
+});
+
+test("G2. a legacy `abort` denial terminates the task", async () => {
+  const kernel = newKernel();
+  kernel.setPolicy(new AbortingPolicy() as unknown as PolicyEngine);
+  await kernel.beginTask("legacy aborted call");
+  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "rm -rf ." });
+  assert.equal(decision.decision, "DENY");
+  assert.equal(decision.violation, "abort");
+
+  assert.equal(kernel.currentTask?.status, "FAILED", "an abort ends the run");
+  assert.match(String(kernel.currentTask?.failureReason), /aborted by test policy/);
+  assert.ok(kernel.recentEvents().some((e) => e.type === "POLICY_ABORTED"), "the abort is traced");
+  // Exactly one termination: the abort must not also drive a second, illegal
+  // transition out of FAILED.
+  assert.equal(kernel.transitions.filter((t) => t.to === "FAILED").length, 1);
+});
+
+test("G3. an unlabelled legacy denial still fails closed", async () => {
+  const kernel = newKernel();
+  await kernel.beginTask("legacy unlabelled denial");
+  const { decision } = await kernel.evaluateToolCall(
+    "write",
+    "write",
+    { path: "x", content: "x" },
+    { requestApproval: async () => false },
+  );
+  assert.equal(decision.decision, "DENY");
+  assert.equal(decision.violation, undefined, "the tier policy labels no violation");
+  assert.equal(kernel.currentTask?.status, "FAILED", "with no declared violation the old fail-closed behaviour stands");
+});
+
 const text = (t: string) => ({ role: "assistant", content: [{ type: "text", text: t }] });
 const toolCallOnly = (id: string, name: string) => ({
   role: "assistant",

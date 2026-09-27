@@ -57,6 +57,18 @@ export async function loadProjectConfig(projectRoot: string): Promise<Neurofebri
 }
 
 /**
+ * The absolute roots a config allows, resolved against the project directory.
+ *
+ * This is the single place a root becomes an absolute path, so the policy and
+ * anything else that must respect the same boundary (artifact verification)
+ * are configured from exactly the same list. A relative root is a path from
+ * the project root; an absolute one is taken as given.
+ */
+export function resolveAllowedRoots(config: NeurofebricProjectConfig, projectRoot: string): string[] {
+  return config.allowedRoots.map((root) => (path.isAbsolute(root) ? root : path.resolve(projectRoot, root)));
+}
+
+/**
  * Build the policy for a resolved config.
  *
  * `APPROVAL` deliberately returns a policy with no approval provider attached
@@ -71,7 +83,7 @@ export function buildPolicy(
   projectRoot: string,
   policyConfig?: PolicyConfig,
 ): PolicyEngine {
-  const roots = config.allowedRoots.map((root) => (path.isAbsolute(root) ? root : path.resolve(projectRoot, root)));
+  const roots = resolveAllowedRoots(config, projectRoot);
   if (!policyConfig) {
     if (config.policyMode !== "TRUSTED_PROJECT") return new DefaultPolicy();
     return new TrustedProjectPolicy({ allowedRoots: roots });

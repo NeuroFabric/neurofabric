@@ -104,6 +104,38 @@ test("the raw user prompt is redacted before it is persisted", async () => {
   assertNoSecret(JSON.stringify(persisted), "prompt preview");
 });
 
+test("provenance recorded by the kernel reaches the persisted trace sink", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "nf-redact-"));
+  const target = path.join(root, "report.md");
+  await writeFile(target, "# Report\n", "utf8");
+
+  const adapter = new KernelAdapter({ boundary: new WorkspaceBoundary([root]) });
+  adapter.registerTools([WRITE]);
+  await adapter.beginTask("produce a report", "produce a report");
+  // Everything the extension would hand to `pi.appendEntry`.
+  const { persisted, sink } = sinkCapturingPersisted();
+  adapter.events.subscribe((event) => sink(event));
+
+  // The approving provider stands in for an operator who authorised this call,
+  // so the execution binds and settles. Without it the write never executes and
+  // there is no completion to carry provenance.
+  await adapter.precheckToolCall("write", "execute", { path: target }, { requestApproval: async () => true }, "c1");
+  adapter.declareToolOutputs("c1", "write", { path: target });
+  await adapter.beginToolExecution("c1", "write");
+  await adapter.recordToolResult("c1", "write", { written: true }, false);
+
+  // Provenance is the only record of which call produced which artifact. It
+  // used to stop at the ToolResult object, so the persisted trace could not
+  // attribute anything to anything.
+  const completed = persisted.find((entry) => (entry as { type?: string }).type === "TOOL_COMPLETED") as
+    | { payload: { provenance: Array<{ source: string; artifactIds: string[] }> } }
+    | undefined;
+  assert.ok(completed, "the completion must be persisted");
+  assert.ok(Array.isArray(completed!.payload.provenance), "provenance must reach the sink, not stop at the result object");
+  assert.equal(completed!.payload.provenance[0]!.source, "write");
+  assert.deepEqual(completed!.payload.provenance[0]!.artifactIds, [adapter.artifacts[0]!.artifactId]);
+});
+
 test("provenance emitted by the kernel cannot carry a credential", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "nf-redact-"));
   const target = path.join(root, "out.json");

@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { KernelAdapter } from "./kernel-adapter.ts";
 import { toolDescriptorFromPi } from "./tool-adapter.ts";
-import { buildPolicy, loadProjectConfig, type NeurofebricProjectConfig } from "./project-config.ts";
+import { buildPolicy, loadProjectConfig, resolveAllowedRoots, type NeurofebricProjectConfig } from "./project-config.ts";
+import { WorkspaceBoundary } from "../core/index.ts";
 
 /**
  * End-to-end exercise of the extension's `tool_call` preflight path.
@@ -29,6 +30,9 @@ async function adapterForProject(root: string, config: NeurofebricProjectConfig 
   const resolved = await loadProjectConfig(root);
   const adapter = new KernelAdapter();
   adapter.setPolicy(buildPolicy(resolved, root));
+  // The extension installs the same boundary, resolved from the same roots
+  // policy evaluation uses, so declared artifacts are verified for containment.
+  adapter.setBoundary(new WorkspaceBoundary(resolveAllowedRoots(resolved, root)));
   for (const name of ["read", "bash", "write", "edit", "grep", "find", "ls"]) {
     adapter.registerTools([toolDescriptorFromPi({ name, description: name })]);
   }
@@ -140,6 +144,35 @@ test("D. approval mode is unchanged and still consults the dialog", async () => 
   assert.equal(await adapter2.adapter.beginToolExecution("c2", "bash"), undefined);
 });
 
+test("F. a declared artifact outside the allowed roots is rejected in production wiring", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "nf-e2e-"));
+  const outside = path.join(path.dirname(root), "nf-e2e-outside.txt");
+  await writeFile(outside, "not in the workspace", "utf8");
+  try {
+    // APPROVAL mode with no declarative policy file: the operator authorises
+    // the call, so the write is allowed to RUN. Containment is then decided by
+    // artifact verification against the boundary the extension installs. The
+    // two layers are independent, which is the point: authorisation decides
+    // whether the tool runs, the boundary decides whether what it claims to
+    // have produced is admissible.
+    const { adapter } = await adapterForProject(root, { policyMode: "APPROVAL", allowedRoots: ["."] });
+    const approved = await adapter.precheckToolCall("write", "execute", { path: outside, content: "x" }, { requestApproval: async () => true }, "c1");
+    assert.equal(approved.decision.decision, "ALLOW", "the operator authorised this call");
+    assert.ok(await adapter.beginToolExecution("c1", "write"));
+    assert.deepEqual(adapter.declareToolOutputs("c1", "write", { path: outside }), [outside]);
+
+    const validation = await adapter.recordToolResult("c1", "write", { written: true }, false);
+
+    assert.equal(validation.status, "INVALID", "an artifact outside the workspace is not admissible");
+    assert.match(validation.message, /outside the allowed workspace/);
+    assert.equal(adapter.artifacts[0]!.trust, "INVALID");
+    assert.notEqual((await adapter.finishTask({ claim: "file written" })).status, "COMPLETED");
+  } finally {
+    const { unlink } = await import("node:fs/promises");
+    await unlink(outside).catch(() => {});
+  }
+});
+
 test("E. the committed repository config is what production Pi will load", async () => {
   const config = await loadProjectConfig(PROJECT_ROOT);
   assert.equal(config.policyMode, "TRUSTED_PROJECT");
@@ -151,6 +184,7 @@ test("E. the committed repository config is what production Pi will load", async
   // A real project file must be readable through the trusted policy.
   const adapter = new KernelAdapter();
   adapter.setPolicy(buildPolicy(config, PROJECT_ROOT));
+  adapter.setBoundary(new WorkspaceBoundary(resolveAllowedRoots(config, PROJECT_ROOT)));
   for (const name of ["read", "bash", "write"]) adapter.registerTools([toolDescriptorFromPi({ name, description: name })]);
   await adapter.beginTask("read the README", "read the README");
   const ok = await adapter.precheckToolCall("read", "execute", { path: "README.md" }, undefined, "r1");

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   CoreError,
+  DEFAULT_LIMITS,
   DefaultPolicy,
   EventBus,
   InMemoryStore,
@@ -8,6 +9,7 @@ import {
   createArtifact,
   createTask,
   declaredArtifactReferences,
+  isConfiguredPolicy,
   redactString,
   transitionTask,
   validatePlan,
@@ -192,7 +194,15 @@ export class KernelAdapter {
   policy: PolicyEngine = new DefaultPolicy();
   private readonly skills: SkillDescriptor[];
   private readonly limits: RecoveryLimits;
-  private readonly boundary?: WorkspaceBoundary;
+  /**
+   * Boundary used to verify produced artifacts.
+   *
+   * Installed either through the constructor or `setBoundary`. It is absent
+   * only for an embedding that never resolves allowed roots, and then artifacts
+   * are still checked for existence, readability and content, but not for
+   * containment.
+   */
+  private boundary?: WorkspaceBoundary;
   private task?: Task;
   private plan?: Plan;
   private lastValidation?: ValidationResult;
@@ -256,12 +266,37 @@ export class KernelAdapter {
     this.memory = options.memory ?? new InMemoryStore();
     this.skills = options.skills ?? [];
     this.boundary = options.boundary;
+    // F-006: DEFAULT_LIMITS is the single source of truth for these bounds.
+    // They used to be written out again here, which meant a change to the
+    // exported defaults silently left recovery enforcing the old numbers.
     this.limits = options.limits ?? {
-      maxToolRetries: 2,
-      maxReplans: 2,
-      maxRecoveryDepth: 3,
-      maxExecutionTimeMs: 30 * 60 * 1000,
+      maxToolRetries: DEFAULT_LIMITS.maxToolRetries,
+      maxReplans: DEFAULT_LIMITS.maxReplans,
+      maxRecoveryDepth: DEFAULT_LIMITS.maxRecoveryDepth,
+      maxExecutionTimeMs: DEFAULT_LIMITS.maxExecutionTimeMs,
     };
+  }
+
+  /**
+   * The recovery budgets this kernel enforces.
+   *
+   * Read-only. Explicitly supplied limits are returned as given, so an embedder
+   * that configured different budgets can see what it configured.
+   */
+  get recoveryLimits(): RecoveryLimits {
+    return { ...this.limits };
+  }
+
+  /**
+   * Install the boundary used to verify produced artifacts.
+   *
+   * The extension resolves allowed roots at session start, which is after the
+   * kernel exists, so the boundary is installed here rather than only through
+   * the constructor. It is the same boundary policy evaluation uses; it adds a
+   * containment check to artifact verification and removes none.
+   */
+  setBoundary(boundary: WorkspaceBoundary): void {
+    this.boundary = boundary;
   }
 
   setSkills(skills: SkillDescriptor[]): void {
@@ -279,6 +314,19 @@ export class KernelAdapter {
   /** Install the policy used by preflight. Used to select the trust model. */
   setPolicy(policy: PolicyEngine): void {
     this.policy = policy;
+  }
+
+  /**
+   * Drop the per-task accounting a finished task left in the policy.
+   *
+   * A metered policy keys its counters and its repeat map by task id, so those
+   * maps would otherwise grow for the life of the process. A turn boundary is
+   * the one point where the previous task is provably over, whatever state it
+   * ended in, and it is purely bookkeeping: no task state, event or decision
+   * depends on it.
+   */
+  private forgetPolicyAccounting(taskId: string): void {
+    if (isConfiguredPolicy(this.policy)) this.policy.forgetTask(taskId);
   }
 
   /** Every task-state transition so far, oldest first. */
@@ -446,6 +494,11 @@ export class KernelAdapter {
   }
 
   async beginTask(userRequest: string, objective = userRequest, constraints: Record<string, unknown> = {}): Promise<Task> {
+    // The previous turn is over the moment a new one begins, whatever state it
+    // reached, so its per-task policy accounting is released here rather than
+    // being retained for the life of the process. No lifecycle state, event or
+    // decision reads it.
+    if (this.task) this.forgetPolicyAccounting(this.task.taskId);
     // A turn that begins while an earlier task has not reached a terminal state
     // is a genuine race, not a normal sequence. The earlier task is terminated
     // EXPLICITLY here — recorded as a real FAILED transition with its own
@@ -890,6 +943,12 @@ export class KernelAdapter {
       stepId: bound.stepId,
       tool: result.execution.tool,
       error: error?.message,
+      // Provenance is a fact about the execution, not a diagnostic decoration.
+      // It used to stop at the `ToolResult` object and was lost the moment the
+      // call returned, so nothing downstream could attribute a result to the
+      // call that produced it. It travels on the event the trace already
+      // persists, which is the only path it needs.
+      provenance: result.provenance,
     }));
 
     // The completion event yields. A newer turn may have started meanwhile; this
@@ -1183,9 +1242,21 @@ export class KernelAdapter {
   }
 
   /**
-   * Legacy combined entry point: plan, then evaluate policy, failing the task on
-   * denial. The Pi adapter must use `precheckToolCall` + `beginToolExecution`
-   * instead; this exists for direct kernel callers and legacy tests.
+   * Legacy combined entry point: plan, then evaluate policy. The Pi adapter
+   * must use `precheckToolCall` + `beginToolExecution` instead; this exists for
+   * direct kernel callers and legacy tests.
+   *
+   * F-003: the denial is handled according to the violation policy actually
+   * declared, not unconditionally:
+   *
+   *  - `abort` — the task is already terminal. `precheckToolCall` ran the abort
+   *    and traced it, so advancing again here would request an illegal
+   *    transition from FAILED.
+   *  - `block` — the call is refused and the turn continues. A block is not a
+   *    failure, so the task must not be moved into FAILED; doing so is what made
+   *    every blocked call look like a dead run.
+   *  - no violation declared — the denial is unlabelled, so this path fails
+   *    closed exactly as it did before.
    */
   async evaluateToolCall(toolName: string, operation: string, input: unknown, approval?: ApprovalProvider): Promise<ToolCallDecision> {
     // Legacy ordering: plan first, then evaluate. Denial recovery therefore runs
@@ -1193,6 +1264,12 @@ export class KernelAdapter {
     const planned = await this.planToolCall(toolName, input);
     const precheck = await this.precheckToolCall(toolName, operation, input, approval);
     if (precheck.decision.decision === "DENY") {
+      // An `abort` violation already terminated the task inside precheckToolCall,
+      // with its own POLICY_VIOLATION, POLICY_ABORTED and TASK_FAILED events.
+      if (precheck.decision.violation === "abort") return { decision: precheck.decision, task: this.task };
+      // A `block` violation refuses this call only. Nothing is recovered and
+      // nothing fails; the caller is told why, and the task is left as it is.
+      if (precheck.decision.violation === "block") return { decision: precheck.decision, task: this.task };
       this.advance("RECOVERING", "Legacy path: policy denial after planning");
       this.advance("FAILED", "Legacy path: policy denial", { failureReason: precheck.decision.reason });
       await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: precheck.decision.reason }));

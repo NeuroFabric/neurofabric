@@ -4,7 +4,8 @@ import { discoverSkills, formatSkillCatalog } from "../../platform/skill-registr
 import { KernelAdapter } from "../../platform/pi/kernel-adapter.ts";
 import { PiApprovalProvider } from "../../platform/pi/approval.ts";
 import { toolDescriptorFromPi } from "../../platform/pi/tool-adapter.ts";
-import { buildPolicy, loadProjectPolicy, type NeurofebricProjectConfig } from "../../platform/pi/project-config.ts";
+import { buildPolicy, loadProjectPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../../platform/pi/project-config.ts";
+import { WorkspaceBoundary } from "../../platform/core/workspace.ts";
 import { createRedactingSink, redactPreview } from "../../platform/core/redaction.ts";
 
 type TraceEntry = {
@@ -50,6 +51,13 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     config = loaded.config;
     policySource = loaded.policyConfig ? path.basename(loaded.policyConfig.source) : policySource;
     kernel.setPolicy(buildPolicy(loaded.config, ctx.cwd, loaded.policyConfig));
+    // Artifact verification is bounded by the SAME resolved roots policy
+    // evaluation uses. Without this the production adapter checked that a
+    // declared output exists but never that it lives inside the workspace, so
+    // a write outside the approved roots verified as a normal artifact. The
+    // policy still makes the decision; this only makes verification agree
+    // with it.
+    kernel.setBoundary(new WorkspaceBoundary(resolveAllowedRoots(loaded.config, ctx.cwd)));
 
     const tools = pi.getAllTools().map((tool) => toolDescriptorFromPi({
       name: tool.name,
