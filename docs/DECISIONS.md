@@ -600,6 +600,159 @@ git history and on the PR page and are not duplicated here.
   tool-availability misdiagnosis, which argues the rules belong where a reviewer
   finds them.
 
+## D-009: A limit declared on `CoreLimits` is a limit that is enforced
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Affects:** `platform/core/limits.ts` and every consumer of `DEFAULT_LIMITS`
+
+### Context
+
+F-006 found `maxStepRetries` declared on the recovery surface and read by no
+recovery decision. It advertised a bound that did not exist, and it was removed
+in PR #3. The same finding recorded that eight more limits on `CoreLimits` were
+in that state and listed them as Phase 2 work. Until now all eight were still
+there: declaring a limit on `CoreLimits` cost one line, and nothing connected
+the declaration to any code that honoured it.
+
+The failure mode is not a missing feature. It is a documented promise the
+platform does not keep. A reader of `limits.ts` cannot distinguish a real bound
+from a decorative one, and the enforcement, if it exists at all, lives in some
+other file that the interface does not name. The total was nine
+declared-but-unenforced limits: `maxStepRetries` plus the eight below.
+
+### Decision
+
+**Every field on `CoreLimits` is read by live code on the production path. A
+field that cannot be enforced is removed rather than left declared.**
+
+The nine unenforced limits split two ways, six removed and three wired.
+
+**Removed — no natural choke point, so no honest cap exists:**
+
+| Limit | Why it is gone |
+| --- | --- |
+| `maxTaskDurationMs` | Subsumed by the wired `maxExecutionTimeMs`, which now covers the task wall clock. Keeping both would be two names for one bound, one of them dead. |
+| `maxStepDurationMs` | A per-step clock needs a step boundary that times out independently. No such boundary exists, so the enforcement would have been decorative. |
+| `maxToolDurationMs` | Same shape at tool granularity. Tool time is bounded by the task clock and the adapter's own execution bookkeeping, not by a field of this interface. |
+| `maxParallelTasks` | Nothing schedules tasks concurrently. A value of one described a constraint the platform does not enforce and cannot today violate. |
+| `maxParallelTools` | Same. The adapter serialises tool calls structurally, so the cap would restate an implementation fact already true by construction. |
+| `maxOutputBytes` | Output size is governed per write by the policy byte cap `maxBytesPerWrite`, enforced at the policy layer where the payload is actually produced. A second number in a different layer would be a second, disagreeing truth. |
+
+**Wired — a real choke point exists, so the cap becomes real:**
+
+- **`maxExecutionTimeMs` to `recovery.ts` and `kernel-adapter.ts`.** The
+  adapter takes a monotonic (`hrtime`) task start in `beginTask` and passes
+  elapsed milliseconds to `chooseRecoveryDetailed`, which terminates the task
+  with the new `EXECUTION_TIME_EXHAUSTED` reason when the budget is spent.
+  Monotonic rather than wall-clock deliberately: a system clock adjustment must
+  not be able to extend or prematurely cut a task's budget.
+- **`maxArtifactBytes` to `artifact.ts`.** `createArtifact` is the one place
+  every artifact passes through, and it now rejects a reference whose file
+  already exceeds the budget. The policy byte cap could not catch this: it
+  governs tool payloads, not the files those payloads produce. Size is read only
+  for a path that already exists, is skipped for directories, and fails open
+  when the size cannot be read — a reference that does not exist yet is not an
+  oversize artifact, and `verifyArtifact` is what decides whether it exists at
+  all. Hardcoded to the default; configurability is a separate decision and is
+  not implied by this one.
+- **`maxContextTokens` to `context-memory.ts`.** `selectContext` took its budget
+  as a required argument and had no production caller, which is precisely why
+  the field was dead. The budget now defaults to
+  `DEFAULT_LIMITS.maxContextTokens`.
+
+Six limits remain on the interface, all six enforced: `maxToolRetries`,
+`maxReplans` and `maxRecoveryDepth` (read by `recovery.ts`), plus
+`maxExecutionTimeMs`, `maxArtifactBytes` and `maxContextTokens`.
+
+### Rationale
+
+1. **The F-006 application is the ground for the whole decision.** The original
+   finding is proof the defect class is real and not hypothetical: a limit sat
+   on a public interface, in a live default block, enforcing nothing. Any later
+   reader of `DEFAULT_LIMITS` would have taken `maxStepRetries = 1` at face
+   value. Removal was the correct response then and is the correct default
+   response now. This decision does not improve on F-006; it applies F-006's
+   own conclusion to the eight limits F-006 listed and did not touch.
+2. **The six removals are removals, not deferrals.** Each names a capability the
+   platform does not have: an independently timing-out step boundary, a
+   concurrent scheduler, a per-tool output accountant. Writing enforcement for
+   any of them would have produced a check that fires only on paths nothing
+   exercises, which is the same defect wearing a new hat. The interface is
+   narrowed to what the platform can actually promise, so the next reader is not
+   misled.
+3. **Wiring beats removal wherever a choke point genuinely exists.**
+   `maxExecutionTimeMs`, `maxArtifactBytes` and `maxContextTokens` each name a
+   bound the platform really should honour, and each had exactly one place where
+   honouring it is not a simulation. A cap that fires is worth more than a cap
+   that is documented, and a working default is more useful to callers than a
+   correct absence.
+4. **The tests pin the cap, not the intention.**
+   `platform/core/corelimits-enforcement.test.ts` asserts that the declared key
+   set is exactly the six enforced limits, that each removed limit is absent
+   from both the defaults and the validated shape, and that each wired cap
+   fires at the boundary and not one unit past it. A future edit that
+   reintroduces a paper limit fails in CI rather than in production. The
+   execution-time cap is separately covered against the real decision function
+   in `platform/pi/corelimits-execution-time.test.ts`.
+
+### Consequence: declared equals enforced equals six
+
+`CoreLimits` now carries six fields, all six read on the production path, zero
+dead. The F-006 Phase 2 item "the nine declared-but-unenforced `CoreLimits`" is
+closed. Removing a field from this interface is now a behaviour change for its
+consumers, and adding one without a choke point to enforce it reopens the exact
+defect this decision closed — which is why the enforcement tests assert the key
+set rather than only the presence of each key.
+
+### Open items
+
+Both findings below are properties of code this decision deliberately did not
+change. They are fenced, tested as-is, and carried forward.
+
+1. **`validateLimits` passes an unknown key through instead of rejecting it —
+   Task B.** `validateLimits` merges the caller's object over
+   `DEFAULT_LIMITS` with a spread and range-checks only the merged entries. A
+   key that is not on `CoreLimits` is therefore neither rejected nor dropped: it
+   rides through into the returned object, and the range check even applies to
+   it. So removing a limit from the interface is *not* enforced at the
+   validation boundary — a caller can still build a limits object carrying a
+   field the platform no longer claims to honour. `validateLimits` was fenced
+   because changing it alters the shape every caller receives. The behaviour is
+   pinned by test `D009.1d` as current behaviour with the defect stated in the
+   test; Task B owns the fix and must update that test to assert rejection.
+2. **`selectContext` drops a required source that does not fit the budget —
+   Task C.** The function guards each source twice, and the first guard exempts
+   a required source while the second, unexempted, catches it one line later, so
+   the exemption is dead. A required source is dropped exactly like an optional
+   one, and a budget below its estimated size yields an empty selection. This
+   was not visible before D-009: wiring `maxContextTokens` to this function is
+   what made the path reachable and the defect observable. `selectContext`
+   semantics are fenced because the correct behaviour is a product answer, not
+   a code one — a required source may have to be admitted over budget,
+   truncated, or reported as unsatisfiable, and those differ. The current
+   behaviour is pinned by test `D009.2c` with the defect stated; Task C owns the
+   decision and has a pinned case to turn green.
+
+### Alternatives rejected
+
+- **Implement the six removed limits properly.** Each would have required a new
+  enforcement mechanism — a per-step timer, a scheduler, a per-tool output
+  accountant — and those are features, not honesty fixes. Declaring the cap
+  before building the mechanism is what produced F-006.
+- **Keep the removed fields marked as unenforced or reserved.** This preserves
+  the exact ambiguity that caused the finding. A reader still cannot tell
+  whether a cap is real, and the marker becomes a place where dead fields
+  accumulate.
+- **Make `validateLimits` strict as part of D-009.** It is the obvious place to
+  close the unknown-key hole, and it was rejected because it changes the
+  contract of a shared exported function for every caller, not just this
+  interface. Recorded as Task B so the change gets its own decision instead of
+  riding along as a side effect of a limits cleanup.
+- **Fix `selectContext` in the same change.** Same reason in product terms: the
+  right behaviour for an over-budget required source is not yet decided, and
+  guessing it inside a limits-honesty change would mix a product decision into
+  a mechanical one.
 ## D-010: Merge authority is mechanized, not delegated
 
 - **Date:** 2026-09-27

@@ -19,6 +19,7 @@ export interface RecoveryLimits {
   maxReplans: number;
   /** Task-wide bound on consecutive recovery rounds since the last success. */
   maxRecoveryDepth: number;
+  /** Wall-clock bound on the whole task. D-009: enforced via `elapsedMs`. */
   maxExecutionTimeMs: number;
 }
 
@@ -28,6 +29,7 @@ export interface RecoveryLimits {
  * instead of reporting one generic terminal reason for both.
  */
 export type RecoveryReason =
+  | "EXECUTION_TIME_EXHAUSTED"
   | "RECOVERY_DEPTH_EXHAUSTED"
   | "PERMISSION_FAILURE_ESCALATED"
   | "INVALID_INPUT_ESCALATED"
@@ -62,8 +64,18 @@ export function chooseRecoveryDetailed(options: {
   replanCount: number;
   depth: number;
   idempotency: Idempotency;
+  /**
+   * D-009: wall-clock milliseconds the task has been running. The adapter
+   * always supplies this; it defaults to 0 so recovery logic can be exercised
+   * in isolation without a clock. An exhausted budget terminates the task
+   * regardless of failure category, because no strategy can buy more time.
+   */
+  elapsedMs?: number;
 }): RecoveryDecision {
   const { limits, failure, retryCount, replanCount, depth, idempotency } = options;
+  if (options.elapsedMs !== undefined && options.elapsedMs > limits.maxExecutionTimeMs) {
+    return { strategy: "TERMINATE", reason: "EXECUTION_TIME_EXHAUSTED" };
+  }
   if (depth >= limits.maxRecoveryDepth) return { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" };
   if (failure === "PERMISSION") return { strategy: "ESCALATE", reason: "PERMISSION_FAILURE_ESCALATED" };
   if (failure === "INVALID_INPUT") return { strategy: "ESCALATE", reason: "INVALID_INPUT_ESCALATED" };
@@ -95,6 +107,7 @@ export function chooseRecovery(options: {
   replanCount: number;
   depth: number;
   idempotency: Idempotency;
+  elapsedMs?: number;
 }): RecoveryStrategy {
   return chooseRecoveryDetailed(options).strategy;
 }
@@ -105,13 +118,14 @@ export function chooseRecovery(options: {
  */
 export function describeTerminalRecovery(
   decision: RecoveryDecision,
-  options: { failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; depth: number },
+  options: { failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; depth: number; elapsedMs?: number },
 ): string {
   const { limits, retryCount, replanCount, depth, failure } = options;
+  const elapsed = options.elapsedMs === undefined ? "" : `, elapsedMs=${options.elapsedMs}/${limits.maxExecutionTimeMs}`;
   return `Recovery TERMINATE [${decision.reason}]: failure=${failure}, `
     + `replanCount=${replanCount}/${limits.maxReplans}, `
     + `retryCount=${retryCount}/${limits.maxToolRetries}, `
-    + `recoveryDepth=${depth}/${limits.maxRecoveryDepth}`;
+    + `recoveryDepth=${depth}/${limits.maxRecoveryDepth}${elapsed}`;
 }
 
 export function assertRecoveryBudget(limits: RecoveryLimits, retryCount: number, replanCount: number): void {

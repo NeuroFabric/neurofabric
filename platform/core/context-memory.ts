@@ -1,6 +1,15 @@
 import type { ContextSource, MemoryRecord, MemoryStore, ValidationResult } from "./types.ts";
+import { DEFAULT_LIMITS } from "./limits.ts";
 
-export function selectContext(sources: ContextSource[], maxTokens: number): ContextSource[] {
+/**
+ * Select context sources within a token budget.
+ *
+ * D-009: the budget defaults to `DEFAULT_LIMITS.maxContextTokens` rather than
+ * being supplied by every caller. It was previously a required argument with no
+ * production caller at all, which left `maxContextTokens` declared on
+ * `CoreLimits` and read by nothing.
+ */
+export function selectContext(sources: ContextSource[], maxTokens: number = DEFAULT_LIMITS.maxContextTokens): ContextSource[] {
   const selected: ContextSource[] = [];
   let used = 0;
   const required = sources.filter((source) => source.required).sort((a, b) => b.priority - a.priority);

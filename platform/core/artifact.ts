@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { createReadStream, promises as fs } from "node:fs";
+import { createReadStream, promises as fs, statSync } from "node:fs";
 import path from "node:path";
 import { extractToolPathCandidates } from "./tool-paths.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
 import { redactValue } from "./redaction.ts";
+import { DEFAULT_LIMITS } from "./limits.ts";
 import type { Artifact, ToolDescriptor } from "./types.ts";
 
 /**
@@ -107,6 +108,12 @@ export function createArtifact(options: {
   metadata?: Record<string, unknown>;
 }): Artifact {
   const reference = typeof options.reference === "string" ? options.reference : "";
+  // D-009: enforce `maxArtifactBytes` at the creation choke point. This is the
+  // one place every artifact passes through, and the policy byte cap
+  // (`maxBytesPerWrite`) governs tool payloads, not the files they produce, so
+  // nothing upstream would have caught an oversize artifact. Hardcoded to the
+  // default; configurability is a separate decision.
+  enforceArtifactSize(reference);
   return {
     artifactId: `art-${createHash("sha256").update(`${options.taskId}:${options.stepId}:${options.executionId}:${reference}`).digest("hex").slice(0, 16)}`,
     type: classifyArtifactKind(reference),
@@ -124,6 +131,29 @@ export function createArtifact(options: {
       ? undefined
       : (redactValue(options.metadata) as Record<string, unknown> | undefined),
   };
+}
+
+/**
+ * D-009: reject a reference that already exists and is larger than the artifact
+ * budget. Fails open when the size cannot be read — a reference that does not
+ * exist yet is not an oversize artifact, and `verifyArtifact` is what decides
+ * whether it exists at all. Directories are excluded: their aggregate size is
+ * not a single artifact's size.
+ */
+function enforceArtifactSize(reference: string): void {
+  let sizeBytes: number;
+  try {
+    const stats = statSync(reference);
+    if (stats.isDirectory()) return;
+    sizeBytes = stats.size;
+  } catch {
+    return;
+  }
+  if (sizeBytes > DEFAULT_LIMITS.maxArtifactBytes) {
+    throw new Error(
+      `artifact exceeds maxArtifactBytes: ${sizeBytes} > ${DEFAULT_LIMITS.maxArtifactBytes} (${reference})`,
+    );
+  }
 }
 
 /** Candidate output references declared by a tool call's input. */

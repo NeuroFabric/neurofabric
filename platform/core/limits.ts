@@ -1,29 +1,32 @@
+/**
+ * D-009: a limit declared here is a limit that is enforced.
+ *
+ * F-006 removed `maxStepRetries` because it advertised a bound that did not
+ * exist. The same sweep found eight more on this interface. Six were removed
+ * (below) and three are now enforced, so every field declared here is read by
+ * live code on the production path. Adding a field without enforcing it
+ * reintroduces the exact defect F-006 was raised for.
+ */
 export interface CoreLimits {
-  maxTaskDurationMs: number;
-  maxStepDurationMs: number;
-  maxToolDurationMs: number;
+  /** Task-wide bound on identical tool retries. Read by recovery.ts. */
   maxToolRetries: number;
+  /** Task-wide bound on replans. Read by recovery.ts. */
   maxReplans: number;
+  /** Task-wide bound on consecutive recovery rounds. Read by recovery.ts. */
   maxRecoveryDepth: number;
+  /** Wall-clock bound on a task. Read by recovery.ts via elapsed time. */
   maxExecutionTimeMs: number;
-  maxParallelTasks: number;
-  maxParallelTools: number;
-  maxOutputBytes: number;
+  /** Largest artifact a tool may declare. Read by artifact.ts createArtifact. */
   maxArtifactBytes: number;
+  /** Context budget for a single selection. Read by context-memory.ts. */
   maxContextTokens: number;
 }
 
 export const DEFAULT_LIMITS: CoreLimits = {
-  maxTaskDurationMs: 30 * 60 * 1000,
-  maxStepDurationMs: 5 * 60 * 1000,
-  maxToolDurationMs: 2 * 60 * 1000,
   maxToolRetries: 2,
   maxReplans: 2,
   maxRecoveryDepth: 3,
   maxExecutionTimeMs: 30 * 60 * 1000,
-  maxParallelTasks: 1,
-  maxParallelTools: 1,
-  maxOutputBytes: 2 * 1024 * 1024,
   maxArtifactBytes: 10 * 1024 * 1024,
   maxContextTokens: 200_000,
 };

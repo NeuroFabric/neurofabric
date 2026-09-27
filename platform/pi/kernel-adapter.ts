@@ -252,6 +252,12 @@ export class KernelAdapter {
   private terminalRefusalCount = 0;
   /** Every lifecycle transition, in order, for after-the-fact explanation. */
   private readonly transitionLog: TaskTransitionRecord[] = [];
+  /**
+   * D-009: monotonic start of the current task, for `maxExecutionTimeMs`.
+   * `hrtime` rather than wall-clock so a system clock adjustment cannot extend
+   * or prematurely cut a task's budget. Reset in `beginTask`.
+   */
+  private executionStartedAtNs = process.hrtime.bigint();
   /** Operations refused because a newer task had already replaced theirs. */
   private staleOperationCount = 0;
   private readonly staleOperations: StaleOperation[] = [];
@@ -285,6 +291,15 @@ export class KernelAdapter {
    */
   get recoveryLimits(): RecoveryLimits {
     return { ...this.limits };
+  }
+
+  /**
+   * D-009: wall-clock milliseconds this task has been running, from a monotonic
+   * source. Fed to recovery so `maxExecutionTimeMs` is enforced rather than
+   * merely declared.
+   */
+  private elapsedMs(): number {
+    return Number((process.hrtime.bigint() - this.executionStartedAtNs) / 1_000_000n);
   }
 
   /**
@@ -523,6 +538,7 @@ export class KernelAdapter {
     this.plan = undefined;
     this.lastValidation = undefined;
     this.recoveryDepth = 0;
+    this.executionStartedAtNs = process.hrtime.bigint();
     this.activeExecutions.clear();
     this.knownToolCallIds.clear();
     this.deniedToolCallIds.clear();
@@ -1025,6 +1041,7 @@ export class KernelAdapter {
         replanCount: this.task.replanCount,
         depth: this.recoveryDepth,
         idempotency: tool.idempotency,
+        elapsedMs: this.elapsedMs(),
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;

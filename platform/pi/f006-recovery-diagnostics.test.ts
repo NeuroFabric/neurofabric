@@ -162,14 +162,18 @@ test("F006.4 maxStepRetries has been removed from the public limits surface", ()
 
 /**
  * F-006 was about `maxStepRetries`. The same sweep found that
- * `maxExecutionTimeMs` is declared on RecoveryLimits and read by no recovery
- * decision either, and that `maxTaskDurationMs` / `maxStepDurationMs` /
- * `maxToolDurationMs` on CoreLimits are likewise declared but unenforced.
- * Removing those is a separate decision with its own blast radius, so they are
- * recorded here rather than changed under F-006. If one is ever enforced or
- * removed, update this set so the test stays honest.
+ * `maxExecutionTimeMs` was declared on RecoveryLimits and read by no recovery
+ * decision, and that `maxTaskDurationMs` / `maxStepDurationMs` /
+ * `maxToolDurationMs` / `maxParallelTasks` / `maxParallelTools` /
+ * `maxOutputBytes` on CoreLimits were likewise declared but unenforced.
+ *
+ * D-009 closed that gap: `maxExecutionTimeMs` is now enforced from elapsed
+ * time, and the six unenforced fields were removed rather than left on paper.
+ * `DECLARED_BUT_UNENFORCED` is therefore empty — every limit this module
+ * declares is read by recovery logic. If a limit is ever added without being
+ * enforced, it must be added to that set, not left silently dead.
  */
-const DECLARED_BUT_UNENFORCED = new Set(["maxExecutionTimeMs"]);
+const DECLARED_BUT_UNENFORCED = new Set<string>();
 
 test("F006.4b every other limit declared on RecoveryLimits is read by recovery logic", () => {
   // Guards the class of defect F-006 found: a limit that exists only on paper.
