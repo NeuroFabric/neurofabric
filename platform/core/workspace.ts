@@ -70,13 +70,29 @@ function containsTraversal(candidate: string): boolean {
 }
 
 /**
+ * The candidate read with backslashes as separators.
+ *
+ * A backslash separates directories on Windows and is an ordinary filename
+ * character on POSIX, so the same operand is an escape on one host and a
+ * single oddly named file on the other. Normalising the separator produces one
+ * reading that every host evaluates identically, which is what makes the
+ * escape forms recognisable everywhere instead of only where they happen to be
+ * separators.
+ */
+function withForwardSlashes(candidate: string): string {
+  return candidate.includes("\\") ? candidate.replace(/\\/g, "/") : candidate;
+}
+
+/**
  * Resolve `candidate` against `root` and prove the result stays inside it.
  *
  * Checks, in order:
  *  1. the input is a non-empty string with no NUL byte;
  *  2. `..` segments are recorded (not silently allowed through);
  *  3. lexical resolution cannot escape the root;
- *  4. the real path of the nearest existing ancestor is also inside the root,
+ *  4. the same candidate read with backslashes as separators is also contained,
+ *     so a Windows or mixed-separator escape is an escape on every host;
+ *  5. the real path of the nearest existing ancestor is also inside the root,
  *     which defeats symlinks and Windows junctions/reparse points.
  */
 export function resolveWithinRoot(root: string, candidate: unknown): PathVerdict {
@@ -95,6 +111,18 @@ export function resolveWithinRoot(root: string, candidate: unknown): PathVerdict
   const resolved = absolute ? path.resolve(candidate) : path.resolve(rootPath, candidate);
 
   if (!isInsideRoot(rootPath, resolved)) {
+    return { allowed: false, reason: `path escapes the allowed root (${rootPath})`, absolute, traversal };
+  }
+
+  // A Windows or mixed-separator escape is an escape on every host, not only
+  // on the one where a backslash happens to be a separator. The candidate is
+  // therefore read a second time with backslashes normalised, and that reading
+  // must be contained too. This can only ever add a denial, never remove one:
+  // a candidate contained under both readings is allowed, so the check fails
+  // closed and no host is more permissive than another. Denials raised here
+  // are exactly the forms that were silently accepted on POSIX.
+  const slashForm = withForwardSlashes(candidate);
+  if (slashForm !== candidate && !isInsideRoot(rootPath, path.resolve(rootPath, slashForm))) {
     return { allowed: false, reason: `path escapes the allowed root (${rootPath})`, absolute, traversal };
   }
 

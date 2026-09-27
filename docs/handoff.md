@@ -185,7 +185,6 @@ sizes, context budget) and are independent of the policy file.
 | `maxStepDurationMs` | 300,000 (5 min) |
 | `maxToolDurationMs` | 120,000 (2 min) |
 | `maxToolRetries` | 2 |
-| `maxStepRetries` | 1 |
 | `maxReplans` | 2 |
 | `maxRecoveryDepth` | 3 |
 | `maxExecutionTimeMs` | 1,800,000 (30 min) |

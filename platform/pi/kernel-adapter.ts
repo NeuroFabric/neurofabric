@@ -29,7 +29,7 @@ import {
   type ToolResult,
   type ValidationResult,
 } from "../core/index.ts";
-import { chooseRecovery, classifyFailure, type RecoveryLimits } from "../core/index.ts";
+import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type RecoveryLimits } from "../core/index.ts";
 
 export interface KernelAdapterOptions {
   skills?: SkillDescriptor[];
@@ -258,7 +258,6 @@ export class KernelAdapter {
     this.boundary = options.boundary;
     this.limits = options.limits ?? {
       maxToolRetries: 2,
-      maxStepRetries: 1,
       maxReplans: 2,
       maxRecoveryDepth: 3,
       maxExecutionTimeMs: 30 * 60 * 1000,
@@ -960,16 +959,25 @@ export class KernelAdapter {
       this.advance("RECOVERING", "Last validation was not VALID", { expectTaskId: taskId });
       const tool = this.tools.get(result.execution.tool);
       const failure = classifyFailure(error);
-      const strategy = chooseRecovery({
+      const recoveryOptions = {
         failure,
         limits: this.limits,
         retryCount: this.task.retryCount,
         replanCount: this.task.replanCount,
         depth: this.recoveryDepth,
         idempotency: tool.idempotency,
-      });
+      };
+      const decision = chooseRecoveryDetailed(recoveryOptions);
+      const strategy = decision.strategy;
       this.recoveryDepth += 1;
-      await this.events.emit(event("RECOVERY_STARTED", this.task.taskId, { strategy, failure, recoveryDepth: this.recoveryDepth }));
+      await this.events.emit(event("RECOVERY_STARTED", this.task.taskId, {
+        strategy,
+        reason: decision.reason,
+        failure,
+        retryCount: recoveryOptions.retryCount,
+        replanCount: recoveryOptions.replanCount,
+        recoveryDepth: this.recoveryDepth,
+      }));
 
       switch (strategy) {
         case "RETRY":
@@ -986,16 +994,23 @@ export class KernelAdapter {
           this.advance("ESCALATED", "Recovery strategy ESCALATE", { expectTaskId: taskId });
           break;
         case "TERMINATE":
-        default:
-          this.advance("FAILED", "Recovery strategy TERMINATE: budget exhausted or no safe strategy remains", {
-            failureReason: "Recovery budget exhausted or no safe recovery strategy remains",
+        default: {
+          const terminalReason = describeTerminalRecovery(decision, { ...recoveryOptions, depth: this.recoveryDepth });
+          this.advance("FAILED", `Recovery strategy TERMINATE (${decision.reason})`, {
+            failureReason: terminalReason,
             expectTaskId: taskId,
           });
           await this.events.emit(event("TASK_FAILED", this.task.taskId, {
-            reason: "Recovery budget exhausted or no safe recovery strategy remains",
+            reason: terminalReason,
+            reasonCode: decision.reason,
             strategy,
+            failure,
+            retryCount: recoveryOptions.retryCount,
+            replanCount: recoveryOptions.replanCount,
+            recoveryDepth: this.recoveryDepth,
           }));
           break;
+        }
       }
     } else {
       this.recoveryDepth = 0;
@@ -1084,7 +1099,14 @@ export class KernelAdapter {
     };
 
     this.task = { ...this.task, artifacts: [...this.task.artifacts, ...report.artifacts] };
-    return this.observeToolResult(result, isError ? new Error("Pi reported a tool error") : undefined);
+    // F-006: pass the real CoreError so recovery sees the tool error's category
+    // and retryable flag. A plain Error collapsed to UNKNOWN and discarded both.
+    return this.observeToolResult(
+      result,
+      isError
+        ? new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable: false, taskId, stepId, executionId: toolCallId })
+        : undefined,
+    );
   }
 
   /**

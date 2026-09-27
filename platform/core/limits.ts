@@ -3,7 +3,6 @@ export interface CoreLimits {
   maxStepDurationMs: number;
   maxToolDurationMs: number;
   maxToolRetries: number;
-  maxStepRetries: number;
   maxReplans: number;
   maxRecoveryDepth: number;
   maxExecutionTimeMs: number;
@@ -19,7 +18,6 @@ export const DEFAULT_LIMITS: CoreLimits = {
   maxStepDurationMs: 5 * 60 * 1000,
   maxToolDurationMs: 2 * 60 * 1000,
   maxToolRetries: 2,
-  maxStepRetries: 1,
   maxReplans: 2,
   maxRecoveryDepth: 3,
   maxExecutionTimeMs: 30 * 60 * 1000,

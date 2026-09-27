@@ -4,12 +4,45 @@ import type { ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./typ
 export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "UNKNOWN";
 export type RecoveryStrategy = "RETRY" | "MODIFY_INPUT" | "ALTERNATE_TOOL" | "ALTERNATE_SKILL" | "REPLAN" | "ESCALATE" | "TERMINATE";
 
+/**
+ * F-006: `maxStepRetries` was removed from this surface. It was declared here
+ * and in DEFAULT_LIMITS but never read by any recovery decision, so it
+ * advertised a bound that did not exist. Per-step attempt budgets are already
+ * expressed where they belong, on the step and tool descriptors themselves
+ * (`PlanStep.retryPolicy.maxAttempts`, `ToolDescriptor.retryPolicy.maxAttempts`).
+ * Recovery budgets here are task-wide, and are named accordingly.
+ */
 export interface RecoveryLimits {
+  /** Task-wide bound on identical tool retries. Consumed only by transient failures. */
   maxToolRetries: number;
-  maxStepRetries: number;
+  /** Task-wide bound on replans. */
   maxReplans: number;
+  /** Task-wide bound on consecutive recovery rounds since the last success. */
   maxRecoveryDepth: number;
   maxExecutionTimeMs: number;
+}
+
+/**
+ * F-006: a machine-readable account of WHY a strategy was chosen, so the trace
+ * can distinguish "the replan budget ran out" from "the depth guard tripped"
+ * instead of reporting one generic terminal reason for both.
+ */
+export type RecoveryReason =
+  | "RECOVERY_DEPTH_EXHAUSTED"
+  | "PERMISSION_FAILURE_ESCALATED"
+  | "INVALID_INPUT_ESCALATED"
+  | "VALIDATION_FAILURE_REPLAN"
+  | "DEPENDENCY_FAILURE_REPLAN"
+  | "NON_IDEMPOTENT_TRANSIENT_ESCALATED"
+  | "TRANSIENT_RETRY"
+  | "TRANSIENT_RETRY_EXHAUSTED_REPLAN"
+  | "RETRY_AND_REPLAN_BUDGET_EXHAUSTED"
+  | "GENERIC_REPLAN"
+  | "REPLAN_BUDGET_EXHAUSTED";
+
+export interface RecoveryDecision {
+  strategy: RecoveryStrategy;
+  reason: RecoveryReason;
 }
 
 export function classifyFailure(error: unknown): FailureCategory {
@@ -22,6 +55,39 @@ export function classifyFailure(error: unknown): FailureCategory {
   return "UNKNOWN";
 }
 
+export function chooseRecoveryDetailed(options: {
+  failure: FailureCategory;
+  limits: RecoveryLimits;
+  retryCount: number;
+  replanCount: number;
+  depth: number;
+  idempotency: Idempotency;
+}): RecoveryDecision {
+  const { limits, failure, retryCount, replanCount, depth, idempotency } = options;
+  if (depth >= limits.maxRecoveryDepth) return { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" };
+  if (failure === "PERMISSION") return { strategy: "ESCALATE", reason: "PERMISSION_FAILURE_ESCALATED" };
+  if (failure === "INVALID_INPUT") return { strategy: "ESCALATE", reason: "INVALID_INPUT_ESCALATED" };
+  if (failure === "VALIDATION_FAILURE" && replanCount < limits.maxReplans) {
+    return { strategy: "REPLAN", reason: "VALIDATION_FAILURE_REPLAN" };
+  }
+  if (failure === "DEPENDENCY_FAILURE" && replanCount < limits.maxReplans) {
+    return { strategy: "REPLAN", reason: "DEPENDENCY_FAILURE_REPLAN" };
+  }
+  if (["TRANSIENT", "TIMEOUT", "RATE_LIMIT", "MODEL_FAILURE"].includes(failure)) {
+    if (idempotency === "NON_IDEMPOTENT") {
+      return { strategy: "ESCALATE", reason: "NON_IDEMPOTENT_TRANSIENT_ESCALATED" };
+    }
+    if (retryCount < limits.maxToolRetries) return { strategy: "RETRY", reason: "TRANSIENT_RETRY" };
+    // Retries are spent but replans may remain: fall through, as before.
+    if (replanCount < limits.maxReplans) {
+      return { strategy: "REPLAN", reason: "TRANSIENT_RETRY_EXHAUSTED_REPLAN" };
+    }
+    return { strategy: "TERMINATE", reason: "RETRY_AND_REPLAN_BUDGET_EXHAUSTED" };
+  }
+  if (replanCount < limits.maxReplans) return { strategy: "REPLAN", reason: "GENERIC_REPLAN" };
+  return { strategy: "TERMINATE", reason: "REPLAN_BUDGET_EXHAUSTED" };
+}
+
 export function chooseRecovery(options: {
   failure: FailureCategory;
   limits: RecoveryLimits;
@@ -30,16 +96,22 @@ export function chooseRecovery(options: {
   depth: number;
   idempotency: Idempotency;
 }): RecoveryStrategy {
-  if (options.depth >= options.limits.maxRecoveryDepth) return "TERMINATE";
-  if (options.failure === "PERMISSION" || options.failure === "INVALID_INPUT") return "ESCALATE";
-  if (options.failure === "VALIDATION_FAILURE" && options.replanCount < options.limits.maxReplans) return "REPLAN";
-  if (options.failure === "DEPENDENCY_FAILURE" && options.replanCount < options.limits.maxReplans) return "REPLAN";
-  if (["TRANSIENT", "TIMEOUT", "RATE_LIMIT", "MODEL_FAILURE"].includes(options.failure)) {
-    if (options.idempotency === "NON_IDEMPOTENT") return "ESCALATE";
-    if (options.retryCount < options.limits.maxToolRetries) return "RETRY";
-  }
-  if (options.replanCount < options.limits.maxReplans) return "REPLAN";
-  return "TERMINATE";
+  return chooseRecoveryDetailed(options).strategy;
+}
+
+/**
+ * F-006: the terminal reason names the budget that was actually exhausted and
+ * the category that failed, instead of one generic sentence for every cause.
+ */
+export function describeTerminalRecovery(
+  decision: RecoveryDecision,
+  options: { failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; depth: number },
+): string {
+  const { limits, retryCount, replanCount, depth, failure } = options;
+  return `Recovery TERMINATE [${decision.reason}]: failure=${failure}, `
+    + `replanCount=${replanCount}/${limits.maxReplans}, `
+    + `retryCount=${retryCount}/${limits.maxToolRetries}, `
+    + `recoveryDepth=${depth}/${limits.maxRecoveryDepth}`;
 }
 
 export function assertRecoveryBudget(limits: RecoveryLimits, retryCount: number, replanCount: number): void {

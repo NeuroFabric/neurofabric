@@ -1,0 +1,51 @@
+# CI gate for the Neurofebric harness.
+#
+# Dependencies: there is no root package.json dependency graph. The root
+# package-lock.json declares name "agent-harness" with "packages": {}, so the
+# harness has zero runtime dependencies and no install step is required. The
+# suites run on bare node, which is the repo convention.
+#
+# Node version: nothing in the repo pins a version (no .nvmrc, no engines
+# field), so 22 LTS is used. 22 is also the floor for
+# --experimental-strip-types, which the .ts suites and the proof script need
+# in order to import platform .ts modules from node.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: platform test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Platform .mjs suites (22 tests)
+        run: node --test platform/*.test.mjs
+
+      - name: Core and Pi .ts suites (253 tests)
+        run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
+
+      # The F-006 live proof is INCLUDED: it is headless and self-contained.
+      # It drives the real KernelAdapter and the real recovery decision
+      # function with stubbed tool results. It uses no model, no gateway, and
+      # no network, and it writes no files, so it depends on no local-only
+      # resource and runs unchanged on a CI runner.
+      - name: F-006 live recovery proof (21 checks)
+        run: node --experimental-strip-types verification/live-f006-proof.mjs
