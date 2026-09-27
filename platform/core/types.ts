@@ -173,9 +173,20 @@ export interface PolicyRequest {
   approval?: boolean;
 }
 
+/**
+ * Why a call was refused when no policy decision was made.
+ *
+ * Neither value is a `ViolationAction`. Nothing was evaluated and no rule was
+ * broken: the task was already in a state that admits no further execution
+ * (`task_terminal`), or the call belongs to a task that a newer turn has
+ * already replaced (`stale_task`). Keeping them out of `violation` is what stops
+ * a lifecycle refusal from being read as "policy blocked this call".
+ */
+export type DenialRefusal = "task_terminal" | "stale_task";
+
 export type PolicyDecision =
   | { decision: "ALLOW" }
-  | { decision: "DENY"; reason: string; violation?: ViolationAction }
+  | { decision: "DENY"; reason: string; violation?: ViolationAction; refusal?: DenialRefusal }
   | { decision: "REQUIRE_APPROVAL"; reason: string };
 
 /**

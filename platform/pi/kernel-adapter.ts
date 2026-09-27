@@ -65,6 +65,20 @@ export interface BoundExecution {
  * REPLANNING mean the kernel is deciding what to do next,
  * and the rest are terminal.
  */
+/**
+ * States from which a task can never move again.
+ *
+ * Distinct from `REFUSED_EXECUTION_STATES`, which also contains REPLANNING: a
+ * REPLANNING task is still live and is still owned by whoever started it.
+ */
+const TERMINAL_TASK_STATES: readonly TaskStatus[] = [
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "TIMEOUT",
+  "ESCALATED",
+];
+
 const REFUSED_EXECUTION_STATES: readonly TaskStatus[] = [
   "REPLANNING",
   "ESCALATED",
@@ -74,11 +88,81 @@ const REFUSED_EXECUTION_STATES: readonly TaskStatus[] = [
   "TIMEOUT",
 ];
 
+/**
+ * A recorded task-state transition, with the internal counters as they stood
+ * when it happened.
+ *
+ * This exists so a terminal state can be explained after the fact: which
+ * transition produced it, from which call site, and what the lifecycle counters
+ * were at that moment. It records facts; it makes no decision.
+ */
+export interface TaskTransitionRecord {
+  /** The task this transition moved, so history spanning turns stays attributable. */
+  taskId: string;
+  from: TaskStatus;
+  to: TaskStatus;
+  /** Why the caller moved the task, in the caller's own words. */
+  reason: string;
+  /** `KernelAdapter.<method>` — the code that moved the task. */
+  callSite: string;
+  at: string;
+  failureReason?: string;
+  diagnostics: KernelDiagnostics;
+}
+
+/**
+ * An operation that was refused because its task had already been superseded.
+ *
+ * Pi dispatches lifecycle events from independent async handlers, so a handler
+ * that began under one task can resume after a newer task has replaced it.
+ * Recording the refusal keeps the race visible instead of silent.
+ */
+export interface StaleOperation {
+  /** `KernelAdapter.<method>` that tried to act. */
+  handler: string;
+  /** The transition it tried to make, when the race surfaced at a transition. */
+  attempted?: TaskStatus;
+  reason: string;
+  /** The task the handler believed it was operating on. */
+  expectedTaskId: string;
+  /** The task actually current when the handler resumed. */
+  currentTaskId?: string;
+}
+
+/** A point-in-time view of the kernel's lifecycle bookkeeping. */
+export interface KernelDiagnostics {
+  status?: TaskStatus;
+  failureReason?: string;
+  /** The current attempt has an unresolved failure. */
+  attemptBlocked: boolean;
+  recoveryDepth: number;
+  /** Real executions bound to this task. A denied call never increments it. */
+  toolExecutionCount: number;
+  lastValidation?: ValidationResult;
+  /** Policy DENY decisions, whatever `on_violation` they carried. */
+  denialCount: number;
+  /** Refusals because the task was already terminal. Not policy decisions. */
+  terminalRefusalCount: number;
+  activeExecutionCount: number;
+  deniedToolCallIdCount: number;
+  observedResultCount: number;
+}
+
+/**
+ * Content block types that represent a real assistant *action*.
+ *
+ * A tool call is an action the model actually took, so a turn whose only
+ * content is a tool call is a completed turn. It is not an absence of output.
+ */
+const TOOL_CONTENT_TYPES: ReadonlySet<string> = new Set(["toolCall", "toolUse", "toolResult", "tool_call"]);
+
 function isCleanTerminal(result: unknown): boolean {
   if (typeof result !== "object" || result === null) return false;
   const msg = result as any;
   if (msg.role !== "assistant") return false;
-  const hasContent = Array.isArray(msg.content) && msg.content.some((c: any) => c.type === "text" && c.text && c.text.trim().length > 0);
+  const content = Array.isArray(msg.content) ? msg.content : [];
+  const hasContent = content.some((c: any) =>
+    (c.type === "text" && c.text && c.text.trim().length > 0) || TOOL_CONTENT_TYPES.has(c.type));
   const hasFinishReason = Boolean(msg.finish_reason || msg.stopReason);
   return hasContent || hasFinishReason;
 }
@@ -134,6 +218,20 @@ export class KernelAdapter {
   private attemptBlocked = false;
   /** Number of real tool executions bound to this task (drives honest finalisation). */
   private toolExecutionCount = 0;
+  /** Policy DENY decisions made at preflight, `block` and `abort` alike. */
+  private denialCount = 0;
+  /** Refusals because the task was already in a state that admits no execution. */
+  private terminalRefusalCount = 0;
+  /** Every lifecycle transition, in order, for after-the-fact explanation. */
+  private readonly transitionLog: TaskTransitionRecord[] = [];
+  /** Operations refused because a newer task had already replaced theirs. */
+  private staleOperationCount = 0;
+  private readonly staleOperations: StaleOperation[] = [];
+  /**
+   * Superseded tasks, kept only so the `beginTask` that created one can report
+   * its final state instead of the newer task that displaced it.
+   */
+  private readonly supersededTasks = new Map<string, Task>();
 
   constructor(options: KernelAdapterOptions = {}) {
     this.tools = new ToolRegistry();
@@ -164,6 +262,118 @@ export class KernelAdapter {
   /** Install the policy used by preflight. Used to select the trust model. */
   setPolicy(policy: PolicyEngine): void {
     this.policy = policy;
+  }
+
+  /** Every task-state transition so far, oldest first. */
+  get transitions(): readonly TaskTransitionRecord[] {
+    return [...this.transitionLog];
+  }
+
+  /** Operations refused as stale, oldest first. */
+  get staleHandlerOperations(): readonly StaleOperation[] {
+    return [...this.staleOperations];
+  }
+
+  /**
+   * Whether a handler that began under `taskId` is now stale.
+   *
+   * `this.task` is a single mutable slot shared by every Pi event handler, and
+   * `beginTask` replaces it. A handler that captured its task at entry and then
+   * yielded (every `events.emit` yields) must re-check before it mutates
+   * anything, or it will act on whichever task happens to be current.
+   */
+  private isStale(taskId: string): boolean {
+    return this.task?.taskId !== taskId;
+  }
+
+  /** Record a refused stale operation. Callers report it and return without mutating. */
+  private refuseStale(taskId: string, handler: string, reason: string, extra: Partial<StaleOperation> = {}): void {
+    this.staleOperationCount += 1;
+    this.staleOperations.push({
+      handler,
+      reason,
+      expectedTaskId: taskId,
+      currentTaskId: this.task?.taskId,
+      ...extra,
+    });
+  }
+
+  /** Current lifecycle bookkeeping. */
+  get diagnostics(): KernelDiagnostics {
+    return {
+      status: this.task?.status,
+      failureReason: this.task?.failureReason,
+      attemptBlocked: this.attemptBlocked,
+      recoveryDepth: this.recoveryDepth,
+      toolExecutionCount: this.toolExecutionCount,
+      lastValidation: this.lastValidation,
+      denialCount: this.denialCount,
+      terminalRefusalCount: this.terminalRefusalCount,
+      activeExecutionCount: this.activeExecutions.size,
+      deniedToolCallIdCount: this.deniedToolCallIds.size,
+      observedResultCount: this.observedExecutionIds.size,
+    };
+  }
+
+  /**
+   * The single place a task state changes, so every transition is recorded with
+   * the state it came from, the method that moved it, and the counters as they
+   * stood. Behaviour is exactly `transitionTask`; the bookkeeping is additive.
+   *
+   * `expectTaskId` is the task the calling handler began under. When it no
+   * longer matches, the handler is stale: it resumed after a newer task had
+   * replaced the one it started with. The transition is then REFUSED and
+   * recorded rather than applied, because applying it would move a task the
+   * handler does not own. This is the single choke point that keeps a
+   * re-entrant event from producing an illegal transition or clobbering a
+   * newer task.
+   */
+  private advance(
+    to: TaskStatus,
+    reason: string,
+    opts: { now?: string; failureReason?: string; expectTaskId?: string } = {},
+  ): Task {
+    if (opts.expectTaskId !== undefined && this.task?.taskId !== opts.expectTaskId) {
+      this.refuseStale(opts.expectTaskId, this.callSite(), reason, { attempted: to });
+      return this.task!;
+    }
+    const from = this.task!.status;
+    this.task = transitionTask(this.task!, to, opts.now);
+    if (opts.failureReason !== undefined) this.task = { ...this.task, failureReason: opts.failureReason };
+    this.transitionLog.push({
+      taskId: this.task!.taskId,
+      from,
+      to,
+      reason,
+      callSite: this.callSite(),
+      at: this.task!.updatedAt,
+      failureReason: this.task!.failureReason,
+      // Snapshotted AFTER the transition, so `status` is the new state and the
+      // counters are exactly as they stood when the task became terminal.
+      // `diagnostics` is a getter, so it is read, not called.
+      diagnostics: this.diagnostics,
+    });
+    // The log is the only after-the-fact explanation of a lifecycle, so it spans
+    // turns and is bounded rather than reset: clearing it per task would erase
+    // exactly the evidence a supersession needs.
+    if (this.transitionLog.length > 500) this.transitionLog.shift();
+    return this.task!;
+  }
+
+  /**
+   * `KernelAdapter.<method>` for the frame that requested the transition.
+   *
+   * This method's own frame is skipped, as is `advance`, so the first
+   * `KernelAdapter.*` frame found is the lifecycle method that asked for the
+   * transition.
+   */
+  private callSite(): string {
+    const frames = (new Error().stack ?? "").split("\n");
+    for (const frame of frames) {
+      const match = /KernelAdapter\.(\w+)/.exec(frame);
+      if (match && match[1] !== "callSite" && match[1] !== "advance") return `KernelAdapter.${match[1]}`;
+    }
+    return "KernelAdapter.unknown";
   }
 
   /**
@@ -206,6 +416,24 @@ export class KernelAdapter {
   }
 
   async beginTask(userRequest: string, objective = userRequest, constraints: Record<string, unknown> = {}): Promise<Task> {
+    // A turn that begins while an earlier task has not reached a terminal state
+    // is a genuine race, not a normal sequence. The earlier task is terminated
+    // EXPLICITLY here — recorded as a real FAILED transition with its own
+    // TASK_FAILED event — rather than being silently replaced. That keeps the
+    // supersession visible in the trace, and it uses only transitions the state
+    // machine already allows (every non-terminal state may go to FAILED), so no
+    // handler is left believing it still owns the lifecycle.
+    if (this.task && !TERMINAL_TASK_STATES.includes(this.task.status)) {
+      const superseded = this.task;
+      this.advance("FAILED", "Superseded by a newer turn", {
+        failureReason: "Superseded by a newer turn before it reached a terminal state",
+      });
+      this.supersededTasks.set(superseded.taskId, this.task);
+      await this.events.emit(event("TASK_FAILED", superseded.taskId, {
+        reason: "Superseded by a newer turn",
+        supersededStatus: superseded.status,
+      }));
+    }
     // Task state is explicit; Pi's transcript remains the source of conversational context.
     const task = createTask({ taskId: randomUUID(), userRequest, objective, constraints });
     this.task = task;
@@ -220,11 +448,29 @@ export class KernelAdapter {
     this.artifactList = [];
     this.attemptBlocked = false;
     this.toolExecutionCount = 0;
+    this.denialCount = 0;
+    this.terminalRefusalCount = 0;
+    this.staleOperations.length = 0;
+    // The lifecycle states are moved WITHOUT awaiting in between.
+    //
+    // `events.emit` yields to Pi (its sink reaches `pi.appendEntry`). An
+    // `agent_end` arriving in that window used to finalise a task still sitting
+    // in UNDERSTANDING, and the no-tool finalisation path then requested
+    // UNDERSTANDING -> PLAN_VALIDATION, which the state machine correctly
+    // rejects. A task is observable the moment it is created, so the states it
+    // may be finalised from must be in place before the first yield.
+    this.advance("UNDERSTANDING", "Task accepted");
+    this.advance("PLANNING", "Task started");
     await this.events.emit(event("TASK_CREATED", task.taskId, { objective: task.objective }));
-    this.task = transitionTask(this.task, "UNDERSTANDING");
     await this.events.emit(event("TASK_STARTED", task.taskId));
-    this.task = transitionTask(this.task, "PLANNING");
     await this.events.emit(event("PLAN_CREATED", task.taskId, { state: this.task.status }));
+    // The emits above yield. If a newer turn superseded this one meanwhile, this
+    // call must report the task IT created, never the task that replaced it.
+    if (this.isStale(task.taskId)) {
+      const superseded = this.supersededTasks.get(task.taskId);
+      this.supersededTasks.delete(task.taskId);
+      return superseded ?? this.task;
+    }
     return this.task;
   }
 
@@ -248,22 +494,32 @@ export class KernelAdapter {
     toolCallId?: string,
   ): Promise<ToolCallDecision> {
     if (!this.task) throw new Error("No active task");
+    const ownerTaskId = this.task.taskId;
     // Unknown tools are rejected here, before Pi executes anything.
     const tool = this.tools.get(toolName);
     // A task that policy has aborted, or that has already finished, may not
     // admit another call. This is what makes `on_violation: abort` stick: the
     // model can keep asking, and every request is refused.
     if (REFUSED_EXECUTION_STATES.includes(this.task.status)) {
+      // Nothing was evaluated and no rule was broken: the task was already in a
+      // state that admits no execution. This is a lifecycle refusal, recorded as
+      // `refusal`, never as a policy `violation`.
+      this.terminalRefusalCount += 1;
       const decision: PolicyDecision = {
         decision: "DENY",
         reason: `Task is ${this.task.status}; no further tool calls are accepted`,
-        violation: "block",
+        refusal: "task_terminal",
       };
       if (toolCallId) {
         this.deniedToolCallIds.add(toolCallId);
         this.knownToolCallIds.add(toolCallId);
       }
-      await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, { tool: toolName, toolCallId, reason: decision.reason }));
+      await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, {
+        tool: toolName,
+        toolCallId,
+        reason: decision.reason,
+        refusal: decision.refusal,
+      }));
       return { decision, task: this.task };
     }
     // An approval provider must never be able to *replace* the installed trust
@@ -278,6 +534,31 @@ export class KernelAdapter {
 
     if (required.decision === "REQUIRE_APPROVAL") {
       await this.events.emit(event("APPROVAL_REQUIRED", this.task.taskId, { tool: toolName, toolCallId }));
+    }
+
+    // Task identity is re-checked HERE, immediately before the first task-owned
+    // mutation and before the decision is returned, and it covers EVERY path
+    // that can yield between entry and that point: the approval prompt above,
+    // and `evaluateWithApproval` itself, which is awaited whenever an approval
+    // provider is supplied. A handler that resumes against a task it does not
+    // own must record nothing on the task that replaced it — not an id in
+    // `knownToolCallIds` or `deniedToolCallIds`, not a `denialCount` — and must
+    // not hand the caller a verdict produced for the superseded task. It is
+    // refused on lifecycle grounds instead, which is a different thing from
+    // policy having denied the call, so it carries `refusal` and never
+    // `violation`.
+    if (this.isStale(ownerTaskId)) {
+      this.refuseStale(
+        ownerTaskId,
+        "KernelAdapter.precheckToolCall",
+        "A newer task replaced this one while the policy decision was resolved",
+      );
+      const stale: PolicyDecision = {
+        decision: "DENY",
+        reason: "This tool call belongs to a task that has been superseded",
+        refusal: "stale_task",
+      };
+      return { decision: stale, task: this.task };
     }
 
     // Attempt versus execution.
@@ -299,7 +580,15 @@ export class KernelAdapter {
       this.knownToolCallIds.add(toolCallId);
     }
     if (decision.decision === "DENY") {
-      await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, { tool: toolName, toolCallId, reason: decision.reason }));
+      // A real policy denial. Counted separately from terminal refusals, which
+      // never reach this branch because no policy is evaluated for them.
+      this.denialCount += 1;
+      await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, {
+        tool: toolName,
+        toolCallId,
+        reason: decision.reason,
+        violation: decision.violation,
+      }));
       if (decision.violation === "abort") await this.abortTask(decision.reason, toolName, toolCallId);
     }
     return { decision, task: this.task };
@@ -326,8 +615,13 @@ export class KernelAdapter {
     }
 
     await this.events.emit(event("POLICY_VIOLATION", taskId, policyViolation));
-    this.task = transitionTask(this.task, "FAILED", new Date().toISOString());
-    this.task = { ...this.task, failureReason: reason };
+    // The violation event yields. If a newer turn replaced this task, the abort
+    // belongs to a task that no longer exists and must not terminate the new one.
+    if (this.isStale(taskId)) {
+      this.refuseStale(taskId, "KernelAdapter.abortTask", "A newer task replaced this one before the abort was applied");
+      return this.task;
+    }
+    this.advance("FAILED", "Policy abort", { now: new Date().toISOString(), failureReason: reason, expectTaskId: taskId });
     // Nothing in flight can be trusted to finish correctly after an abort.
     this.activeExecutions.clear();
     this.attemptBlocked = true;
@@ -394,7 +688,7 @@ export class KernelAdapter {
           }));
           return undefined;
         }
-        this.task = transitionTask(this.task, "PLANNING");
+        this.advance("PLANNING", "A completed VALID validation opens the next planning turn", { expectTaskId: taskId });
       }
       if (this.task.status !== "PLANNING") {
         await this.events.emit(event("TOOL_EXECUTION_IGNORED", taskId, {
@@ -418,12 +712,20 @@ export class KernelAdapter {
         selectedTools: [toolName],
         selectedSkills: plan.selectedSkills,
       };
-      this.task = transitionTask(this.task, "PLAN_VALIDATION");
+      this.advance("PLAN_VALIDATION", "Plan step built for the requested tool", { expectTaskId: taskId });
       validatePlan(plan, this.skills, this.tools.list());
       await this.events.emit(event("PLAN_VALIDATED", taskId, { planId: plan.planId, toolCallId }));
       for (const skill of plan.selectedSkills) await this.events.emit(event("SKILL_SELECTED", taskId, { skill }));
       await this.events.emit(event("TOOL_SELECTED", taskId, { tool: toolName, toolCallId, inputMetadata }));
-      this.task = transitionTask(this.task, "EXECUTING");
+      this.advance("EXECUTING", "Plan validated; tool execution begins", { expectTaskId: taskId });
+    }
+
+    // The plan/validation events above yield. If a newer turn replaced this task
+    // while they were being traced, binding the execution here would attach it to
+    // a task that never asked for it.
+    if (this.isStale(taskId)) {
+      this.refuseStale(taskId, "KernelAdapter.beginToolExecution", "A newer task replaced this one before the execution was bound");
+      return undefined;
     }
 
     const bound: BoundExecution = {
@@ -475,6 +777,7 @@ export class KernelAdapter {
 
   async observeToolResult(result: ToolResult, error?: unknown): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active tool step");
+    const taskId = this.task.taskId;
     const executionId = result.execution.executionId;
 
     // Pi can emit duplicate tool_execution_end events.
@@ -520,6 +823,13 @@ export class KernelAdapter {
       tool: result.execution.tool,
       error: error?.message,
     }));
+
+    // The completion event yields. A newer turn may have started meanwhile; this
+    // result belongs to the task that bound it, not to whatever is current now.
+    if (this.isStale(taskId)) {
+      this.refuseStale(taskId, "KernelAdapter.observeToolResult", "A newer task replaced this one before the result was observed");
+      return { status: "INCONCLUSIVE", validator: "stale-task-generation", message: "Result ignored: it belongs to a superseded task" };
+    }
 
     // Verification is not "the tool returned success". When a call declared
     // outputs, those outputs must actually exist, be readable, be non-empty and
@@ -570,15 +880,15 @@ export class KernelAdapter {
     }
 
     // Last execution: observe, then validate.
-    this.task = transitionTask(this.task, "OBSERVING");
+    this.advance("OBSERVING", "Last execution settled", { expectTaskId: taskId });
     this.task = { ...this.task, observations: [...this.task.observations, result.success ? "Tool completed" : "Tool failed"] };
-    this.task = transitionTask(this.task, "VALIDATING");
+    this.advance("VALIDATING", "Observing the settled execution", { expectTaskId: taskId });
     this.lastValidation = validation;
     this.task = { ...this.task, validationResults: [...this.task.validationResults, validation] };
     await this.events.emit(event(validation.status === "VALID" ? "VALIDATION_COMPLETED" : "VALIDATION_FAILED", this.task.taskId, validation as unknown as Record<string, unknown>));
 
     if (validation.status !== "VALID") {
-      this.task = transitionTask(this.task, "RECOVERING");
+      this.advance("RECOVERING", "Last validation was not VALID", { expectTaskId: taskId });
       const tool = this.tools.get(result.execution.tool);
       const failure = classifyFailure(error);
       const strategy = chooseRecovery({
@@ -595,20 +905,23 @@ export class KernelAdapter {
       switch (strategy) {
         case "RETRY":
           this.task = { ...this.task, retryCount: this.task.retryCount + 1 };
-          this.task = transitionTask(this.task, "RETRYING");
-          this.task = transitionTask(this.task, "PLANNING");
+          this.advance("RETRYING", `Recovery strategy RETRY (depth ${this.recoveryDepth})`, { expectTaskId: taskId });
+          this.advance("PLANNING", "Retry re-enters planning", { expectTaskId: taskId });
           break;
         case "REPLAN":
           this.task = { ...this.task, replanCount: this.task.replanCount + 1 };
-          this.task = transitionTask(this.task, "REPLANNING");
-          this.task = transitionTask(this.task, "PLANNING");
+          this.advance("REPLANNING", `Recovery strategy REPLAN (depth ${this.recoveryDepth})`, { expectTaskId: taskId });
+          this.advance("PLANNING", "Replan re-enters planning", { expectTaskId: taskId });
           break;
         case "ESCALATE":
-          this.task = transitionTask(this.task, "ESCALATED");
+          this.advance("ESCALATED", "Recovery strategy ESCALATE", { expectTaskId: taskId });
           break;
         case "TERMINATE":
         default:
-          this.task = transitionTask(this.task, "FAILED");
+          this.advance("FAILED", "Recovery strategy TERMINATE: budget exhausted or no safe strategy remains", {
+            failureReason: "Recovery budget exhausted or no safe recovery strategy remains",
+            expectTaskId: taskId,
+          });
           await this.events.emit(event("TASK_FAILED", this.task.taskId, {
             reason: "Recovery budget exhausted or no safe recovery strategy remains",
             strategy,
@@ -653,6 +966,13 @@ export class KernelAdapter {
     const report = candidates.length > 0
       ? await verifyArtifacts(candidates, this.boundary ? { boundary: this.boundary } : {})
       : { artifacts: [], invalid: [], unverified: [], allVerified: false };
+
+    // Artifact verification touches the filesystem and yields. A newer turn may
+    // have started meanwhile; this result belongs to the task that bound it.
+    if (this.isStale(taskId)) {
+      this.refuseStale(taskId, "KernelAdapter.recordToolResult", "A newer task replaced this one during artifact verification");
+      return { status: "INCONCLUSIVE", validator: "stale-task-generation", message: "Result ignored: it belongs to a superseded task" };
+    }
 
     if (report.artifacts.length > 0) {
       this.artifactList = [...this.artifactList, ...report.artifacts];
@@ -761,12 +1081,12 @@ export class KernelAdapter {
     const { plan, step } = this.buildPlanStep(toolName, tool);
     this.plan = plan;
     this.task = { ...this.task, currentPlan: plan, currentStep: step.stepId, selectedTools: [toolName], selectedSkills: plan.selectedSkills };
-    this.task = transitionTask(this.task, "PLAN_VALIDATION");
+    this.advance("PLAN_VALIDATION", "Legacy planToolCall built a plan step");
     validatePlan(plan, this.skills, this.tools.list());
     await this.events.emit(event("PLAN_VALIDATED", this.task.taskId, { planId: plan.planId }));
     for (const skill of plan.selectedSkills) await this.events.emit(event("SKILL_SELECTED", this.task.taskId, { skill }));
     await this.events.emit(event("TOOL_SELECTED", this.task.taskId, { tool: toolName, inputMetadata }));
-    this.task = transitionTask(this.task, "EXECUTING");
+    this.advance("EXECUTING", "Legacy planToolCall admits execution");
     this.toolExecutionCount += 1;
     return { decision: { decision: "ALLOW" }, plan, task: this.task };
   }
@@ -782,8 +1102,8 @@ export class KernelAdapter {
     const planned = await this.planToolCall(toolName, input);
     const precheck = await this.precheckToolCall(toolName, operation, input, approval);
     if (precheck.decision.decision === "DENY") {
-      this.task = transitionTask(this.task!, "RECOVERING");
-      this.task = transitionTask(this.task!, "FAILED");
+      this.advance("RECOVERING", "Legacy path: policy denial after planning");
+      this.advance("FAILED", "Legacy path: policy denial", { failureReason: precheck.decision.reason });
       await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: precheck.decision.reason }));
       return { decision: precheck.decision, task: this.task };
     }
@@ -796,6 +1116,7 @@ export class KernelAdapter {
 
   async finishTask(finalResult: unknown): Promise<Task> {
     if (!this.task) throw new Error("No active task");
+    const taskId = this.task.taskId;
     // A task that policy aborted, or that has already reached a terminal state,
     // is reported as it is. Re-running finalisation would either fabricate a
     // completion or throw an illegal transition.
@@ -805,7 +1126,10 @@ export class KernelAdapter {
       return this.task;
     }
     if (this.task.status === "RECOVERING") {
-      this.task = transitionTask(this.task, "FAILED");
+      this.advance("FAILED", "Recovery requires a new planning turn", {
+        failureReason: "Recovery requires a new planning turn",
+        expectTaskId: taskId,
+      });
       await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: "Recovery requires a new planning turn" }));
       return this.task;
     }
@@ -821,7 +1145,7 @@ export class KernelAdapter {
         return this.task;
       }
       if (this.lastValidation?.status === "INVALID") {
-        this.task = transitionTask(this.task, "FAILED");
+        this.advance("FAILED", "Final validation was INVALID", { failureReason: "Validation failed", expectTaskId: taskId });
         await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: "Validation failed" }));
         return this.task;
       }
@@ -830,13 +1154,37 @@ export class KernelAdapter {
       // not complete, regardless of which result happened to settle last.
       if (this.attemptBlocked) {
         await this.events.emit(event("TOOL_RESULT_IGNORED", this.task.taskId, { reason: "prior_validation_failed" }));
-        this.task = transitionTask(this.task, "FAILED");
+        // That emit yields. A newer turn may own the lifecycle now, in which
+        // case this attempt's failure belongs to the older task and must not
+        // fail the newer one.
+        if (this.isStale(taskId)) {
+          this.refuseStale(taskId, "KernelAdapter.finishTask", "A newer task replaced this one before finalisation");
+          return this.task;
+        }
+        this.advance("FAILED", "The current attempt still carries an unresolved failure (attemptBlocked)", {
+          failureReason: "One or more results in this attempt failed or could not be verified",
+          expectTaskId: taskId,
+        });
         await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: "One or more results in this attempt failed or could not be verified" }));
         return this.task;
       }
-      this.task = transitionTask(this.task, "COMPLETED", new Date().toISOString());
+      this.advance("COMPLETED", "Every execution in this attempt validated", { now: new Date().toISOString(), expectTaskId: taskId });
       this.task = { ...this.task, finalResult };
       await this.events.emit(event("TASK_COMPLETED", this.task.taskId));
+      return this.task;
+    }
+
+    // The no-tool path below walks
+    //   PLANNING -> PLAN_VALIDATION -> EXECUTING -> OBSERVING -> VALIDATING -> COMPLETED
+    // and PLANNING is its only legal entry point. A task in any other live
+    // state has not finished starting, so finalising it here would request a
+    // transition the state machine forbids. Report the situation honestly
+    // instead of attempting it.
+    if (this.task.status !== "PLANNING") {
+      await this.events.emit(event("TOOL_RESULT_IGNORED", this.task.taskId, {
+        reason: "no_tool_finalisation_requires_planning_state",
+        taskStatus: this.task.status,
+      }));
       return this.task;
     }
 
@@ -851,8 +1199,7 @@ export class KernelAdapter {
       } else {
         reason = "Assistant response lacked content or finish_reason";
       }
-      this.task = transitionTask(this.task, "FAILED");
-      this.task = { ...this.task, failureReason: reason };
+      this.advance("FAILED", "Assistant stream ended without a usable result", { failureReason: reason, expectTaskId: taskId });
       await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason }));
       return this.task;
     }
@@ -881,22 +1228,22 @@ export class KernelAdapter {
     };
     this.plan = plan;
     this.task = { ...this.task, currentPlan: plan, currentStep: step.stepId };
-    this.task = transitionTask(this.task, "PLAN_VALIDATION");
+    this.advance("PLAN_VALIDATION", "No-tool task: response plan", { expectTaskId: taskId });
     validatePlan(plan, this.skills, this.tools.list());
     await this.events.emit(event("PLAN_VALIDATED", this.task.taskId, { planId: plan.planId }));
-    this.task = transitionTask(this.task, "EXECUTING");
+    this.advance("EXECUTING", "No-tool task: plan validated", { expectTaskId: taskId });
 
-    this.task = transitionTask(this.task, "OBSERVING");
+    this.advance("OBSERVING", "No-tool task: observing the assistant response", { expectTaskId: taskId });
     this.task = { ...this.task, observations: [...this.task.observations, "Assistant response produced"] };
     await this.events.emit(event("RESPONSE_OBSERVED", this.task.taskId));
-    this.task = transitionTask(this.task, "VALIDATING");
+    this.advance("VALIDATING", "No-tool task: validating the assistant response", { expectTaskId: taskId });
 
     const validation: ValidationResult = { status: "VALID", validator: "pi-response", message: "Assistant produced a response" };
     this.lastValidation = validation;
     this.task = { ...this.task, validationResults: [...this.task.validationResults, validation] };
     await this.events.emit(event("VALIDATION_COMPLETED", this.task.taskId, validation as unknown as Record<string, unknown>));
 
-    this.task = transitionTask(this.task, "COMPLETED", new Date().toISOString());
+    this.advance("COMPLETED", "No-tool task: assistant response validated", { now: new Date().toISOString(), expectTaskId: taskId });
     this.task = { ...this.task, finalResult };
     await this.events.emit(event("TASK_COMPLETED", this.task.taskId));
     return this.task;
