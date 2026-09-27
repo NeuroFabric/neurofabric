@@ -865,4 +865,149 @@ different flag, a different transport, or a path the guard does not cover.
   missing human into a stalled pull request, which is a worse failure to
   diagnose than a bad merge the operator can see and revert.
 
+## D-011: The mechanization is verified, and two of its claims were false
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Amends:** none; corrects the factual basis of D-010
+- **Affects:** the merge pipeline on `main`, and the standing rule that a
+  recorded claim names the thing it verified
+
+### Context
+
+The first end-to-end run of the D-010 pipeline surfaced four gaps. Two of
+them were not gaps in the sense the draft assumed — they were claims about
+the remote that were **false when written**.
+
+1. `allow_auto_merge` was `false` on the repository, so the lane D-010
+   delegated was never armed.
+2. Protection on `main` did not exist. The classic branch-protection endpoint
+   returned `404 Branch not protected`. This was found by a Step 0 stop
+   condition, not by inspection.
+3. The force-push pattern was said to punish the lease variant.
+4. Deletion control was said to deny legitimate scratch-file cleanup.
+
+Gaps 1 and 2 are real and are now closed. Gaps 3 and 4 did not survive
+contact with the code, and the record says so rather than the other way
+round:
+
+- **Gap 3 was already closed.** The force-push control is not in
+  `.pi/neurofebric-policy.json` at all. It is an entry in
+  `DESTRUCTIVE_PATTERNS` at `platform/core/policy.ts:74`, and it already
+  carries the negative lookahead the draft asked to have added. Verified by
+  evaluating the exported array against both forms: the bare form is DENIED
+  and the with-lease form is ALLOWED. The draft's ground — "the bare pattern
+  punished the safest variant identically to the dangerous one" — describes a
+  state the repository had already left.
+- **Gap 4 is a design property, not a defect.** `destructiveCommandTokens` is
+  a deny-only whole-token list, evaluated at step 4 of 6 in
+  `platform/core/configured-policy.ts`, before `fileRules` is reached. The
+  schema has no permit concept, and the policy file's own comment states the
+  rule these rules obey: they "can only ever REMOVE a permission." A
+  narrow scratch-file allowance is therefore not a config amendment; it is a
+  new capability in the engine.
+
+### Decision
+
+1. **`allow_auto_merge` is enabled.** An operator action, recorded here as the
+   operator action it was. Verified `true` on the repository.
+2. **Protection on `main` is a ruleset, not classic branch protection.**
+   Ruleset `24072761`, "Protect main branch", `enforcement: active`, condition
+   `refs/heads/main` and nothing else. Four rules: `deletion`,
+   `required_status_checks`, `pull_request` (zero required approvals, all
+   review flags false, merge/squash/rebase allowed), `non_fast_forward`.
+   Bypass actor `5`, `RepositoryRole`, `always`. D-010's substantive claim —
+   `main` is protected and accepts no direct push — **is now true on the
+   remote**. Its wording named the classic endpoint; the mechanism is the
+   rulesets API. The claim holds; the vocabulary did not.
+3. **The force-push with-lease allowance is a verification, not an
+   amendment.** It is in effect, it is correct, and nothing was changed. See
+   Open item 1 for the part of the force-push surface that is not covered.
+4. **The narrow scratch-file deletion allowance is dropped from this decision
+   and escalated to the operator as a D-012 candidate.** No policy file edit,
+   no engine change. An agent does not add a permit concept to a guard it is
+   trying to widen.
+
+No file other than this record was changed by this decision. In particular
+`.pi/neurofebric-policy.json` and `platform/core/policy.ts` are untouched.
+
+### Rationale
+
+1. **A correction that leaves the original text alone is still a
+   correction.** D-010 was written before the protection existed and
+   described the intended state as though it were the actual one. That is the
+   F-006 defect one level up: a limit declared on a public interface and
+   enforced by nothing. The honest fix is not to re-word D-010 into looking
+   right, but to record the difference and let the reader see that it
+   happened.
+2. **The halt was the control system working.** The draft asked for two
+   policy edits. One had no target in the file it named; the other was not
+   expressible in the format it named. Neither was a guard failure and
+   neither was a reason to improvise — the correct response to an
+   unsatisfiable instruction is to stop, which is what happened. The task was
+   then ended by `maxToolCallsPerTask: 40` with the scratch file from that
+   verification still uncommitted, which is the same control working again,
+   independently.
+3. **"Verified" is a stronger word than "amended" and should be rarer.**
+   Recording an amendment for a control already in force would inflate the
+   change history with edits that changed nothing, and would train the reader
+   to expect policy churn where the accurate answer is that the control was
+   already correct.
+
+### Consequence
+
+**Every claim about remote state names the endpoint it was read from, and
+the endpoint is checked for existence before its answer is believed.** The
+legacy branch-protection endpoint returning `404` is not evidence that
+protection is absent; it is evidence that protection is absent *from that
+endpoint*. The same run also expected three merged branches to have been
+auto-deleted, and the correct explanation was that only branches merged after
+`delete_branch_on_merge` was enabled are deleted. Both errors were naming
+errors, and neither would have been caught by a check that assumes the answer
+it expects.
+
+### Open items
+
+1. **The `+refspec` force-push form is ALLOWED.** `git push origin +main`
+   carries no force flag, so `DESTRUCTIVE_PATTERNS` does not match it.
+   Combined with the ruleset's `always` bypass actor, the TypeScript pattern
+   is the only force-push control acting on the agent identity. The with-lease
+   form is safe by mechanism; the `+refspec` form is safe by accident.
+   D-012 candidate.
+2. **`required_status_checks` in ruleset `24072761` lists the same context
+   twice**, once with an `integration_id` and once without. Benign — the
+   check exists and passes on `main`. Operator cleanup, not an agent task.
+3. **The auto-merge lane is armed and unexercised.** PR #10 was merged by
+   the operator via a direct merge while CLEAN, so the auto-merge path has
+   never actually gated on a check. The first auto-merge against a non-CLEAN
+   head is its first real test.
+4. **The `D-004` cross-references are dangling.** D-007 cites "D-004
+   (operator-only policy changes)", but D-004's body is "Known issues" — the
+   OmniRoute API key, the extension credential source, and the kernel binding
+   contract. It does not state the operator-only principle it is cited for.
+   The same D-007 passage already carries the honest version of the point as
+   a known residual: the policy file sits inside the agent-writable
+   boundary, so the operator-only rule is a convention rather than an
+   enforced boundary. That residual is the substantive D-012 question;
+   repairing the citation is bookkeeping.
+
+### Alternatives rejected
+
+- **Amending D-010's wording to say "ruleset" instead of "branch
+  protection."** Rejected: the claim was never wrong about behaviour, only
+  about vocabulary, and rewriting a superseded decision to read correctly
+  destroys the evidence that the claim was once unverified.
+- **Permanent operator force-push relief.** Rejected: the mechanism already
+  distinguishes the safe variant from the dangerous one, so widening it would
+  remove the control that works in order to relieve one that does not.
+- **A blanket deletion allowance, or a narrow one implemented in the engine
+  by the agent that needs it.** Rejected: the second is the exact shape of
+  the incident D-010 names, where a guard blocking a task is the moment its
+  boundary is most worth attacking. The narrow version is also not a config
+  amendment, and recording it as one is how a real gap gets written down as
+  closed.
+- **Leaving protection unconfigured while claiming it.** Rejected as the
+  standing alternative. It is what the pre-mechanization state was, and it
+  is why the `404` was worth a stop condition in the first place.
+
 
