@@ -46,26 +46,83 @@ User → Pi agent runtime → platform-orchestrator extension → native Pi skil
 - **Verification Gauntlet (Phase 1) is COMPLETED** — all 8 scenarios (A–H) passed with detailed reports in `reports/`.
 - Core/Pi coverage includes approval, policy enforcement and porting, redaction and the persistence boundary, artifact verification, workspace boundaries, lifecycle and re-entrancy (F-003), recovery budgets and diagnostics (F-006 Phase 1), and budget telemetry (F-008).
 
+### Finding status
+
+Full detail in `docs/handoff.md` §0 and `verification/findings/`.
+
+| ID | Status |
+| --- | --- |
+| F-003 | Lifecycle and re-entrancy protection implemented and verified. Denial *continuation* is configuration-driven (`onViolation`), not a kernel guarantee. |
+| F-006 | **Phase 1 merged (PR #3).** `maxStepRetries` removed; structured failure diagnostics and specific terminal reasons implemented. **Phase 2 remains open:** real retryability propagation from Pi errors, and strategy-change-aware recovery. |
+| F-007 | Resolved. |
+| F-008 | Resolved (PR #2). |
+
+Only three `DEFAULT_LIMITS` entries are enforced by the recovery decision:
+`maxToolRetries` 2, `maxReplans` 2, `maxRecoveryDepth` 3. The remaining
+declared limits are not yet read by any enforcement path.
+
+### Current status board
+
+Every GREEN and ORANGE entry cites its grounding: a merged PR, a decision ID, a
+findings document, or a verified test count. Entries that cannot be grounded in
+merged reality are WHITE and name-only.
+
+**GREEN — done and verified**
+
+- **Pi-based runtime with a thin orchestrator extension** — skill discovery, execution tracing, and a permission gate. No second agent loop or LLM client (design decision 1; `AGENTS.md`, `docs/DECISIONS.md`).
+- **TRUSTED_PROJECT fail-closed policy; artifact verification; centralized redaction; tool and path security** — traversal, symlinks, and destructive/credential denial (`platform/core/policy.ts`, `artifact.ts`, `redaction.ts`, `workspace.ts`; covered by `trusted-execution.test.ts`).
+- **Skills** — file-analysis active proof of concept; log-analysis, report-writer, and structured-data ready (§4).
+- **OmniRoute canonical provider, D-001 Gate 1 verified** — a real Pi turn pinned to auto/gemini completed (`docs/handoff.md`).
+- **Verification Gauntlet Phase 1** — scenarios A–H passed, reports in `reports/`.
+- **F-003 lifecycle and re-entrancy protection** — implemented and verified (`verification/findings/F-003-policy-violation-kills-task.md`, `platform/pi/f003-block-lifecycle.test.ts`). Denial *continuation* is configuration-driven via `onViolation`, not a kernel guarantee.
+- **F-006 Phase 1 (PR #3)**, **F-007 resolved**, **F-008 resolved (PR #2)**.
+- **PR #4 hardening** — production artifact boundary, provenance propagation, and policy recovery semantics.
+- **PR #5 documentation sync** — merged and verified.
+- **CI green on every pull request and on push to `main`** — 22 `.mjs` + 262 core/Pi `.ts` + 21 live-proof checks.
+- **Decisions D-001 through D-007 recorded**; `limitProfiles` (D-007); `maxFileWritesPerTask` = 10.
+
+**ORANGE — partially done, or awaiting an operator decision**
+
+- **Declared-but-unenforced `CoreLimits`** — 8 of the 12 `DEFAULT_LIMITS` entries are read by no enforcement path: `maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`, `maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, `maxArtifactBytes`, `maxContextTokens`. Only `maxToolRetries`, `maxReplans`, and `maxRecoveryDepth` are consulted by `chooseRecoveryDetailed`. Wire them into enforcement, or remove them from the contract.
+- **F-003 policy-denial semantics** — the distinction between the kernel property (lifecycle and re-entrancy protection) and the configuration choice (`onViolation`) is documented but not yet codified in the contract.
+- **Provenance persistence and audit boundary** — hardening landed in PR #4; where provenance persists and where the audit boundary sits is still undefined.
+- **APPROVAL-mode policy composition** — less exercised than `TRUSTED_PROJECT`.
+- **Windows CI coverage** — CI runs `ubuntu-latest` only.
+- **OmniRoute credential in `models.json`** — D-002 accepted risk; migration to Pi's credential store is pending.
+
+**WHITE — not started**
+
+- **F-006 Phase 2** — retryability propagation from Pi errors; strategy-change-aware recovery.
+- Capability routing — name only, pending operator definition.
+- Multi-step planning — name only, pending operator definition.
+- Delivery — name only, pending operator definition.
+- Git checkpointing — name only, pending operator definition.
+- Deferred per `docs/handoff.md` §4: MCP connectors, persistent memory store, optional human-approval gates.
+
+Next implementation priority (operator-set): CoreLimits enforcement / source-of-truth cleanup.
+
 ### Project Structure
+
+The platform is TypeScript under `platform/`. The Python directories below are a
+**legacy reference implementation** — retained for comparison, not loaded by Pi,
+and not part of the build or the test suites (see §1 and `AGENTS.md`).
 
 ```
 agent-harness/
-├── core/                 # Pi harness internals (LLM client, policy engine, agent loop)
-├── agents/               # Agent definitions (e.g., deep_research_agent.py)
-├── tools/                # Tool implementations agents can call
-├── policies/             # YAML rule files – security layer
-├── config/               # settings.yaml – LLM backend config
-├── docs/                 # Architecture, SKILL_SPEC, SECURITY, etc.
-├── platform/
-│   ├── core/            # Pi core: planner, validation, tool registry, redaction
+├── platform/             # The platform (TypeScript) — this is what runs
+│   ├── core/             # Pi core: planner, validation, tool registry, redaction
 │   ├── orchestration.mjs / orchestration.test.mjs
 │   └── pi/               # Orchestrator extension (kernel adapter, lifecycle, etc.)
-├── skills/
-│   ├── file-analysis/    # Proof‑of‑concept skill: inspect & analyze local files
-│   ├── log-analysis/     # Analyze logs
-│   ├── report-writer/    # Generate structured reports
-│   └── structured-data/  # Handle CSV/JSON/structured data
-├── main.py               # CLI entry point
+├── .pi/                  # Project config, policy file, orchestrator extension
+├── verification/         # Findings, scenarios, and the headless F-006 proof
+├── docs/                 # Architecture, SKILL_SPEC, SECURITY, handoff, etc.
+├── skills/               # file-analysis, log-analysis, report-writer, structured-data
+├── core/                 # LEGACY Python reference: LLM client, policy engine, agent loop
+├── agents/               # LEGACY Python reference: agent definitions
+├── tools/                # LEGACY Python reference: tool implementations
+├── policies/             # LEGACY Python reference: YAML rule files
+├── config/               # LEGACY Python reference: settings.yaml
+├── main.py               # LEGACY Python reference: CLI entry point
 └── SUMMARY.md            # This document
 ```
 
@@ -92,7 +149,7 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 ## 5. Configuration & Deployment
 
 - **LLM Backend:** `OmniRoute` (default) via `~/.pi/agent/models.json` with `omni` provider at `http://localhost:20128`.
-- **Workspace Isolation:** Agents may only write to `workspace/**`; writes outside are denied with a reason.
+- **Workspace Isolation:** the project config sets `allowedRoots` to the **project root**, so agents may write anywhere inside the repository and writes outside it are denied with a reason. (`workspace/**` is not the boundary; `workspace/head-baseline` inside it is a linked worktree, not a write target.)
 - **Policy Mode:** `TRUSTED_PROJECT` — dangerous operations are denied outright (fail‑closed), not prompted for approval.
 - **Max File Writes per Task:** **10** in the committed policy. The temporary Verification Gauntlet bump to 50 (D-006) was reverted under D-007; an operator selects a `limitProfiles` override for a run instead of editing the policy file.
 - **Provider Setup:** `omniroute-pi-ext-integration` extension handles provider metadata; Pi owns the model call chain.
@@ -107,11 +164,19 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 - **Verification Gauntlet (Phases A–H):** All passed — coverage includes cross‑skill chained analysis, parallel multi‑file analysis, structured‑data audits, policy bypass protection, prompt‑injection defense, skill conformance, artifact integrity, and resiliency/error recovery.
 - **Gauntlet Report:** `reports/REPORT.md` confirms **READY FOR PHASE 2** with operational hardening recommendations.
 
-## 7. Roadmap (Phase 2)
+## 7. Roadmap
 
-1. **Adaptive write‑budget thresholds** — higher burst limits for authorized harness‑generation scripts.
-2. **Resilient session state recovery** — automatic snapshot/resume of partial gauntlet workflows.
-3. **Enhanced policy interception diagnostics** — structured JSON error payloads for blocked shell redirects.
+The gauntlet-era items below are closed or superseded; current open work is
+tracked against the findings. The write-budget item is addressed by D-007
+(`limitProfiles`), not by a global raise.
+
+1. **F-006 Phase 2** — real retryability propagation from Pi errors, and strategy-change-aware recovery. Not started; not claimed as done.
+2. **Declared-but-unenforced `CoreLimits`** — eight limits in `DEFAULT_LIMITS` are documented but read by no enforcement path.
+3. **APPROVAL-mode policy composition** — `ConfiguredPolicy` is composed in front of the tier policy; the APPROVAL-mode path is less exercised than TRUSTED_PROJECT.
+4. **Model routing across backends** — D-001 Gate 2, fallback provider removal, remains pending.
+
+The longer-horizon items in `docs/handoff.md` §4 (MCP connectors, a persistent
+memory store, optional human-approval gates) are unchanged and remain deferred.
 
 ## 8. Key Takeaways
 
@@ -120,8 +185,8 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 - **Pi** is the central runtime — the orchestrator is a thin extension that never makes model calls directly.
 - The **file‑analysis skill** is the first proof‑of‑concept and demonstrates the bounded‑inspection philosophy (read only, no full‑file loading).
 - The project follows a **strict security posture**: fail‑closed on policy violations, redaction at every boundary, and workspace isolation.
-- The next steps are **Phase 2 hardening** (write‑budget tuning, resilient recovery, improved diagnostics) and optionally migrating the **OmniRoute credential** from `models.json` to Pi's credential store (currently an accepted risk).
+- The next steps are the **F-006 Phase 2 recovery work** and the unenforced-limit backlog, and optionally migrating the **OmniRoute credential** from `models.json` to Pi's credential store (currently an accepted risk).
 
 ---
 
-*Summary generated on 2026‑09‑26.*
+*Summary last synchronized 2026-09-27, against `main` after PR #5. Test counts reflect the verified 284 unit/integration baseline plus 21 separately-counted live-proof checks.*
