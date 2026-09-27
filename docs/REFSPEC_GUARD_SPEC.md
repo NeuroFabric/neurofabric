@@ -61,8 +61,9 @@ whitespace arm.
 
 ## 3. Behavior matrix
 
-`before` is the measured current state. `after` is the **target**, and is not
-implemented.
+`before` is the measured current state. `after` is the resulting behavior, and
+it is implemented: the D-014 baseline at `3551303` plus the D-015 extension,
+enforced as eleven rows in `platform/core/refspec-guard.test.ts`.
 
 | # | Command | before (measured) | after (target) | Rationale |
 |---|---------|-------------------|----------------|-----------|
