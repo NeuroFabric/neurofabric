@@ -1373,5 +1373,50 @@ transcription note.
   the pattern; the canonical literal is the one transcribed above, and it is
   what the fixed-string check verified.
 
+D-015 — Refspec guard: branch-removal coverage and spec sync
+Status: CLOSED. Terminal state: main at c2e2a9f912b6466204202eca5e938d815d48eca9. PRs: #17 — implementation and spec sync, five commits, merged at ab43f84. #18 — line-54 remediation, one word, merged at c2e2a9f. Coverage at close: 29 DESTRUCTIVE_PATTERNS entries, 11 evaluation rows, 314/314 platform suite measured locally on merged main, matching CI.
+
+Shipped
+Pattern 28 (0-based 27): the --delete branch-removal flag form.
+Pattern 29 (0-based 28): the empty-source colon form (:main).
+Rows 10 and 11 as assertions in platform/core/refspec-guard.test.ts.
+docs/REFSPEC_GUARD_SPEC.md synced to shipped state: section 2 heading, opening paragraph, closing sentence, counts, and vocabulary reconciled across five commits; voice sweep closed verified.
+The eleven rows (final state)
+plain push allowed; 2. +main denied; 3. +refs/heads/main denied; 4. +HEAD:main denied; 5. --force denied; 6. --force-with-lease on a plain refspec allowed; 7. with-lease does not license a + refspec; 8. + inside a branch name allowed; 9. quote-wrapped "+main" denied; 10. --delete denied; 11. empty-source colon form denied.
+Process record
+Defect classes, operator-authored briefs, with remediations:
+
+Logic — the X1 contradiction (D-014): contradictory test assertions in an operator-authored brief, caught by the suite. Remediation: contradiction checks before assertion.
+
+Location — file indentation read from a rendered report instead of the raw file. Remediation: raw-file reads for file claims.
+
+Environmental — PowerShell 5.1 mangle lane (quote and backtick stripping, lost characters). Remediation: channel-defensive ASCII composition for the shell lane.
+
+Vocabulary — "measured" written where "target" was the defined term. Remediation: the vocabulary-class rule — check term definitions before inserting a word.
+
+Channel taxonomy: mangle / misauthor / mistarget, with parse-safety and scratch-script sub-lessons.
+
+Four-layer self-catching chain: the guard caught a self-synthesized plus; the suite caught X1; the read-back caught the vocabulary error; process verification caught the premature closure. Each layer caught its own author once.
+
+Self-guarding milestone (D-014): zero guard blocks across a session of self-authored patterns.
+
+Positive-control rule (canonized this arc): a clean result is evidence only from an instrument that has demonstrated it can detect a known hit. First self-caught instance: an anchored class-(a) regex silently missed the two lines that matter; caught mid-pass before a false clean could close the sweep. Prior instances of the measures-nothing class: eyeball-26, the premature sweep closure.
+
+Closure predicate (corrected this arc): a sweep closes when every hit is fixed or covered by a standing adjudication — not when the raw pass is empty. The original predicate was unreachable while standing-ruled items remain, and is acknowledged as an operator drafting defect.
+
+Standing rules reaffirmed: flag-don't-decide; fence-as-maximum; care with conditional instructions; report discipline — deviations at top, verbatim read-backs, state checks before and after; rollback prose is required-behavior wording, not instruction — classified no-hit, standing.
+
+Count verification graduated from attestation to verification: every count checked against the tree before reporting.
+
+Contradictions cluster: three commits reconciled one section — at its heading, its opening, and its closing.
+
+The line-54 gap: the adjudicated fix was absent from PR 17's merge. Found by diffstat audit: 109 insertions and 15 deletions equals the exact sum of the five reported commits; no sixth-commit report exists; the branch tip at deletion was b9d8b05. Ruled a sequence jump on the measured facts: the merge ran ahead of its stated gate and the sixth session never ran. Whether the skip was deliberate was not specified by the operator; observable facts and remediation are identical either way. Remediated by PR 18 (proposes to states, discipline clause verbatim). Third member of the closure-claims family: premature closure, unreachable predicate, merge ahead of the final fix.
+
+Platform facts: delete_branch_on_merge is enabled — remote branch cleanup is retired from every merge sequence. Objective-already-achieved failure class canonized: an error reports the command's failure, not the goal's status; verify the goal state before treating an error as a problem.
+
+Halts: six.
+
+Timeline: measured from commit and CI timestamps — PR 17 CI completed 2026-09-27T16:14:42Z; PR 18 merged the same day at c2e2a9f. Operator timeline testimony was not supplied at close; addenda may ride on this plane.
+
 
 
