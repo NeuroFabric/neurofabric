@@ -474,7 +474,7 @@ During the construction phase of the Verification Gauntlet (Step 1), the strict 
 
 - **Date:** 2026-09-26
 - **Status:** Accepted
-- **Relates to:** D-004 (operator-only policy changes), D-006 (temporary global bump), F-001 (write-budget saturation), F-005 (policy file inside allowed roots)
+- **Relates to:** D-012 (operator-only policy changes), D-006 (temporary global bump), F-001 (write-budget saturation), F-005 (policy file inside allowed roots)
 
 D-006 raised `maxFileWritesPerTask` globally (10 → 50) by temporarily editing
 the committed policy file, then reverted it. That pattern trades the
@@ -493,12 +493,13 @@ partial overrides of `limits` — and an `activeLimitProfile` selector
 - Validation fails closed: an unknown `activeLimitProfile`, unknown keys,
   invalid values, or non-kebab-case names are load errors, never silent no-ops.
 - An inactive profile is inert.
-- Selection is operator-only (D-004). At gauntlet start the operator sets
+- Selection is operator-only (D-012). At gauntlet start the operator sets
   `activeLimitProfile`; the committed file keeps the conservative base budget
   at all other times.
 
 Known residual: the policy file itself sits inside the agent-writable boundary
-(F-005), so D-004 remains a convention rather than an enforced boundary.
+(F-005), so D-012 records this as a convention rather than an enforced
+boundary.
 
 
 ## D-008: Three standing rules for agent-driven git operations
@@ -980,7 +981,11 @@ it expects.
 3. **The auto-merge lane is armed and unexercised.** PR #10 was merged by
    the operator via a direct merge while CLEAN, so the auto-merge path has
    never actually gated on a check. The first auto-merge against a non-CLEAN
-   head is its first real test.
+   head is its first real test. **Closed by D-012:** the lane was exercised
+   by PR #11 — auto-merge armed at 13:11:13Z, `mergeStateStatus` BLOCKED while
+   `platform test suites` was IN_PROGRESS, fired unattended at 13:11:34Z on
+   SUCCESS, merge commit `b618aff`, head branch auto-deleted. The lane worked
+   as a gate, not as a formality.
 4. **The `D-004` cross-references are dangling.** D-007 cites "D-004
    (operator-only policy changes)", but D-004's body is "Known issues" — the
    OmniRoute API key, the extension credential source, and the kernel binding
@@ -1009,5 +1014,131 @@ it expects.
 - **Leaving protection unconfigured while claiming it.** Rejected as the
   standing alternative. It is what the pre-mechanization state was, and it
   is why the `404` was worth a stop condition in the first place.
+
+## D-012: Operator rulings on the residual force-push, deletion, and boundary findings
+
+- **Date:** 2026-09-27
+- **Status:** accepted
+- **Amends:** D-007 (citation repair), D-011 (Open item 3 closed)
+- **Affects:** the force-push control acting on the agent identity, the
+  configured policy schema, and the standing claim that an agent does not
+  edit its own policy file
+
+### Context
+
+D-011's verification run, and the halt that preceded it, produced five
+findings. The operator has ruled on all five. One is a defect that is
+accepted but **not fixed**; one is a design proposal rejected on the merits;
+one is a limitation accepted permanently and honestly; one is operator
+housekeeping; and one is a correction to the agent's own reporting.
+
+1. **A hole in the force-push control.** The `+refspec` force-push form
+   carries no force flag, so it is not matched by `DESTRUCTIVE_PATTERNS`.
+2. **Scratch-file deletion is denied by design.** The configured policy has
+   no permit concept, so a narrow allowance could only be added by building
+   one into the engine.
+3. **The operator-only boundary is a convention.** The policy file sits
+   inside the agent-writable boundary, so the rule that agents do not edit it
+   is honoured rather than enforced.
+4. **A duplicated status-check context** in ruleset 24072761.
+5. **An inventory defect in the agent's own halt report.** That report
+   enumerated the local branches and omitted two that predated it and were
+   tracking refs to since-deleted remotes. Both are resolved: the corrections
+   pull request was merged, and the hardening commit was squash-merged as
+   `194e03c`, verified by the operator via `git cherry`.
+
+Findings 1 through 4 are statements about the engineering. Finding 5 is about
+the accuracy of the record, and it is written down for the same reason
+D-010's correction is: a verification that is wrong about what it checked is
+worse than no verification, because the next reader trusts it.
+
+### Decision
+
+1. **The `+refspec` force-push hole is accepted as real and left open.**
+   The fix is to extend `DESTRUCTIVE_PATTERNS` in `platform/core/policy.ts`.
+   That work is operator-coded, outside agent scope, and pending. This
+   decision records the acceptance, not a fix, and the repository makes no
+   claim to be closed.
+2. **The permit concept for scratch-file deletion is rejected.** The
+   configured policy stays deny-only. The operator's rationale is auditability
+   over convenience, and the price of the denial is one manual removal per
+   scratch file.
+3. **The operator-only boundary is accepted as a convention, and recorded as
+   one.** The policy file remains inside the agent-writable boundary. Agents
+   are expected not to edit it. Nothing enforces that, and this record does
+   not pretend otherwise. D-007's residual note already said so; that note is
+   now the ruling rather than a known issue.
+4. **The duplicated status-check context is operator API cleanup**, tracked
+   separately. No agent work.
+5. **The inventory inaccuracy is recorded and closed.** No remediation and no
+   branch cleanup: both omitted branches are already resolved.
+
+### Rationale
+
+1. **An accepted finding and a fixed finding are different states, and the
+   record must not blur them.** The force-push surface shows why the
+   distinction is load-bearing. The ruleset carries an `always` bypass actor,
+   so platform-level protection does not constrain the agent identity on this
+   path, and the TypeScript pattern is the only control acting there. Today
+   the with-lease form is refused by mechanism and the `+refspec` form is
+   permitted by accident. One of those is a decision and the other is an
+   oversight that happens to be harmless, but only one of them is doing the
+   work. Writing "closed" would put a claim in the permanent record for a
+   change that does not exist in the tree.
+2. **A deny-only schema is a defensible design, not a missing feature.** The
+   absence of a permit concept is what makes the policy file auditable by
+   reading it: every rule in it can only remove access, so the file cannot
+   contain a hidden allowance. Adding a permit path for scratch files trades
+   that property for the convenience of not asking an operator to remove a
+   file.
+3. **A convention recorded as a convention is worth more than one recorded as
+   a control.** The earlier temptation was to write that agents may not edit
+   the policy and let the reader assume the boundary held. D-011 declined to
+   amend the citation that implied otherwise. The honest form costs nothing,
+   and it is the only form a reader can act on.
+4. **The agent's own inventory was wrong, and the error ran in the flattering
+   direction.** Both omitted branches were merged and stale, so leaving them
+   out implied a cleaner state than existed. Errors that understate what is
+   outstanding are the ones worth writing down.
+
+### Consequence
+
+**An accepted finding is reported as open everywhere it appears**, including
+in the summary a later session reads first. Until `DESTRUCTIVE_PATTERNS`
+covers the `+refspec` form, the force-push control for the agent identity is
+known to under-cover, and a session deciding whether that is safe is told it
+is not fully covered rather than left to infer completeness from a pattern
+list that reads as exhaustive.
+
+**The operator-only boundary is now stated in three places and enforced in
+none.** The citation that misattributed it to a decision about known issues
+has been repaired, and the residual is recorded as a residual.
+
+### Open items
+
+1. **The `+refspec` hole is open.** Operator-coded implementation pending.
+   The control is to be treated as incomplete until that change lands.
+2. **Status-check context cleanup** in ruleset 24072761 is operator action,
+   tracked outside this record.
+
+### Alternatives rejected
+
+- **Record finding 1 as fixed, pending implementation.** Rejected: it would
+  place a completed-looking claim in the permanent record for a change not in
+  the tree, and the next session to read it would have no reason to check.
+- **Add a narrowly scoped permit for scratch files, since the boundary case
+  is easy to state.** Rejected on the operator's rationale, auditability over
+  convenience. The denial costs one manual removal per scratch file — paid
+  rarely and visibly — against a property that would be given up silently and
+  permanently.
+- **Enforce the operator-only boundary by moving the policy file out of the
+  agent-writable boundary.** Not rejected on merit, but not adopted here. The
+  ruling is to record the boundary as a convention, and relocating the file
+  is a separate decision with its own costs to the gauntlet workflow.
+- **Leave the dangling citation in place as a known issue.** Rejected: it is
+  a one-line repair, the dangling pointer actively misdirects a reader away
+  from the residual that already states the position correctly, and that
+  residual is what this decision now rules on.
+
 
 
