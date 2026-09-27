@@ -190,6 +190,44 @@ export type PolicyDecision =
   | { decision: "REQUIRE_APPROVAL"; reason: string };
 
 /**
+ * How much of a metered budget a task has consumed.
+ *
+ * `ok` is below every threshold, `low` is the first crossing, `critical` is the
+ * second. The two thresholds exist because a limit that is only enforced at the
+ * limit itself gives no chance to course-correct: by the time the denial
+ * arrives, the task is already terminal.
+ */
+export type BudgetLevel = "ok" | "low" | "critical";
+
+/**
+ * A read-only view of one task's call budget, reported immediately after a
+ * call has been counted.
+ *
+ * This is telemetry, never a decision. Nothing in the kernel may turn it into a
+ * denial: `remaining` can be 0 while the call that produced this telemetry was
+ * still allowed, and the limit check itself is unchanged. It exists so that
+ * running low is visible BEFORE the terminal denial, and so that a repeated
+ * identical call is visible as a count rather than only as a growing total.
+ */
+export interface ToolBudgetTelemetry {
+  /** Counted calls in this task so far, including the call just evaluated. */
+  used: number;
+  /** The configured `maxToolCallsPerTask`. */
+  limit: number;
+  /** `limit - used`, floored at 0. */
+  remaining: number;
+  level: BudgetLevel;
+  /**
+   * How many times this exact call — same tool, operation and input — has now
+   * been made in this task. 1 on the first occurrence, so `> 1` is a repeat.
+   *
+   * The comparison is on an internal signature; the input is never carried into
+   * a trace or a log, only this count is.
+   */
+  repeatCount: number;
+}
+
+/**
  * What a DENY does to the task, from `on_violation` in the declarative policy.
  *
  * `block` (default) refuses the call and lets the task continue. `abort`

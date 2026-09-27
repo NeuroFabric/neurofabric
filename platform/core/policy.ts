@@ -2,7 +2,7 @@ import path from "node:path";
 import { CoreError } from "./errors.ts";
 import { extractPathCandidates, WorkspaceBoundary } from "./workspace.ts";
 import { extractCommandText, extractToolPathCandidates } from "./tool-paths.ts";
-import type { PolicyDecision, PolicyRequest } from "./types.ts";
+import type { PolicyDecision, PolicyRequest, ToolBudgetTelemetry } from "./types.ts";
 
 export interface ApprovalProvider {
   requestApproval(request: PolicyRequest): Promise<boolean>;
@@ -19,6 +19,20 @@ export interface PolicyEngine {
   readonly mode: PolicyMode;
   evaluate(request: PolicyRequest): PolicyDecision;
   evaluateWithApproval(request: PolicyRequest): Promise<PolicyDecision>;
+
+  /**
+   * Budget telemetry for the call just evaluated by `evaluate`.
+   *
+   * OPTIONAL, and absent on every engine that does not meter calls, so a caller
+   * must feature-detect rather than assume a budget exists. An engine that does
+   * meter reports only what it has already counted; it returns `undefined` when
+   * it has no accounting for the task, which is also the correct answer when
+   * this engine was not the one that evaluated the call.
+   *
+   * Reporting is strictly additive: the limit check itself lives in `evaluate`
+   * and is unaffected by whether anything reads this.
+   */
+  toolBudget?(request: PolicyRequest): ToolBudgetTelemetry | undefined;
 }
 
 export type PolicyMode = "APPROVAL" | "TRUSTED_PROJECT";

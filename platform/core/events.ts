@@ -7,7 +7,11 @@ export type PlatformEvent =
   | "RETRY_STARTED" | "REPLAN_STARTED" | "REPLAN_COMPLETED" | "APPROVAL_REQUIRED"
   | "APPROVAL_GRANTED" | "APPROVAL_DENIED" | "TASK_COMPLETED" | "TASK_FAILED" | "TASK_CANCELLED"
   | "TOOL_EXECUTION_STARTED" | "TOOL_EXECUTION_IGNORED" | "TOOL_RESULT_IGNORED" | "RESPONSE_OBSERVED"
-  | "ARTIFACT_VERIFIED" | "ARTIFACT_INVALID" | "POLICY_VIOLATION" | "POLICY_ABORTED";
+  | "ARTIFACT_VERIFIED" | "ARTIFACT_INVALID" | "POLICY_VIOLATION" | "POLICY_ABORTED"
+  // Budget telemetry. Neither can deny anything or move a task: they exist so a
+  // task that is running low, or repeating the same call, is visible in the
+  // trace BEFORE the terminal limit denial (F-008).
+  | "BUDGET_LOW" | "TOOL_CALL_REPEATED";
 
 export interface PlatformEventRecord {
   eventId: string;
