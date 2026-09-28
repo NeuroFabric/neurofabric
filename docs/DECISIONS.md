@@ -2040,3 +2040,80 @@ already pinned by `D009.2` and `D009.2b`, both of which pass unchanged.
 - D-016b — superseded on the required-source point only.
 - D-018 — the budget raise this work is adjacent to.
 - D-019 — the static type gate that covers this file.
+
+## D-021: Phase M1–M4 (concurrency/recovery hardening) is de-scoped, not authorized
+
+- **Date:** 2026-09-28
+- **Status:** accepted
+- **Amends:** none; records the absence of a specification
+- **Affects:** no code. Nothing in `platform/`, `verification/` or `policies/` changes.
+
+### Context
+
+A standing execution order called for "PHASE M1–M4 (concurrency/recovery
+hardening)", to be run as four PRs with a full lifecycle each. No written
+specification for those phases exists in this repository or in the operator's
+records. The label originated in session planning notes and was carried forward
+into a later order as though it were a defined body of work.
+
+An exhaustive search was run before this record was written. A search for
+`M1`–`M4` outside the vendored `OmniRoute/` tree returns four hits, all of them
+**vault** work-stream markers, not concurrency work: `platform/pi/vault-tools.ts`
+and `platform/pi/kernel-adapter.ts` (the "M2 shape" where a descriptor is a
+declaration with no handler), and `platform/pi/vault-boundary.test.ts` and
+`platform/core/vault-redaction.test.ts` ("the M3 regression"). **`M4` appears
+nowhere in the repository at all.**
+
+`docs/CORE_HARDENING_PLAN.md` is the only plan-shaped document in the repo. It
+carries `## Quality Gate For This Phase` and `## Next Implementation Slice`, and
+no M-numbering. `docs/handoff.md` §4 "Phase 2 Roadmap" has three priorities —
+write-budget thresholds, session-state recovery, policy-interception
+diagnostics — labelled Priority 1/2/3, with no concurrency-hardening content and
+no M-numbering.
+
+### Ruling
+
+**VOID as a named phase.** M1–M4 is deferred to the backlog. Any future
+concurrency or recovery hardening requires a written specification, approved by
+the operator, before implementation begins.
+
+This is a de-scope, not a cancellation of the underlying idea. The work may
+still be worth doing; what is withdrawn is the sign-off to begin it from a
+label that never had a definition behind it.
+
+### Rationale
+
+Concurrency and recovery semantics are product decisions. What "parallel" means
+here — whether a required source still holds a lock, what happens to in-flight
+work when a budget is exhausted, whether recovery replays or resumes — has no
+answer derivable from the code, and each choice changes observable behaviour for
+every caller. Writing four phases from a label would have been product
+invention dressed as engineering, and it would have entered the record the same
+way F-006 and the `D009.2c` defect entered it: as work that proceeded on the
+strength of a plausible-sounding reference nobody could check.
+
+The cheaper outcome was to stop and ask. That cost one STOP; the alternative
+costs four PRs of unreviewable design.
+
+### Relationship to existing roadmap material
+
+`docs/handoff.md` §4 **Priority 2 — Resilient Session State Recovery** (auto-
+snapshot and resume of partial workflows) is the closest in-repo analog and is
+**unaffected by this ruling**. It remains roadmap material. Roadmap material is
+not a sign-off: the same section's Priority 1 and Priority 3 have sat in that
+list through several release cycles without becoming work, and nothing in the
+listing carries an approval.
+
+### Consequence
+
+No code changes. The label is retired rather than deleted, so a later order that
+reintroduces it can be answered by this record instead of re-derived. The
+de-scoped item is carried on the release backlog with its analog noted, so the
+deferral is visible to whoever picks it up.
+
+### Cross-references
+
+- D-020 — the preceding record by merge order.
+- `docs/handoff.md` §4 — the analog roadmap item, explicitly not a sign-off.
+- F-006 — the same failure class this record prevents: work proceeding on an
+  uncheckable reference.
