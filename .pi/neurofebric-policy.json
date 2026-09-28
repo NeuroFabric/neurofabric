@@ -80,8 +80,8 @@
     "secret is scoped to secret: so vault prose may be authored; a JSON-quoted secret key that slips this gate is still caught by the redaction plane at persistence."
   ],
   "limits": {
-    "maxToolCallsPerTask": 80,
-    "maxFileWritesPerTask": 10,
+    "maxToolCallsPerTask": 120,
+    "maxFileWritesPerTask": 30,
     "maxBytesPerWrite": 2000000
   },
   "onViolation": "block"
