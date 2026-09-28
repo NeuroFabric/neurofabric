@@ -18,6 +18,18 @@ export interface ApprovalProvider {
 export interface PolicyEngine {
   readonly mode: PolicyMode;
   evaluate(request: PolicyRequest): PolicyDecision;
+
+  /**
+   * Evaluate and, if the result is `REQUIRE_APPROVAL`, resolve it against this
+   * engine's own approval provider.
+   *
+   * NOT on the production path. `KernelAdapter.precheckToolCall` calls
+   * `evaluate` once and resolves the requirement itself, because this method
+   * calls `evaluate` internally — a caller that used it after an `evaluate`
+   * would meter a metered policy twice for one call and deny at half the
+   * configured budget. It remains part of the contract for embedders that want
+   * the two-step form, and it is covered by tests.
+   */
   evaluateWithApproval(request: PolicyRequest): Promise<PolicyDecision>;
 
   /**

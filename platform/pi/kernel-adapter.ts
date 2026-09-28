@@ -706,15 +706,15 @@ export class KernelAdapter {
 
     // Task identity is re-checked HERE, immediately before the first task-owned
     // mutation and before the decision is returned, and it covers EVERY path
-    // that can yield between entry and that point: the approval prompt above,
-    // and `evaluateWithApproval` itself, which is awaited whenever an approval
-    // provider is supplied. A handler that resumes against a task it does not
-    // own must record nothing on the task that replaced it — not an id in
-    // `knownToolCallIds` or `deniedToolCallIds`, not a `denialCount` — and must
-    // not hand the caller a verdict produced for the superseded task. It is
-    // refused on lifecycle grounds instead, which is a different thing from
-    // policy having denied the call, so it carries `refusal` and never
-    // `violation`.
+    // that can yield between entry and that point — above all the approval
+    // prompt, which is awaited whenever an approval provider is supplied and
+    // the operator takes arbitrarily long to answer it. A handler that resumes
+    // against a task it does not own must record nothing on the task that
+    // replaced it — not an id in `knownToolCallIds` or `deniedToolCallIds`, not
+    // a `denialCount` — and must not hand the caller a verdict produced for the
+    // superseded task. It is refused on lifecycle grounds instead, which is a
+    // different thing from policy having denied the call, so it carries
+    // `refusal` and never `violation`.
     if (this.isStale(ownerTaskId)) {
       this.refuseStale(
         ownerTaskId,
