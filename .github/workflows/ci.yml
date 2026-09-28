@@ -49,3 +49,37 @@ jobs:
       # resource and runs unchanged on a CI runner.
       - name: F-006 live recovery proof
         run: node --experimental-strip-types verification/live-f006-proof.mjs
+
+  # The workspace boundary has exactly one platform conditional,
+  # `CASE_INSENSITIVE` in platform/core/workspace.ts, and the whole suite
+  # passes on both OS families. Recording only ubuntu left that as an
+  # unverified property: a Windows-only regression in the boundary — case
+  # handling, separator handling, or realpath/junction resolution — could merge
+  # green against an ubuntu-only gate.
+  #
+  # This is a SEPARATE JOB rather than a matrix on `test`, on purpose. The
+  # "Protect main branch" ruleset requires a status check whose context is
+  # exactly `platform test suites`, and a matrix makes GitHub append the matrix
+  # values to the check name. A matrix on the required job would silently
+  # rename it and block every merge. Keeping the required job untouched and
+  # adding this one alongside makes the Windows result enforced without
+  # touching the gate that already protects main.
+  test-windows:
+    name: platform test suites on Windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Platform .mjs suites
+        run: node --test platform/*.test.mjs
+
+      - name: Core and Pi .ts suites
+        run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
+
+      - name: F-006 live recovery proof
+        run: node --experimental-strip-types verification/live-f006-proof.mjs
