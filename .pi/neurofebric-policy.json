@@ -77,7 +77,7 @@
     "ordinary analysis. These are deliberately NOT applied to read or search arguments, so",
     "a grep for 'password' is allowed. The path argument is not scanned either: a file named",
     "passwords.md is not a secret.",
-	"secret is scoped to secret: so vault prose may be authored; a JSON-quoted secret key that slips this gate is still caught by the redaction plane at persistence."
+    "secret is scoped to secret: so vault prose may be authored; a JSON-quoted secret key that slips this gate is still caught by the redaction plane at persistence."
   ],
   "limits": {
     "maxToolCallsPerTask": 40,
