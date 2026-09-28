@@ -1,9 +1,11 @@
 # F-003: Policy violation kills task prematurely
 
 - **ID:** F-003
-- **Status:** Partially resolved. The lifecycle/re-entrancy half is implemented
-  and verified; the policy-denial-semantics half is configuration-driven and
-  partially closed. See "What remains" below.
+- **Status:** RESOLVED. The lifecycle and re-entrancy protections are
+  implemented and verified, and the denial-semantics half is now settled:
+  it is a **configuration-driven** behaviour, pinned by tests on both the
+  legacy and the approval path. No unexplained terminal-state anomaly
+  remains. See "Final disposition" below.
 - **Component:** Task lifecycle, policy preflight, denial handling
 
 ## Description
@@ -78,6 +80,51 @@ the distinction matters:
 So "a policy denial never kills the task" is true for this repository's
 configuration, and is **not** a platform-wide invariant. Any project that
 configures `onViolation: "abort"` will see denials terminate tasks.
+
+## Final disposition: EXPECTED ARCHITECTURAL BEHAVIOR, plus one TEST GAP now closed
+
+The originally observed symptom was real: a single policy rejection reached a
+terminal `Task is FAILED` state. Its mechanism is now fully established, and it
+was **not one cause but two**, which is why it looked inconsistent.
+
+**Cause 1 — unlabelled denials fail closed (the actual bug, now fixed).**
+On the approval path an approval provider used to be handled by *substituting* a
+bare tier policy for the installed one. A declarative denial therefore arrived
+with **no `violation` label at all**. An unlabelled denial is the one case the
+legacy `evaluateToolCall` entry point still fails closed on, so the original F-003
+complaint was reachable on exactly the path an interactive operator uses: one
+boundary violation during an `APPROVAL`-mode run ended the whole task.
+
+This was the same root cause as the approval-policy-composition defect fixed in
+PR #28. With the installed policy authoritative again, a declarative denial
+carries the configured `onViolation` again, so `block` blocks and `abort`
+aborts. The interaction is now tested end to end through the real composition,
+not a stub policy:
+
+- `H` — a declarative `block` denial on the approval path leaves the task
+  alive, and a later compliant call is still allowed. This is the exact
+  expectation in "Expected Behavior" above.
+- `H2` — a declarative `abort` denial on the approval path is terminal, and
+  traces `POLICY_VIOLATION` + `POLICY_ABORTED` + `TASK_FAILED`.
+- `H3` — an approval *refusal* deliberately carries no `violation` and still
+  fails closed on the legacy path. This asymmetry is intentional and is now
+  pinned, so the labelling is not "tidied up" into a block and silently changed
+  into different terminal behaviour.
+
+**Cause 2 — `onViolation: "abort"` is intended, not a defect.** When a project
+configures abort, the same denial is *meant* to end the run. That is the
+documented contract, it is traced, and `H2` pins it.
+
+**Interaction with the tool-call budget.** None causes a terminal state. A
+budget exhaustion is a separate mechanism with its own reason code
+(`TOOL_CALL_BUDGET`), counted per task by the installed policy. Before the
+composition fix the budget was not even metered on the approval path; it is now,
+and the budget denial is an ordinary policy denial subject to the same
+`onViolation` semantics rather than a special case.
+
+**Disposition:** EXPECTED ARCHITECTURAL BEHAVIOR for the abort semantics, and a
+TEST GAP that is now closed for the block semantics on the approval path. No
+unexplained anomaly survives.
 
 ## Related
 

@@ -1,11 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { KernelAdapter } from "./kernel-adapter.ts";
 import { toolDescriptorFromPi } from "./tool-adapter.ts";
-import type { PolicyDecision, PolicyEngine } from "../core/index.ts";
+import { buildPolicy } from "./project-config.ts";
+import { parsePolicyConfig } from "../core/policy-config.ts";
+import type { ApprovalProvider, PolicyDecision, PolicyEngine } from "../core/index.ts";
 
 /**
- * F-003 regression: the no-tool finalisation lifecycle.
+ * F-003 regression: the no-tool finalisation lifecycle, and the denial
+ * semantics that decide whether a rejection ends a run.
  *
  * A policy block never binds an execution, so a turn whose only actions were
  * blocked leaves the task with zero executions. `finishTask` then walks a
@@ -13,7 +19,25 @@ import type { PolicyDecision, PolicyEngine } from "../core/index.ts";
  * tests pin both halves of that: the crash (finalising from a task that has not
  * finished starting) and the misclassification (a blocked tool call read as a
  * dead stream).
+ *
+ * Sections G and H cover the same question from two directions. G drives a stub
+ * policy that returns a hand-built decision. H drives the REAL declarative
+ * composition through the approval path, which is where a substituted policy
+ * used to strip the `violation` label that G depends on.
  */
+
+/** The same locally-constructed rules used by the approval composition suite. */
+const TEST_RULES = {
+  version: 1,
+  deniedTools: [],
+  allowedTools: [],
+  fileRules: [{ pattern: "**", read: "allow", write: "allow" }],
+  destructiveCommandPatterns: ["rm -rf", "format c:"],
+  destructiveCommandTokens: ["rm", "rmdir", "del", "erase", "unlink", "shred", "remove-item"],
+  secretWritePatterns: ["zzcredentialzz", "zztokenzz"],
+  limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
+  onViolation: "block",
+} as const;
 
 const TOOLS = ["read", "bash", "write", "edit"].map((name) => toolDescriptorFromPi({ name, description: name }));
 
@@ -296,4 +320,124 @@ test("F3. a blocked call never becomes an execution", async () => {
   const bound = await kernel.beginToolExecution("b1", "bash", {});
   assert.equal(bound, undefined);
   assert.equal(kernel.diagnostics.toolExecutionCount, 0);
+});
+
+// --- H. the same invariant on the APPROVAL path ------------------------------
+//
+// This is the half of F-003 that no test covered, and the reason it matters
+// is a bug that has since been fixed. On the approval path a provider used to
+// be handled by SUBSTITUTING a bare tier policy for the installed one, so a
+// declarative denial arrived with NO `violation` label at all. An unlabelled
+// denial is the one case the legacy entry point still fails closed on (test
+// G3), which means the original F-003 complaint — one policy rejection
+// terminating the whole task — was still reachable on exactly the path an
+// interactive operator uses.
+//
+// With the installed policy authoritative, a declarative denial carries the
+// configured `onViolation` again, so `block` blocks and `abort` aborts. Both
+// halves are pinned here through the real composition, not a stub policy.
+
+test("H. a declarative `block` denial on the approval path does not fail the task", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "nf-f003-"));
+  try {
+    const workspace = path.join(root, "app");
+    await mkdir(workspace, { recursive: true });
+    const policyConfig = parsePolicyConfig({ ...TEST_RULES, onViolation: "block" }, "test-policy.json");
+    const kernel = new KernelAdapter();
+    kernel.setPolicy(buildPolicy({ policyMode: "APPROVAL", allowedRoots: ["."] }, workspace, policyConfig));
+    kernel.registerTools(TOOLS);
+    await kernel.beginTask("write the report");
+
+    const approving: ApprovalProvider = { async requestApproval() { return true; } };
+    const denied = await kernel.precheckToolCall(
+      "write",
+      "execute",
+      { path: path.join(root, "escape.md"), content: "x" },
+      approving,
+      "h1",
+    );
+
+    // Denied by the workspace boundary, and labelled as a block.
+    assert.equal(denied.decision.decision, "DENY");
+    assert.equal(denied.decision.violation, "block", "a declarative denial must carry the configured violation");
+
+    // The original F-003 complaint: the task must still be alive.
+    assert.notEqual(kernel.currentTask!.status, "FAILED", "a blocked call must not terminate the task");
+    assert.equal(kernel.diagnostics.denialCount, 1);
+
+    // A later compliant call still runs: the denial refused one call, not the run.
+    const later = await kernel.precheckToolCall(
+      "write",
+      "execute",
+      { path: path.join(workspace, "notes.md"), content: "ordinary" },
+      approving,
+      "h2",
+    );
+    assert.equal(later.decision.decision, "ALLOW", "a compliant call after a block must still be allowed");
+    assert.notEqual(kernel.currentTask!.status, "FAILED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("H2. a declarative `abort` denial on the approval path is terminal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "nf-f003-"));
+  try {
+    const workspace = path.join(root, "app");
+    await mkdir(workspace, { recursive: true });
+    const policyConfig = parsePolicyConfig({ ...TEST_RULES, onViolation: "abort" }, "test-policy.json");
+    const kernel = new KernelAdapter();
+    kernel.setPolicy(buildPolicy({ policyMode: "APPROVAL", allowedRoots: ["."] }, workspace, policyConfig));
+    kernel.registerTools(TOOLS);
+    await kernel.beginTask("write the report");
+
+    const approving: ApprovalProvider = { async requestApproval() { return true; } };
+    const denied = await kernel.precheckToolCall(
+      "write",
+      "execute",
+      { path: path.join(root, "escape.md"), content: "x" },
+      approving,
+      "h3",
+    );
+
+    assert.equal(denied.decision.decision, "DENY");
+    assert.equal(denied.decision.violation, "abort");
+    assert.equal(kernel.currentTask!.status, "FAILED", "an aborting violation is the one denial that ends a run");
+
+    const types = kernel.recentEvents(200).map((event) => event.type);
+    for (const expected of ["POLICY_VIOLATION", "POLICY_ABORTED", "TASK_FAILED"]) {
+      assert.ok(types.includes(expected), `expected ${expected} in the trace`);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("H3. an approval refusal carries no violation and still fails closed on the legacy path", async () => {
+  // The deliberate asymmetry: an approval refusal is not a policy violation, so
+  // it carries no `violation` label, and the legacy entry point fails closed on
+  // an unlabelled denial (test G3). Pinned so the labelling contract is not
+  // "tidied up" into a block, which would silently change terminal behaviour.
+  const root = await mkdtemp(path.join(os.tmpdir(), "nf-f003-"));
+  try {
+    const policyConfig = parsePolicyConfig({ ...TEST_RULES, onViolation: "block" }, "test-policy.json");
+    const kernel = new KernelAdapter();
+    kernel.setPolicy(buildPolicy({ policyMode: "APPROVAL", allowedRoots: ["."] }, root, policyConfig));
+    kernel.registerTools(TOOLS);
+    await kernel.beginTask("write the report");
+
+    const refusing: ApprovalProvider = { async requestApproval() { return false; } };
+    const { decision } = await kernel.evaluateToolCall(
+      "write",
+      "execute",
+      { path: path.join(root, "notes.md"), content: "ordinary" },
+      refusing,
+    );
+
+    assert.equal(decision.decision, "DENY");
+    assert.equal(decision.violation, undefined, "an approval refusal is not a policy violation");
+    assert.equal(kernel.currentTask!.status, "FAILED", "an unlabelled denial fails closed on the legacy path");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
