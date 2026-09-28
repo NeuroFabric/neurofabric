@@ -1433,5 +1433,117 @@ entry.
 
 Timeline: measured from commit and CI timestamps — PR 17 CI completed 2026-09-27T16:14:42Z; PR 18 merged the same day at c2e2a9f. Operator timeline testimony was not supplied at close; addenda may ride on this plane.
 
+## D-016: Credentials Vault — intake record, config-amendment provenance, and the fixture carve-out
+
+- **Date:** 2026-09-28
+- **Status:** OPEN
+- **Plane:** Safety (home); touches Execution, Knowledge, Control
+- **Amends:** none
+- **Affects:** `platform/pi/policy-port.test.ts`, the committed secret-scanner
+  config, `docs/handoff.md`, `SUMMARY.md`, `.gitignore`
+
+### Task
+
+Vault for credential material: storage, retrieval, redaction integration, and
+tool-registry wiring. This record is opened by the floor-repair PR; the build
+itself follows the D-016 intake issue.
+
+### Prerequisites
+
+- PR #20 MERGED.
+- PR #21 MERGED at `4bca4f2` (config amendment; survey #3 set S6 — the third
+  entry of the write-pattern list scoped).
+- Session restart complete.
+- This record opens in the floor-repair PR.
+
+### Rulings (operator; verbatim literal source: PR #21's diff)
+
+Abstract transcription only. The literal shape is not reproduced here; cite
+PR #21 to read it. Siblings are cited as entries one, two, and four.
+
+1. The third entry of the write-pattern list is scoped by a trailing colon
+   character.
+2. Deny coverage D1 through D4 is preserved.
+3. Residual documentation-prose shapes stay blocked. Where a shape is
+   conceded, the author discloses it and rewords; it is not silently
+   admitted.
+4. A missed deny is worse than a blocked sentence.
+5. The redaction plane backstops the conceded shape.
+
+### Fixture ruling
+
+`platform/pi/policy-port.test.ts:35` (`LEGACY_RULES`) retains the un-scoped
+third entry BY DESIGN. It is an engine-behavior fixture, not a copy of the
+committed config. It is consumed by tests 3a, 3b, 3c, 3d, and 6, pinning
+deny-on-write / allow-on-read-search semantics against the maximally-strict
+legacy shape, independent of the committed config. It is never synchronized
+with the config.
+
+### Open items
+
+- D-016b — loader survey, to follow D-016.
+- D-017 — loop, parked.
+- CI has no Node pin.
+- `platform/pi/trusted-execution.test.ts:182` — whole-object pin, to be
+  narrowed at D-016's first touch of the project config (survey #4 S-1).
+- OmniRoute — RESOLVED local-only via PR #22 (`d0c061f`). The stale local
+  worktree is retained by design, ignored, and its untracked content is
+  preserved.
+- Guard path-extraction false-positives on prose inside bash command text —
+  three occurrences (D-014 v4 x2, floor-repair x1). Candidate remedy in the
+  guard layer's command-text path scanning; scope: D-016b loader survey or a
+  dedicated micro-task; not addressed here.
+
+### Process notes
+
+(i) **Write-lane rule, canonized.** A denial is never routed around on the
+agent's own initiative. The only permitted path is operator-directed,
+verbatim, and disclosed. "I worked around it" is itself the violation.
+Operator-supplied commands use the least-destructive sufficient form.
+
+(ii) **D-004 carve-out.** The note-line tab alignment executed under an
+explicit one-time operator grant: the command was operator-authored, the
+agent executed it verbatim, and the action is disclosed here. The alignment
+copied four spaces from a sibling measurement, and the JSON was re-validated
+afterwards. D-004 otherwise stands.
+
+(iii) **Provenance.** PR #22 was executed by operator hands between briefs. It
+merged at `d0c061f`, was reconciled in pre-flight, and was re-verified in the
+floor-repair PR's own pre-flight.
+
+(iv) **Supplier-side defect ledger** — five entries this arc, all disclosed:
+a single-quote assumption (PRE-CHECK A); asserted indents, which forced a
+sibling-measurement rewrite; an uncounted 73-character commit subject, caught
+by the guard layer; a JSON-shaped replacement issued into a TypeScript array
+literal, which passed every diff gate and surfaced only in CI (the local-test
+gate is now canonized in consequence); and a force-delete where safe-delete
+sufficed, caught by the deletion guard at zero cost.
+
+**Canonized:** operator-supplied verbatim text is code. It is measured before
+issuance and executed only after local verification.
+
+(v) **Channel grant.** The record, clause, restamp, and hygiene writes in this
+PR were executed via the write-tier tool under an explicit one-time operator
+grant, after the bash-heredoc channel was denied by a `fileRules` false
+positive: the guard path-scanned command text and extracted a prose
+possessive as a path candidate. Third occurrence of the class; D-014 v4 logged
+two. The write-tier channel applies the checks the policy designs for content
+payloads; the grant is channel-scoped and dies with this PR; the systemic
+guard fix is an open item.
+
+(vi) **Rewording disclosure.** Every ruling above is an abstract transcription
+of operator text, not the operator's own words. The transformations are:
+literal shape to bracketed or abstract description; the deny-coverage range
+given as a named span; and the sibling sequence given as entries one, two,
+and four. No ruling was changed in substance, added, or dropped.
+
+### Cross-references
+
+- D-016 intake issue.
+- PR #21 (`4bca4f2`) — config amendment, S6 provenance.
+- PR #22 (`d0c061f`) — OmniRoute local-only.
+- Pin chain: `72412c7`, `77ae3fd`, `d1e9157`.
+- Survey #4.
+
 
 
