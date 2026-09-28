@@ -375,6 +375,56 @@ function extractFromCommand(command: string, origin: string, into: Map<string, P
   }
 }
 
+/**
+ * Inspect the items of an array argument.
+ *
+ * An array can carry a path in three different ways, and all three are
+ * inspected here:
+ *
+ *   1. directly, as strings, when the array itself is a path-bearing name
+ *      (`{ paths: ["a", "b"] }`);
+ *   2. inside the objects it contains, however deeply nested
+ *      (`{ targets: [{ path: "a" }] }`);
+ *   3. through further arrays (`{ paths: [["a"]] }`).
+ *
+ * Case 2 is the one that was previously invisible. `collectFromObject` recursed
+ * into a nested object but returned early on an array, so the same logical
+ * structure was inspectable or invisible depending only on whether it was
+ * wrapped in brackets. Objects inside an array are now walked on exactly the
+ * same terms as an object outside one.
+ *
+ * Only strings sitting under a path-bearing name are taken directly. An array
+ * under some other name contributes its objects, and leaves that are not under
+ * a path-bearing name are not paths.
+ */
+function collectFromArray(
+  items: readonly unknown[],
+  key: string,
+  origin: string,
+  depth: number,
+  into: Map<string, PathOperand>,
+): void {
+  if (depth > 4) return;
+  const direct = PATH_PARAM_NAMES.has(key);
+
+  for (const item of items) {
+    if (typeof item === "string") {
+      if (direct && item.trim() !== "") {
+        into.set(item, { value: item, origin, kind: "schema" });
+      }
+      continue;
+    }
+    if (item === null || typeof item !== "object") continue;
+    if (Array.isArray(item)) {
+      // A further array keeps the enclosing name, so `paths: [[x]]` still
+      // yields `x` rather than dropping it.
+      collectFromArray(item, key, origin, depth + 1, into);
+      continue;
+    }
+    collectFromObject(item, origin, depth + 1, into);
+  }
+}
+
 /** Pull path operands out of a structured payload, by argument name. */
 function collectFromObject(value: unknown, origin: string, depth: number, into: Map<string, PathOperand>): void {
   if (depth > 4 || value === null || typeof value !== "object") return;
@@ -392,13 +442,7 @@ function collectFromObject(value: unknown, origin: string, depth: number, into: 
     }
 
     if (Array.isArray(nested)) {
-      if (PATH_PARAM_NAMES.has(key)) {
-        for (const item of nested) {
-          if (typeof item === "string" && item.trim() !== "") {
-            into.set(item, { value: item, origin, kind: "schema" });
-          }
-        }
-      }
+      collectFromArray(nested, key, origin, depth, into);
       continue;
     }
 
