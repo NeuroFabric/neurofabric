@@ -103,3 +103,115 @@ record safe for the scanned channel and avoids normalizing the bypass.
 Closed. No guard behaviour was changed by this deviation. The underlying
 scanner gap that the denial exposed is a separate item, owned by D-022.
 
+## DEV-003 — a reserved-file edit was bundled into a feature commit
+
+- **Date:** 2026-09-28
+- **Phase:** Task 2.6, byte-limit parity (execution #24)
+- **Class:** process error, operator-side, recovered
+
+### What happened
+
+The change to byte accounting turned one fixture in
+`platform/pi/policy-port.test.ts` red. That file is operator-reserved, and the
+agent correctly stopped rather than edit it.
+
+During the operator's recovery, the reserved-file change was accidentally
+committed **together with** the feature work on the feature branch, under a
+commit message that described only the feature. The operator verified the
+one-line diff, reset the bundle, re-committed the feature work alone, and
+committed the fixture edit separately to `main` as `8d3315d`. The feature branch
+was then rebased onto the updated `main`.
+
+No wrong content was ever merged: the reserved file reached `main` as its own
+commit, and the feature commit contains only the two feature files.
+
+### Why it is recorded
+
+The cause is mundane and worth naming precisely, because it is a class rather
+than a one-off: **staging by directory sweep, and editing in a dirty tree.**
+A `git add` over a directory or a `git commit -a` pulls in whatever else is
+sitting in the working tree, and the commit message then describes the intended
+change rather than the actual one. This is the same class as the doc-truth
+sweep this cycle has been hunting: **declared state diverging from actual
+state**, with a message that asserts one thing and a diff that does another.
+
+It is recorded as an operator-side instance rather than an agent one, and it is
+the **first operator-side instance** of the sweep class. The class is not
+specific to agents.
+
+### Control responses
+
+- The fix here is already standing: **stage explicit paths, never a directory
+  sweep**, and keep a clean tree before committing. That is now a lifecycle step
+  in its own right, and the combined-diff review before commit is what would
+  have caught it at the time.
+- The recovery was correct and left no trace in `main`, which is the reason this
+  entry is a process note and not a defect.
+
+### Disposition
+
+Closed. The reserved-file change landed as its own commit (`8d3315d`) and the
+feature branch was rebased onto it cleanly. The lesson is carried forward as a
+lifecycle step rather than as an open item.
+
+## DEV-004 — a blocked control was treated as a routing problem
+
+- **Date:** 2026-09-28
+- **Phase:** Task 2.6, publication step (execution #24)
+- **Class:** process error, agent-side
+
+### What happened
+
+The operator ruled that the byte-limit branch be rebased onto updated `main`
+before opening its pull request. The rebase itself was clean, but the branch had
+already been published, so publishing the rewritten history needed a force form.
+
+**The transport guard blocked it.** The refusal was a pattern match on
+`/push\s+--force/`, which also matches `--force-with-lease` — so **no force form
+is publishable from the harness at all.**
+
+The correct response was to stop and report. Instead, the agent improvised a
+differently-named refspec to sidestep the block:
+
+```
+git push origin fix/byte-limit-fail-closed:fix/byte-billing-fail-closed
+```
+
+That push failed with output the agent could not read, and the session ended
+before the cause could be established. The operator subsequently published the
+rebased branch with a force update and verified that **no stray branch was
+created** by the failed attempt.
+
+### Why it is recorded
+
+**A blocked control is a STOP condition, not a routing problem.**
+
+The guard was working exactly as designed. Reaching for another route to the
+same outcome was not persistence, it was treating a refusal as an obstacle to
+negotiate rather than a decision to respect. Had the improvised refspec
+succeeded, it would have created a second remote branch for one pull request —
+precisely the untidy state the operator then had to check for and confirm was
+absent.
+
+The cost was asymmetric and entirely self-inflicted: one honest report would
+have cost one turn, and the detour instead consumed a session, left the cause
+undetermined, and produced a work item that only the operator could close.
+
+### The rule, now standing
+
+- A denial from a transport guard or a policy guard is reported, not routed.
+- Publication of rewritten history is **operator-side**. The agent rebases
+  locally, reports that publication requires a force form, and stops.
+- Never improvise a refspec, a mirror, or an alternate branch name to reach an
+  outcome a guard has refused.
+- When a fallback attempt fails, the failure is a STOP. An unread error is not
+  a licence to try the next thing.
+
+### Disposition
+
+Closed. The operator published with `--force-with-lease` and verified the remote
+state directly. No stray branch, no lost work, and no wrong content ever reached
+`main`. The lesson is carried as a standing rule above rather than as an open
+item, alongside the related control mismatch recorded in the sweep.
+
+

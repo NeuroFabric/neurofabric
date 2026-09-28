@@ -2244,3 +2244,132 @@ this cycle.
   INTENTIONALLY UNWIRED, so the exemption is currently latent rather than live.
 - D-019 — the static type gate covering both changed files.
 - `platform/pi/vault-boundary.test.ts` `R-1 / P-1` — the pinned vault behaviour.
+
+## D-023: Write-size accounting is fail-closed over the whole payload
+
+- **Date:** 2026-09-28
+- **Status:** accepted
+- **Amends:** none; the second half of the gap D-022 opened
+- **Affects:** `platform/core/configured-policy.ts`, `platform/pi/write-byte-fail-closed.test.ts`
+
+### Context — the escape hatch, cleared
+
+D-022 split the deny-scan away from the size limit rather than widening the
+shared collector, because widening it would have changed what
+`maxBytesPerWrite` measures. That left the size limit reading the same closed
+allowlist the deny-scan had used, and the same bypass:
+
+```ts
+const CONTENT_PARAM_NAMES = new Set([...7 names...]);
+```
+
+`payloadBytes` counted only those names, at the top level. A large payload
+carried in the harness's camelCase `newText` / `oldText` measured as **zero
+bytes** and so bypassed the cap entirely — the same bypass class, in a different
+control.
+
+Before changing it, the standing escape hatch was checked: is the limit
+deliberately content-fields-only per its written specification?
+`docs/POLICY_PORT.md` line 24 specifies it as **"measured as UTF-8 bytes of the
+write payload"**, and records the legacy engine as having measured
+`len(content.encode("utf-8"))`. A `newText` value is part of the write payload.
+The specification does not nominate one field, so this is a divergence between
+the written spec and the implementation — an implementation gap, not a narrow
+design. The escape hatch does not apply.
+
+### Ruling
+
+`payloadBytes` counts every string value in a write payload at any depth.
+Two things follow, and both are deliberate:
+
+- **Locator fields are included.** A path is part of the call the cap governs.
+- **There is no tool exemption.** A budget binds the vault exactly as it binds
+  any other write. Approval sanctions a write; it does not waive the budget.
+  This is the sharp contrast with the deny-scan, which the operator exempted
+  `vault_store` from in D-022 precisely because the two controls have different
+  jurisdictions. The size limit has no such second authority to defer to.
+
+### Implementation
+
+`collectBilledStrings` walks the payload and is the same walker family as the
+deny-scan's `collectScannedStrings`, with two differences: no locator exemption
+and no tool check. The dead `CONTENT_PARAM_NAMES` allowlist and the dead
+`contentPayloadStrings` method were **removed** rather than left in place. An
+allowlist that no longer governs anything is the exact shape of defect this
+cycle exists to eliminate, and leaving it would invite the next reader to
+believe the size limit is still field-scoped.
+
+### Step 0 outcome — vault tier is consistent in production
+
+The vault billing case turned on a real tension in the evidence: `vault-tools.ts`
+declares `vault_store` as `WRITE`, while `toolDescriptorFromPi` classifies it as
+`CONTROLLED` because it is absent from that file's `riskByTool` table — and the
+size check is WRITE-gated, so under the default fallback the vault would escape
+the budget entirely.
+
+**Production consumes the real descriptors.** The call path is
+`KernelAdapter.registerTools` (`platform/pi/kernel-adapter.ts:565`) to
+`vaultDescriptors()` (`:579`) to `vaultToolDescriptors()`
+(`platform/pi/vault-tools.ts:86`), which returns the descriptor carrying
+`riskLevel: "WRITE"` (`vault-tools.ts:92`). `toolDescriptorFromPi` is a
+separate path serving Pi built-in tools; the vault never routes through its
+risk table. This is also why `R-1 / P-1` fired `DENY` under the fail-closed
+scan rather than passing through to the approval gate.
+
+**No conformance change was needed and none was made.** The alternative
+outcome — production classifying `vault_store` as `CONTROLLED` through the
+default fallback — would have been pre-authorized as mechanical, but it did not
+obtain. No default-fallback semantics were touched.
+
+### The operator fixture commit
+
+The change to byte accounting turned one existing fixture red.
+`platform/pi/policy-port.test.ts` test `4b` wrote `"ok.md"` with
+`"x".repeat(60)` against a 64-byte cap: under the old accounting that was 60 ≤
+64, and under path-inclusive billing it is 5 + 60 = 65 > 64.
+
+That file is **operator-reserved**, so the agent stopped rather than edit it.
+The operator verified the one-line diff and made the change in commit
+`8d3315d` ("test: shrink byte-limit fixture for path-inclusive billing").
+
+The fixture is green across the change, which is the compatibility property
+worth stating: the same input is 50 + 5 = 55 under new billing and 50 ≤ 64
+under old billing, so the assertion holds either side of the change. The
+`repeat(200)` over-budget case in the same test was unaffected.
+
+The bundling of that reserved-file edit into a feature-branch commit, and its
+recovery, are recorded as DEV-003.
+
+### Two vacuous greens caught before merge
+
+Both were caught in this work and are recorded because a green that means
+nothing is worse than a red:
+
+1. **A test that passed for the wrong reason.** The vault budget case initially
+   passed only because `toolDescriptorFromPi` classified `vault_store` as
+   `CONTROLLED`, and a CONTROLLED tool never reaches the size check. The budget
+   was not being evaluated at all. It now registers the real
+   `vaultToolDescriptors()` descriptor, so the assertion tests the budget.
+2. **A cap set below the size of a real path.** With locator fields billed, a
+   64-byte cap is smaller than the sandbox temp path itself (~75 bytes), so
+   *every* write in the suite exceeded it and the "small payload is admitted"
+   case failed. That is why the fixture cap is 512. It is the same mechanism
+   that turned test `4b` red, seen from the other side.
+
+### Consequence
+
+`maxBytesPerWrite` is now a budget on the call rather than on one nominated
+field. The practical effect is that the effective headroom for path-heavy
+writes is smaller than the number alone suggests, because path bytes are
+billed. The operator-side policy note (`_secretWritePatternsNote`, merged in
+`76c91f6`) already states the fail-closed scan scope with both exemptions; the
+billing rule is recorded here and pinned by
+`platform/pi/write-byte-fail-closed.test.ts`.
+
+### Cross-references
+
+- D-022 — the deny-scan half of the same gap, and the source of the split.
+- D-016, D-017 — the vault, whose deny-scan exemption and budget coverage now
+  differ deliberately.
+- D-019 — the static type gate covering both changed files.
+- DEV-003 — the reserved-file bundling and its recovery.

@@ -26,31 +26,6 @@ import type {
  * the trust model would otherwise require approval for.
  */
 /**
- * Argument names that carry the payload a write persists. Used for the
- * write-SIZE limit, so the size limit measures what a write persists.
- *
- * D-022: this set is deliberately NOT the set the secret scan uses. It is an
- * allowlist, and an allowlist is not a boundary: a field name it does not
- * already know about is unscanned, which is how the harness's camelCase
- * `newText` / `oldText` came to bypass the secret rule entirely while
- * `content` was refused. The secret scan is fail-closed instead — see
- * `PATH_PARAM_NAMES` and `collectScannedStrings`.
- *
- * The two therefore disagree on purpose. Broadening this set to match the scan
- * would change what `maxBytesPerWrite` measures, which is a separate control and
- * a separate product decision; it is not changed here.
- */
-const CONTENT_PARAM_NAMES: ReadonlySet<string> = new Set([
-  "content",
-  "contents",
-  "text",
-  "body",
-  "data",
-  "new_string",
-  "old_string",
-]);
-
-/**
  * Field names whose values are LOCATORS — where a write lands — rather than
  * content it persists. These are the ONLY exemption in the secret scan.
  *
@@ -107,6 +82,26 @@ function collectScannedStrings(value: unknown, key?: string): string[] {
   return Object.entries(value as Record<string, unknown>).flatMap(([childKey, child]) =>
     collectScannedStrings(child, childKey),
   );
+}
+
+/**
+ * Every string in a write payload at any depth, locator fields INCLUDED.
+ *
+ * D-023: the size limit is a budget on the call, not on one nominated field. It
+ * previously read the same closed allowlist the deny-scan used, so a large
+ * `newText` or `oldText` measured as zero bytes and bypassed the cap entirely.
+ * `docs/POLICY_PORT.md` specifies the limit as "UTF-8 bytes of the write
+ * payload", so this restores the written spec rather than changing it.
+ *
+ * There is deliberately no tool exemption here, and no locator exemption: a
+ * budget applies to the vault exactly as it applies to any other write.
+ * Approval sanctions a write, it does not waive the budget.
+ */
+function collectBilledStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((item) => collectBilledStrings(item));
+  if (value === null || typeof value !== "object") return [];
+  return Object.values(value as Record<string, unknown>).flatMap((child) => collectBilledStrings(child));
 }
 
 /**
@@ -432,22 +427,6 @@ export class ConfiguredPolicy implements PolicyEngine {
   }
 
   /**
-   * The content a write would actually PERSIST.
-   *
-   * Only content-bearing arguments are returned. The path and the file mode are
-   * deliberately excluded: a file named `passwords.md` is not a secret, and
-   * neither is a document that happens to discuss secrets.
-   */
-  private contentPayloadStrings(input: unknown): string[] {
-    if (input === null || typeof input !== "object" || Array.isArray(input)) return [];
-    const values: string[] = [];
-    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-      if (CONTENT_PARAM_NAMES.has(key)) values.push(...collectStrings(value));
-    }
-    return values;
-  }
-
-  /**
    * UTF-8 bytes of what the call would actually WRITE.
    *
    * The legacy engine measured `args["content"]`, so only the content-bearing
@@ -455,7 +434,7 @@ export class ConfiguredPolicy implements PolicyEngine {
    * reject writes for reasons that have nothing to do with their size.
    */
   private payloadBytes(request: PolicyRequest): number {
-    return this.contentPayloadStrings(request.input)
+    return collectBilledStrings(request.input)
       .reduce((total, text) => total + Buffer.byteLength(text, "utf8"), 0);
   }
 }
