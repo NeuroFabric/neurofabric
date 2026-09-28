@@ -262,15 +262,24 @@ kernel's resource envelope and are independent of the policy file.
 
 **Enforced versus declared — read this before assuming a bound exists.**
 
-Only the four recovery limits below are actually read by an enforcement decision
-today. `chooseRecoveryDetailed` in `platform/core/recovery.ts` consumes exactly
+Five of the entries below are actually read by an enforcement decision today.
+`chooseRecoveryDetailed` in `platform/core/recovery.ts` consumes exactly
 `maxToolRetries`, `maxReplans`, and `maxRecoveryDepth`, and the kernel's
-execution-time bound is `maxExecutionTimeMs`. The remaining entries in
-`DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
+execution-time bound is `maxExecutionTimeMs`. `createArtifact` in
+`platform/core/artifact.ts` enforces `maxArtifactBytes` against the real
+on-disk size of the reference it is asked to register, and that path is live:
+`KernelAdapter` calls it for every declared tool output. The remaining entries
+in `DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
 implementing them is open work, not a latent guarantee. Do not rely on
 `maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
-`maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, or `maxArtifactBytes`
-to reject anything today.
+`maxParallelTasks`, `maxParallelTools`, or `maxOutputBytes` to reject anything
+today.
+
+One caveat on `maxArtifactBytes`: it is enforced **only for a reference that
+already exists on disk**. If the size cannot be read — because the file has not
+been written yet, for example — the check deliberately does not reject, and
+`verifyArtifact` is what later decides whether the reference exists at all. A
+declared output that is never produced is therefore never size-checked.
 
 | Setting | Default | Enforced? |
 | --- | --- | --- |
@@ -278,13 +287,13 @@ to reject anything today.
 | `maxReplans` | 2 | **yes** — task-wide replan budget in `chooseRecoveryDetailed` |
 | `maxRecoveryDepth` | 3 | **yes** — consecutive recovery rounds since the last success |
 | `maxExecutionTimeMs` | 1,800,000 (30 min) | supplied to the recovery options; no independent timer is enforced |
+| `maxArtifactBytes` | 10,485,760 (10 MiB) | **yes** — on-disk size check in `createArtifact`; skipped when the size cannot be read |
 | `maxTaskDurationMs` | 1,800,000 (30 min) | no — declared only |
 | `maxStepDurationMs` | 300,000 (5 min) | no — declared only |
 | `maxToolDurationMs` | 120,000 (2 min) | no — declared only |
 | `maxParallelTasks` | 1 | no — declared only |
 | `maxParallelTools` | 1 | no — declared only; Pi owns tool-execution mode |
 | `maxOutputBytes` | 2,097,152 (2 MiB) | no — declared only |
-| `maxArtifactBytes` | 10,485,760 (10 MiB) | no — declared only |
 
 `maxContextTokens` was **removed** (D-016b). D-009 had wired it to
 `selectContext`, but that function still had no production caller and the
