@@ -241,3 +241,5 @@ policy file.
   Wire up a real (free-tier) search API here when you want live
   search — until then the harness runs with zero external
   dependencies or costs.
+
+OmniRoute/ is a local-only checkout and is not part of this repository.
