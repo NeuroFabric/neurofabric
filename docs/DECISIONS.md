@@ -1791,5 +1791,93 @@ None. This record changes no behaviour and no code. It closes Phase L.
 - `docs/SECURITY.md` residual limitations 7 and 8.
 - `docs/handoff.md`, "Enforced versus declared".
 
+## D-018: Harness budgets raised to 120 tool calls and 30 file writes
+
+- **Date:** 2026-09-28
+- **Status:** harness policy — operator-owned, agent-read-only
+- **Affects:** `.pi/neurofebric-policy.json`, `platform/pi/policy-port.test.ts`
+- **Supersedes:** nothing. This raises the ceilings that were previously
+  fixed at 80 calls and 10 writes.
+
+### Context
+
+The harness ran each agent unit under a ceiling of 80 tool calls and 10 file
+writes, recorded in `.pi/neurofebric-policy.json`. A per-unit budget is a
+guardrail rather than a target, but a guardrail that is reached during normal
+work halts correct progress instead of catching a runaway. The typecheck
+increment reached both ceilings while doing ordinary analysis and repair, and
+the resulting stop was a false positive: the budget, not the work, was the
+constraint.
+
+The operator therefore raised the ceilings to 120 tool calls and 30 file
+writes in commit `74fa0b8`, directly on `main`, before the typecheck unit was
+resumed.
+
+### Decision
+
+- **`maxToolCallsPerTask` is 120. `maxFileWritesPerTask` is 30.** The shipped
+  values are those and not the earlier 80 and 10.
+- **`.pi/neurofebric-policy.json` remains operator-owned.** Agents read it and
+  verify it; they never edit it. This is unchanged by the raise and is not
+  relaxed by it. The file carries `secretWritePatterns` literals, which makes
+  it a self-tripping write-scan target, so guard self-modification is
+  forbidden on those grounds independently.
+- **An agent whose work is blocked by a ceiling parks and reports.** Raising a
+  budget to unblock an agent is the operator's decision, never the agent's.
+- **`platform/pi/policy-port.test.ts` pins the shipped values as tamper
+  evidence.** Test 7 asserts the committed policy file parses and carries the
+  values the project intends to ship. A budget change is therefore not
+  complete until that test is updated in the same cycle; otherwise `main` is
+  red and every later merge is blocked.
+- **A future budget change must update that test in the same cycle.** The test
+  is not a stale-value casualty to be updated opportunistically.
+
+### Consequences
+
+- **Main was red between `74fa0b8` and the fix that followed it.** The raise
+  alone does not keep the tree green; the test update is part of the change.
+- **The assertion message is part of the contract.** When the pinned value
+  changed from 80 to 120, the message "the legacy limit is preserved" became
+  false, because 120 is precisely the value that replaced the legacy limit. A
+  tamper-evidence assertion that misdescribes what it pins is a defect in its
+  own right, so the message was amended to name the operator-raised budget.
+- **This is a harness-policy change only.** It does not alter product
+  `CoreLimits`, and the standing rule that product limits must not be raised
+  to make a test pass remains fully in force.
+
+### Alternatives considered
+
+- **Raise the ceiling from inside the agent session.** Rejected. It would make
+  the guardrail self-modifying and would let a workload that overruns a budget
+  quietly raise it.
+- **Split the work into smaller units to fit the old ceiling.** Rejected. The
+  increment was correctly scoped; shrinking the work to fit a guardrail
+  degrades the work rather than correcting the guardrail.
+- **Raise only the call ceiling and not the write ceiling.** Rejected. Both
+  were reached, and a partial raise would predictably stall again on the next
+  file-heavy unit.
+
+### Migration
+
+None. No runtime behaviour changes. The shipped configuration values and the
+test that pins them move together in this commit.
+
+### Verification
+
+- `platform/pi/policy-port.test.ts` test 7 asserts `maxToolCallsPerTask` is
+  120 and `maxFileWritesPerTask` is 30, and the assertion message names the
+  operator-raised budget.
+- The full suite is green on this commit: 22 platform `.mjs` tests, 359
+  TypeScript tests, and the 21-check F-006 live recovery proof.
+- No agent edit of `.pi/neurofebric-policy.json` is present in this change;
+  both the policy file and the test were applied by the operator and verified,
+  not written, by the agent.
+
+### Cross-references
+
+- Commit `74fa0b8` — the operator's budget raise on `main`.
+- D-019 — the typecheck gate whose unit work motivated the raise.
+- `platform/pi/policy-port.test.ts` — test 7, the shipped-value pin.
+
 
 
