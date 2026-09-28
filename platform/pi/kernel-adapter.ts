@@ -671,18 +671,37 @@ export class KernelAdapter {
       }));
       return { decision, task: this.task };
     }
-    // An approval provider must never be able to *replace* the installed trust
-    // model. In TRUSTED_PROJECT mode it is ignored outright, so no caller can
-    // escalate a hard denial by passing an always-approving provider.
+    // The INSTALLED policy is the policy that evaluates every call. An approval
+    // provider resolves a REQUIRE_APPROVAL; it never becomes the policy. In
+    // TRUSTED_PROJECT mode it is ignored outright, so no caller can escalate a
+    // hard denial by passing an always-approving provider.
+    //
+    // This is what makes the declarative controls survive APPROVAL mode. When a
+    // provider was supplied by substituting a bare tier policy here, every
+    // configured rule — the workspace boundary, the destructive-command and
+    // deletion guards, the secret-write guard, the tool name lists and the
+    // configured limits — was discarded, and an interactive operator who
+    // answered "yes" then granted the call the policy had denied.
     const trusted = this.policy.mode === "TRUSTED_PROJECT";
-    const policy = !trusted && approval ? new DefaultPolicy(approval) : this.policy;
     const request = { taskId: this.task.taskId, tool, operation, input };
-    // Evaluate first so that an approval prompt is traced even when it is granted.
-    const required = policy.evaluate(request);
-    const decision = !trusted && approval ? await policy.evaluateWithApproval(request) : required;
+    // Evaluated EXACTLY ONCE, by the installed policy. A second evaluation
+    // would consume a second unit of a metered budget for a single call, so
+    // resolution of a REQUIRE_APPROVAL is done against the decision this
+    // already produced rather than by asking the policy again.
+    const required = this.policy.evaluate(request);
+    let decision: PolicyDecision = required;
 
     if (required.decision === "REQUIRE_APPROVAL") {
+      // Traced before it is resolved, so the prompt is visible in the trace
+      // even when it is granted.
       await this.events.emit(event("APPROVAL_REQUIRED", this.task.taskId, { tool: toolName, toolCallId }));
+      if (!trusted && approval) {
+        // The one and only thing a provider may do. It is reachable only for a
+        // decision the policy left open, so it can neither override a denial
+        // nor widen a rule the policy already applied.
+        const approved = await approval.requestApproval(request);
+        decision = approved ? { decision: "ALLOW" } : { decision: "DENY", reason: "Approval denied" };
+      }
     }
 
     // Task identity is re-checked HERE, immediately before the first task-owned
@@ -748,10 +767,10 @@ export class KernelAdapter {
     // of learning about the limit only when the next call is denied.
     //
     // It runs AFTER the stale guard above, so a superseded handler can neither
-    // read nor write the newer task's budget state, and only when the installed
-    // policy is the one that actually evaluated the call: passing an approval
-    // provider substitutes a tier policy, and that one does not meter.
-    if (decision.decision === "ALLOW" && policy === this.policy) {
+    // read nor write the newer task's budget state. The installed policy is now
+    // always the engine that evaluated the call, so this telemetry is wired on
+    // the approval path as well as the no-provider one.
+    if (decision.decision === "ALLOW") {
       const budget = this.policy.toolBudget?.(request);
       if (budget) {
         this.lastBudget = budget;
