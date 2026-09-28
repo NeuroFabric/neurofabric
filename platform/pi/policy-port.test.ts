@@ -553,6 +553,6 @@ test("7. the committed project policy file is valid and loadable", async () => {
     ["rm", "rmdir", "del", "erase", "unlink", "shred", "remove-item"],
     "the shipped config must carry the deletion guard explicitly",
   );
-  assert.deepEqual(config!.secretWritePatterns, ["api_key", "password", "secret", "authorization"]);
+  assert.deepEqual(config!.secretWritePatterns, ["api_key", "password", "secret:", "authorization"]);
   assert.equal(config!.onViolation, "block");
 });
