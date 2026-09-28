@@ -127,6 +127,8 @@ agent-harness/
   platform/            the Neurofebric implementation (TypeScript)
     core/              policy, boundary, artifacts, recovery, redaction
     pi/                Pi kernel adapter, tool descriptors, vault tools
+                        (the vault is built and tested but intentionally not
+                        wired into the extension — see D-017)
   .pi/                 project config, policy, and the orchestrator extension
   skills/              reusable SKILL.md procedures
   docs/                architecture, security, policy port, handoff

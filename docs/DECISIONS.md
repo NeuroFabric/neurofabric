@@ -1689,5 +1689,107 @@ and four. No ruling was changed in substance, added, or dropped.
 - Pin chain: `72412c7`, `77ae3fd`, `d1e9157`.
 - Survey #4.
 
+---
+
+## D-017: The credentials vault stays unwired — ARCHITECTURAL DECISION, INTENTIONALLY UNWIRED
+
+- **Date:** 2026-09-28
+- **Status:** architectural decision — intentionally unwired
+- **Affects:** `platform/core/vault.ts`, `platform/pi/vault-tools.ts`, the
+  production extension, and any future claim that the vault is a live control
+- **Supersedes:** nothing. D-016 built the vault; this decides its deployment.
+
+### Context
+
+D-016 built a credentials vault: five tool descriptors, per-call approval on
+unredacted reads, redaction on every audit event, and a boundary around the
+declared output. Phase L of the hardening backlog asked two questions: can
+enabling the vault bypass the core security model, and is it actually
+reachable in production.
+
+### Decision
+
+**The vault is NOT wired into the production extension. Leave it exactly as it
+is.** The capability remains built, tested, and safe by construction. No wiring
+is to be implemented.
+
+### Rationale and evidence
+
+**1. Enabling it cannot bypass the core security model.**
+
+- Vault tools are ordinary `ToolDescriptor` values registered in the kernel
+  registry. They reach execution through the same `precheckToolCall` choke
+  point as every other tool, so no control is skipped by being a vault tool.
+- `vault_reveal` is declared CONTROLLED tier. The measured policy engine
+  therefore returns `REQUIRE_APPROVAL` for it on every call, and the approval is
+  recorded in the precheck trace before the handler runs.
+- **No vault tool accepts a path parameter.** The vault file location comes
+  from operator configuration, never from tool input, so there is no
+  tool-supplied path for the workspace boundary to miss.
+- The value field of `vault_store` sits outside the engine's content write scan
+  by design. This is not reopened here: a local deny-scan could only fire on a
+  store the operator had already approved, so the approval is the sanction. It
+  was reasoned in D-016.
+
+**2. It is doubly unreachable in production — two independent conditions, both
+holding.**
+
+- The extension constructs `new KernelAdapter()` with no vault wiring and never
+  calls `setVault`.
+- The committed policy document carries no `vault` block.
+
+Because the conditions are independent, adding a `vault` block to the policy
+alone would still not make the tools reachable. This is stronger than "ships
+dark by configuration".
+
+**3. No product requirement justifies the exposure.** Wiring a
+credential-revealing surface into the default execution path is a security
+posture change. The vault is safe today precisely because it is unreachable.
+
+### Consequences
+
+- **The vault is NOT a live production control and must never be described as
+  one.** Any documentation, report, or operator briefing implying the vault
+  currently protects credentials is wrong and must be corrected.
+- The capability is retained deliberately. It is not accidental dead code: it
+  is a built, tested, deliberately undeployed capability.
+- **Enabling it requires explicit future operator sign-off plus a security
+  review of the wiring itself.** That review must cover at minimum: the
+  `setVault` call site, whether the operator-supplied vault path should itself
+  be subject to the workspace boundary, and whether the `retrieveMode` default
+  is safe for a live deployment.
+
+### Alternatives considered
+
+- **Wire it now.** Rejected. It would put a value-disclosing tool on the default
+  path with no product requirement behind it, converting a safe capability into
+  an active one.
+- **Delete the vault.** Rejected. The capability is correct and its tests are an
+  asset. Deleting reviewed, tested security code to solve a documentation
+  problem is the wrong trade; this record addresses the documentation instead.
+- **Leave the status ambiguous.** Rejected. Ambiguity is what let the question
+  go unanswered through two hardening phases.
+
+### Migration
+
+None. This record changes no behaviour and no code. It closes Phase L.
+
+### Verification
+
+- Reachability: `platform/pi/kernel-adapter.ts` builds the vault descriptor list
+  from `vaultToolsEnabled(this.vault)`, and `this.vault` is only ever set by
+  the constructor option or by `setVault`. Neither is reached from the
+  extension.
+- Control posture: `platform/pi/vault-boundary.test.ts` drives the descriptors
+  through `precheckToolCall` and pins the CONTROLLED-tier approval.
+- Residual limitation 7 in `docs/SECURITY.md` records the same fact for
+  operators who read the security document rather than the decision log.
+
+### Cross-references
+
+- D-016 — the vault intake record this decision disposes of.
+- `docs/SECURITY.md` residual limitations 7 and 8.
+- `docs/handoff.md`, "Enforced versus declared".
+
 
 
