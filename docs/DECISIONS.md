@@ -1272,6 +1272,8 @@ has been repaired, and the residual is recorded as a residual.
    place of `[^|]*`; the pipe-guard design point is superseded.
 6. §5 staleness corrected: nine rows; matrix lives in
    `platform/core/refspec-guard.test.ts`.
+   [Superseded — survey #4 N-3: the D-014-era nine-row figure gives way to
+   the eleven-row final state recorded in D-015.]
 7. Grep self-denial recorded: the guard denies mentions, not only acts.
    Deny-safe; refinement deferred, no action.
 8. Implementation-run halt recorded: budget exhaustion at PR creation;
