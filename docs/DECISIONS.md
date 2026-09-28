@@ -757,6 +757,14 @@ change. They are fenced, tested as-is, and carried forward.
    intuitive behaviour, so a future decision on the required-source policy is a
    deliberate change rather than a silent one.
 
+   > **[Resolved — D-020, 2026-09-28.]** Task C is decided: a required source is
+   > admitted over budget, so `maxTokens` is a soft cap for required sources and a
+   > hard cap for optional ones. The second guard was deleted. D-016b is
+   > superseded on this point only — "may stand unchanged" was permission, not
+   > prohibition. One factual correction to the paragraph above: the `D009.2c`
+   > pin was a **passing** test that asserted the defect, not a failing one, so
+   > the suite read green throughout. It now asserts the D-020 behaviour.
+
 ### Alternatives rejected
 
 - **Implement the six removed limits properly.** Each would have required a new
@@ -1931,3 +1939,104 @@ under `platform/` imports typescript.
 ### Cross-references
 
 - D-018 — the budget raise this work motivated.
+
+## D-020: A required context source is admitted over budget
+
+- **Date:** 2026-09-28
+- **Status:** accepted
+- **Amends:** D-009 (item 2, Task C), D-016b
+- **Affects:** `platform/core/context-memory.ts`, `selectContext`
+
+### Context
+
+`selectContext` guarded each source twice:
+
+```ts
+if (used + source.estimatedTokens > maxTokens && !source.required) continue;
+if (used + source.estimatedTokens > maxTokens) continue;
+```
+
+The first guard exempts a required source. The second carries no exemption, so
+it caught the same source one line later and the exemption was dead code. The
+effect was that a required source — by definition one the caller must not run
+without — was dropped exactly like an optional one, and a budget below its
+estimated size returned an empty selection. A required source of 10 000 tokens
+under a budget of 100 silently disappeared.
+
+D-009 wired `maxContextTokens` to this function, and wiring a cap is what made
+the path reachable. D-016b then removed `maxContextTokens` and ruled that the
+behaviour could stand, downgrading the defect from outstanding CoreLimits work
+to a known one. The pin `D009.2c` was left in place so that a future decision
+on the required-source policy would be a deliberate act with a test to turn
+green, rather than a silent edit.
+
+One correction to how that pin is described. `D009.2c` was not a failing or
+skipped test. It was a **passing** test that asserted
+`selectContext([optional, required], 100)` deep-equal `[]` — it encoded the
+defect as the contract, so the suite reported 359/359 green while the defect
+stood. Its comment said it was "deliberately left RED relative to the intuitive
+behaviour", which describes the gap to the intended behaviour, not a red suite.
+The function also has no production caller, so nothing outside the test file
+depended on the pinned behaviour.
+
+### Ruling
+
+Option A. `maxTokens` is a **soft cap for required sources and a hard cap for
+optional ones**. A required source the budget cannot cover is still admitted. An
+optional source that does not fit is still dropped, exactly as before.
+
+The fix is the deletion of the second guard, keeping the first. Nothing else in
+the function changed: no source is reordered, no field is added to the return
+value, and the optional path is untouched.
+
+### Rationale
+
+The dead exemption is written evidence of the original intent. An author who
+writes `&& !source.required` and then has it nullified one line later intended
+required sources to be exempt; the second guard defeated the first by accident,
+not by decision. D-020 repairs the code to its embedded intent rather than
+inventing semantics the function never expressed.
+
+D-016b is superseded on this single point. "The existing behaviour may stand
+unchanged" was permission, not prohibition, and the operator has now chosen to
+spend the change.
+
+A required source was rejected because it would let a caller unknowingly run
+against a context missing something it was told it could rely on, and because
+truncation is silent content loss with no signal to the caller. It was rejected
+as a contract change heavier than the defect it fixes. Leaving the behaviour
+unchanged was rejected because a self-contradictory guard pair — one branch that
+exempts, immediately followed by one that does not — must not survive a release
+audit as shipped code.
+
+### Consequence
+
+A required source charges its full `estimatedTokens` against `used` exactly as
+an optional one does, so a later optional source is measured against the true
+remaining budget. Softness is the exemption from the drop decision, not an
+unaccounted cost; without the charge, over-admitting a required source would
+hand every following optional source a free allowance. `D009.2d` pins this
+specifically, because it is the failure mode a naive reading of "soft cap"
+would introduce.
+
+The over-admission is **not** signalled in the return value, which remains a
+plain `ContextSource[]`. A caller needing to know the budget was exceeded must
+compare its own `estimatedTokens` figures against its own budget — the same
+arithmetic this function performs. Fencing the shape would have changed the
+return type for every caller to carry information the caller already holds.
+
+### Value, immediate
+
+`D009.2c` turned green deliberately, with its assertion inverted from the defect
+to the ruling. Four cases now cover the boundary: admission over budget
+(`D009.2c`), the charge against the optional budget (`D009.2d`), multiple
+over-budget required sources and preserved priority order (`D009.2e`), and the
+hard cap when nothing is required (`D009.2f`). The optional-only boundary was
+already pinned by `D009.2` and `D009.2b`, both of which pass unchanged.
+
+### Cross-references
+
+- D-009 item 2 — the fenced defect this record resolves.
+- D-016b — superseded on the required-source point only.
+- D-018 — the budget raise this work is adjacent to.
+- D-019 — the static type gate that covers this file.

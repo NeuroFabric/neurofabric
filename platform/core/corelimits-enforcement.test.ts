@@ -144,44 +144,86 @@ test("D009.2b an explicit budget still wins, and a larger one admits both", () =
   assert.equal(selectContext(two, 200).length, 2, "a budget above the total must admit both");
 });
 
-test("D009.2c a required source is dropped by the budget when it does not fit", () => {
-  // DEFECT, PINNED AS-IS — Task C. The test name states what the code does,
-  // which is the opposite of what the name previously claimed.
+test("D009.2c a required source is admitted over budget, an optional one is not", () => {
+  // RESOLVED (Task C, D-020). This test previously PINNED THE DEFECT and
+  // asserted `selectContext([optional, required], 100)` was `[]` — i.e. a
+  // required source of 10 000 tokens silently vanished under a budget of 100.
+  // It was a PASSING test, not a skipped or failing one: it encoded the wrong
+  // behaviour as the contract, so the suite stayed green while the defect
+  // stood. D-020 is the deliberate act that pin was held open for.
   //
-  // `selectContext` guards each source twice:
+  // The cause was a self-contradictory guard pair:
   //
   //   if (used + source.estimatedTokens > maxTokens && !source.required) continue;
   //   if (used + source.estimatedTokens > maxTokens) continue;
   //
-  // The first guard exempts a required source. The second has no exemption, so
-  // it catches the same source one line later and the exemption is dead. A
-  // required source is therefore dropped exactly like an optional one, and a
-  // budget below its estimated size yields an empty selection — a required
-  // source, by definition something the caller must not run without, silently
-  // disappears.
+  // The first exempts a required source; the second, unexempted, caught the
+  // same source one line later. The exemption was dead code. D-020 kept the
+  // first guard and deleted the second, repairing the code to the intent the
+  // dead branch was written evidence of.
   //
-  // D-009 wired `maxContextTokens` to this function. Wiring a cap is what
-  // makes the cap real, and this is what enforcing it revealed.
-  //
-  // D-016b removed `maxContextTokens`, which ends this defect's status as a
-  // CoreLimits requirement: the operator ruled that Task C is not part of the
-  // removal and that the existing behaviour may stand. The pin therefore now
-  // documents a known `selectContext` defect rather than outstanding CoreLimits
-  // work. It is deliberately left RED relative to the intuitive behaviour — a
-  // required source that does not fit should arguably survive — so that if a
-  // future task does decide the required-source policy, the change is a
-  // deliberate one with a failing test to turn green, not a silent edit. The
-  // budget this test supplies is now passed explicitly, because the declared
-  // default it used to rely on no longer exists.
+  // `maxTokens` is now a SOFT cap for required sources and a HARD cap for
+  // optional ones. The required source survives; the optional one does not.
   const required = { id: "r", content: "r", scope: "TASK", estimatedTokens: 10_000, priority: 1, required: true } as ContextSource;
   const optional = { id: "o", content: "o", scope: "TASK", estimatedTokens: 10_000, priority: 1, required: false } as ContextSource;
 
-  assert.deepEqual(selectContext([optional, required], 100), []);
+  assert.deepEqual(selectContext([optional, required], 100).map((s) => s.id), ["r"]);
 
-  // A required source that does fit the budget is still admitted, so the
-  // defect is confined to the over-budget case and not to `required` itself.
+  // A required source that does fit the budget is admitted exactly as before,
+  // so the change is confined to the over-budget case.
   const small = { ...required, estimatedTokens: 40 };
   assert.deepEqual(selectContext([small], 100).map((s) => s.id), ["r"]);
+});
+
+test("D009.2d an admitted required source is charged against the optional budget", () => {
+  // D-020: the soft cap exempts a required source from the DROP decision, not
+  // from the ACCOUNTING. A required source still adds its full
+  // `estimatedTokens` to `used`, so a later optional source is measured
+  // against the true remainder. Without this, over-admitting a required source
+  // would silently hand every following optional source a free allowance.
+  const required = { id: "r", content: "r", scope: "TASK", estimatedTokens: 150, priority: 10, required: true } as ContextSource;
+  const fits = { id: "fits", content: "f", scope: "TASK", estimatedTokens: 40, priority: 5, required: false } as ContextSource;
+  const spill = { id: "spill", content: "s", scope: "TASK", estimatedTokens: 60, priority: 9, required: false } as ContextSource;
+
+  // 150 + 60 = 210 > 200, so `spill` is dropped even though it is the
+  // higher-priority optional. 150 + 40 = 190 <= 200, so `fits` is admitted.
+  // `spill` would have been admitted on its own merits against a fresh budget.
+  assert.deepEqual(selectContext([required, fits, spill], 200).map((s) => s.id), ["r", "fits"]);
+
+  // Widen the budget past the total and every source is admitted. This proves
+  // the drop above came from the accumulated `used` and not from a fixed
+  // allowance reserved for optional sources.
+  assert.deepEqual(selectContext([required, fits, spill], 250).map((s) => s.id), ["r", "spill", "fits"]);
+});
+
+test("D009.2e every over-budget required source is admitted, in priority order", () => {
+  // D-020: the exemption is per-source, not a one-shot. Each required source
+  // is admitted on its own merits however far over budget it lands.
+  const req = (id: string, priority: number, estimatedTokens: number): ContextSource =>
+    ({ id, content: id, scope: "TASK", estimatedTokens, priority, required: true }) as ContextSource;
+
+  const three = [req("a", 3, 10_000), req("b", 2, 20_000), req("c", 1, 30_000)];
+
+  // Priority-descending order is preserved and is NOT disturbed by the budget.
+  assert.deepEqual(selectContext(three, 100).map((s) => s.id), ["a", "b", "c"]);
+
+  // A lone required source is admitted against a zero budget.
+  assert.deepEqual(selectContext([req("solo", 1, 99_999)], 0).map((s) => s.id), ["solo"]);
+});
+
+test("D009.2f the cap stays hard when no source is required", () => {
+  // D-020 boundary: the exemption is scoped to `required` and must not become
+  // a general bypass. With no required source in the set the budget is
+  // enforced exactly as it was before the change, which is what D009.2 and
+  // D009.2b already pin.
+  const opt = (id: string, estimatedTokens: number): ContextSource =>
+    ({ id, content: id, scope: "TASK", estimatedTokens, priority: 1, required: false }) as ContextSource;
+
+  // A single over-budget optional is still dropped outright.
+  assert.deepEqual(selectContext([opt("a", 10_000)], 100), []);
+
+  // An optional-only set still drops the source that no longer fits.
+  assert.deepEqual(selectContext([opt("a", 100), opt("b", 100)], 150).map((s) => s.id), ["a"]);
 });
 
 // --- 3. maxArtifactBytes is enforced ----------------------------------------

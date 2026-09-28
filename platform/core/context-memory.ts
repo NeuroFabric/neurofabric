@@ -13,6 +13,24 @@ import type { ContextSource, MemoryRecord, MemoryStore, ValidationResult } from 
  * `maxTokens` is a budget over the CALLER's own `estimatedTokens` figures. This
  * is arithmetic over an attributed estimate, not a token count: no tokenizer
  * runs here and no estimate is validated.
+ *
+ * D-020: `maxTokens` is a SOFT cap for required sources and a HARD cap for
+ * optional ones. A required source the budget cannot cover is still admitted,
+ * because a required source is by definition one the caller must not run
+ * without, and dropping it returned a context the caller had been told it could
+ * rely on. An optional source that does not fit is still dropped as before.
+ *
+ * A required source charges its full `estimatedTokens` against `used` exactly
+ * as an optional one does, so a later optional source is measured against the
+ * TRUE remaining budget rather than an unearned one. Softness is the exemption,
+ * not an unaccounted cost.
+ *
+ * The over-admission is NOT signalled in the return value, which remains a
+ * plain `ContextSource[]`. A caller who needs to know the budget was exceeded
+ * must compare its own `estimatedTokens` figures against its own budget, the
+ * same arithmetic this function performs. Fencing the shape here would have
+ * changed the return type for every caller to carry information the caller
+ * already holds.
  */
 export function selectContext(sources: ContextSource[], maxTokens: number): ContextSource[] {
   const selected: ContextSource[] = [];
@@ -21,7 +39,6 @@ export function selectContext(sources: ContextSource[], maxTokens: number): Cont
   const optional = sources.filter((source) => !source.required).sort((a, b) => b.priority - a.priority);
   for (const source of [...required, ...optional]) {
     if (used + source.estimatedTokens > maxTokens && !source.required) continue;
-    if (used + source.estimatedTokens > maxTokens) continue;
     selected.push(source);
     used += source.estimatedTokens;
   }
