@@ -110,11 +110,7 @@ agent-harness/
 |   |-- neurofebric-policy.json
 |   |-- neurofebric.json
 |   `-- settings.json
-|-- core/                    # Legacy Python harness internals
-|-- agents/                  # Agent definitions
-|-- tools/                   # Tool implementations
-|-- policies/                # YAML rule files
-|-- config/                  # settings.yaml
+|-- policies/                # Historical provenance for the policy port (not read at runtime)
 |-- platform/
 |   |-- core/                # Orchestrator core modules
 |   |-- pi/                  # Pi kernel integration
@@ -126,13 +122,12 @@ agent-harness/
 |   |-- log-analysis/SKILL.md
 |   |-- report-writer/SKILL.md
 |   `-- structured-data/SKILL.md
-|-- main.py
-|-- memory/
-|-- OmniRoute/               # Provider extension integration
+|-- policies/                # Historical provenance for the policy port (not read at runtime)
+|-- memory/                  # Project-memory notes
+|-- OmniRoute/               # Provider extension integration (local-only checkout)
 |-- docs/
 |-- reports/                 # All gauntlet results (A-H)
-|-- requirements.txt
-|-- tests/
+|-- tests/                   # Fixtures consumed by the TypeScript suites
 |-- verification/
 |   |-- findings/
 |   |-- fixes/

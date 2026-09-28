@@ -7,7 +7,7 @@ This project is a **personal, local agent platform** built on **Pi** (the genera
 - **Primary runtime:** Pi (agent loop, context management, model calls, tool execution)
 - **Orchestrator:** A thin Pi extension (`platform-orchestrator.ts`) that provides workflow guidance, skill discovery, execution tracing, and a conservative permission gate.
 - **Model provider:** **OmniRoute** is the canonical provider (via `omniroute-pi-ext-integration`). Non‑default fallbacks (`pi-free`, `@billjr99/pi-openai-compat`) are documented as escape hatches and kept off by default.
-- **Old Python harness:** Remains as a reference implementation under `core/`, `agents/`, `tools/`, and `policies/` — not loaded by Pi.
+- **Old Python harness:** **Removed** (D-016c / F-002). It no longer exists in this repository. `platform/` (TypeScript) is the single active implementation. `policies/default_policy.yaml` is retained only as the provenance record of the policy port and is read by no runtime.
 
 ## 2. Architecture
 
@@ -110,9 +110,8 @@ Next implementation priority (operator-set): CoreLimits enforcement / source-of-
 
 ### Project Structure
 
-The platform is TypeScript under `platform/`. The Python directories below are a
-**legacy reference implementation** — retained for comparison, not loaded by Pi,
-and not part of the build or the test suites (see §1 and `AGENTS.md`).
+The platform is TypeScript under `platform/`, and it is the only implementation.
+The Python sample engine that once sat alongside it has been deleted (see §1).
 
 ```
 agent-harness/
@@ -124,12 +123,7 @@ agent-harness/
 ├── verification/         # Findings, scenarios, and the headless F-006 proof
 ├── docs/                 # Architecture, SKILL_SPEC, SECURITY, handoff, etc.
 ├── skills/               # file-analysis, log-analysis, report-writer, structured-data
-├── core/                 # LEGACY Python reference: LLM client, policy engine, agent loop
-├── agents/               # LEGACY Python reference: agent definitions
-├── tools/                # LEGACY Python reference: tool implementations
-├── policies/             # LEGACY Python reference: YAML rule files
-├── config/               # LEGACY Python reference: settings.yaml
-├── main.py               # LEGACY Python reference: CLI entry point
+├── policies/             # Provenance record of the policy port; read by no runtime
 └── SUMMARY.md            # This document
 ```
 

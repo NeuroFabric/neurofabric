@@ -2,7 +2,7 @@
 
 A personal, local agent platform built on Pi. Pi is the underlying agent runtime; this project adds a domain-agnostic orchestration layer, reusable skills, and controlled tool integration around it.
 
-The repository also retains an older Python harness as a separate reference implementation. New general-purpose agent work should use Pi and the project resources under `.pi/` and `skills/`.
+The single active implementation is the TypeScript platform under `platform/`, driven by the Pi extension. The older Python sample harness that once lived alongside it has been removed (see `verification/findings/F-002-dual-policy-engines.md`); there is no second engine and no Python in the execution path.
 
 ## What We Are Building
 
@@ -75,9 +75,17 @@ The policy and trust-boundary suites are `platform/core/policy.test.ts` (boundar
 
 The first live kernel path is covered by `platform/pi/kernel-adapter.test.ts` and the domain-neutral smoke test `platform/pi/smoke.test.ts`. The smoke test exercises task creation, planning, plan validation, policy approval, execution observation, validation, provenance, and completion without a real model or credentials.
 
-## Existing Python Harness
+## Python Sample Harness (removed)
 
-The older Python implementation remains available under `core/`, `agents/`, `tools/`, and `policies/`. It has its own JSON action loop, LLM client, and policy engine. It is not loaded by Pi and is not the target of the new orchestrator implementation.
+The older Python implementation — its CLI entry point, agent runner, LLM
+client, policy engine, agents, and file tools — has been **deleted from this
+repository**. It is not present, not loaded by Pi, and not part of any build or
+test path. `platform/` (TypeScript) is the single active implementation.
+
+One artefact is retained deliberately: `policies/default_policy.yaml` is the
+provenance record of where the kernel's declarative rules were ported from. No
+runtime reads it. See [docs/POLICY_PORT.md](docs/POLICY_PORT.md) and
+[verification/findings/F-002-dual-policy-engines.md](verification/findings/F-002-dual-policy-engines.md).
 
 ## Configuration
 
@@ -116,38 +124,42 @@ trace.
 
 ```
 agent-harness/
-  core/               harness internals (LLM client, policy engine, agent loop)
-  agents/             agent definitions (e.g. deep_research_agent.py)
-  tools/              tool implementations agents can call
-  policies/           YAML rule files — the security layer
-  config/             settings.yaml — pick your LLM backend here
-  workspace/          sandbox — the ONLY folder agents can touch
-  main.py             CLI entry point
+  platform/            the Neurofebric implementation (TypeScript)
+    core/              policy, boundary, artifacts, recovery, redaction
+    pi/                Pi kernel adapter, tool descriptors, vault tools
+  .pi/                 project config, policy, and the orchestrator extension
+  skills/              reusable SKILL.md procedures
+  docs/                architecture, security, policy port, handoff
+  verification/        findings, live proofs, gauntlet scenarios
+  policies/            historical provenance for the TypeScript policy port
+  tests/fixtures/      test fixtures consumed by the TypeScript suites
+  reports/             gauntlet output
+  memory/              project-memory notes
 ```
 
-## 1. Install Python (Windows)
+## 1. Requirements
 
-1. Download Python 3.11+ from https://python.org/downloads (check
-   "Add Python to PATH" during install).
-2. Confirm it worked — open **PowerShell** and run:
-   ```
-   python --version
-   ```
+- Node.js 22 or newer. The project has **no runtime dependencies** and no
+  install step; the suites run on bare node.
+- A model provider. See the backend options below.
 
-## 2. Set up the project
+## 2. Run the test suites
 
-Open PowerShell in this folder and run:
+The same three commands CI runs:
 
-```powershell
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+```bash
+node --test platform/*.test.mjs
+node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
+node --experimental-strip-types verification/live-f006-proof.mjs
 ```
 
-You'll need to run `venv\Scripts\activate` every time you open a
-new terminal to work on this project.
+## 3. Set up a model provider
 
-## 3. Set up the LLM backend: OmniRoute (default)
+Pi owns the model call. The provider is configured in Pi, not in this
+repository — credentials belong in Pi's credential store or an
+environment variable, never in a file in this project.
+
+### OmniRoute (default)
 
 OmniRoute is a self-hosted gateway that gives you access to 200+ LLM
 providers — many with free tiers — through one local endpoint. This
@@ -166,12 +178,6 @@ laptop can run.
 3. Open the OmniRoute dashboard it prints on startup to connect
    free-tier providers (it walks you through this).
 
-`config/settings.yaml` is already set to `llm_backend: omniroute`
-with `model: "auto"`, which lets OmniRoute pick a capable free
-model automatically. To pin a specific model or preset instead
-(e.g. a cost-optimized coding preset), change the `omniroute.model`
-value.
-
 ### Alternative backends
 
 **Ollama** — fully local, no gateway, no internet needed once the
@@ -181,65 +187,53 @@ model is downloaded:
    ollama pull llama3.1:8b
    ```
    (needs ~8GB free RAM; use `llama3.2:3b` on tighter laptops)
-2. In `config/settings.yaml`, set `llm_backend: ollama`
+2. Configure Pi to use it (see Pi's own model configuration)
 
 **Anthropic API** — direct to Claude, has a per-token cost:
 1. Get a key from console.anthropic.com
 2. In PowerShell: `setx ANTHROPIC_API_KEY "sk-ant-..."` then restart
    the terminal
-3. In `config/settings.yaml`, set `llm_backend: anthropic`
+3. Configure Pi to use it
 
 ## 4. Run it
 
-A sample document is already in `workspace/sample.txt`. Try:
+Start Pi from this repository with project trust enabled:
 
-```powershell
-python main.py analyze sample.txt
+```bash
+pi --approve
 ```
 
-You'll see step-by-step logs of what the agent does (reads the
-file, thinks, writes `workspace/report.md`) and which actions, if
-any, get blocked by the policy layer. Open
-`workspace/report.md` afterward to see the output.
-
-To analyze your own document, drop it into `workspace/` and run:
-```powershell
-python main.py analyze your-file.txt
-```
+See [Running Pi](#running-pi) above for the policy modes and the
+`/platform` inspection command.
 
 ## 5. Tightening or changing the security layer
 
-Edit `policies/default_policy.yaml`:
-- `allowed_tools` / `denied_tools` — what the agent can call at all
-- `file_rules` — what paths can be read/written (default: only
-  `workspace/**`)
-- `denied_content_patterns` — block actions containing certain
-  strings (e.g. `rm -rf`, `password`)
-- `limits` — rate limits per run
-- `on_violation` — `block` (agent gets told no, tries again) or
-  `abort` (whole run stops)
+Edit `.pi/neurofebric-policy.json`:
+- `deniedTools` / `allowedTools` — what the agent can call at all
+- `fileRules` — ordered, first match wins; a `**` catch-all means
+  "somewhere inside an allowed root"
+- `destructiveCommandPatterns` / `destructiveCommandTokens` — refuse
+  state-destroying commands
+- `secretWritePatterns` — block writes carrying certain strings
+- `limits` — `maxToolCallsPerTask`, `maxFileWritesPerTask`,
+  `maxBytesPerWrite`
+- `onViolation` — `block` (the call is refused, the task continues) or
+  `abort` (the whole run stops)
 
-Nothing here is agent-specific — the same policy engine governs any
-agent you add under `agents/`.
+The loader fails loudly at startup on a malformed policy file, and
+ignores unrecognised top-level keys. `policies/default_policy.yaml` is
+kept only as the historical provenance of this port; it is not read at
+runtime. See [docs/POLICY_PORT.md](docs/POLICY_PORT.md).
 
-## 6. Adding a new agent
+## 6. Adding a new skill
 
-Copy the pattern in `agents/deep_research_agent.py`:
-1. Write a system prompt describing the agent's job and the tools
-   it should use.
-2. Wrap it in a small `run_x(settings, ...)` function that builds
-   an `AgentRunner` and calls `.run(task)`.
-3. Add a CLI hook in `main.py` if you want to run it directly.
+Skills are data, not code — see [Skills](#skills) above and
+[docs/SKILL_SPEC.md](docs/SKILL_SPEC.md). No agent or tool registration
+step is involved.
 
-New tools go in `tools/`, then get registered in the `TOOL_IMPL`
-dict in `core/agent_runner.py`, and added to `allowed_tools` in the
-policy file.
+## Dependency status
 
-## What's intentionally left as a stub
-
-- `web_search_stub` in `tools/file_tools.py` returns a placeholder.
-  Wire up a real (free-tier) search API here when you want live
-  search — until then the harness runs with zero external
-  dependencies or costs.
+The platform has no external runtime dependencies and no network calls
+of its own. Model access is entirely Pi's concern.
 
 OmniRoute/ is a local-only checkout and is not part of this repository.
