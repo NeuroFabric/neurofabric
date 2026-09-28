@@ -202,7 +202,22 @@ export class KernelAdapter {
    * `TrustedProjectPolicy` explicitly.
    */
   policy: PolicyEngine = new DefaultPolicy();
-  private readonly skills: SkillDescriptor[];
+  /**
+   * The installed skill list, held under a name distinct from the accessor.
+   *
+   * This was previously a field named `skills` sitting alongside a
+   * `get skills()` accessor that returned a defensive copy. A class field
+   * declared without an initializer is still a real field: it is installed as
+   * an OWN property during construction and therefore SHADOWED the prototype
+   * accessor, so the defensive copy never ran and every caller received the
+   * live internal array. `setSkills` is the validated entry point for changing
+   * this state, and the leaked reference let any caller bypass it.
+   *
+   * Type erasure hid this completely, which is why the suite in
+   * skills-defensive-copy.test.ts was written before the fix. The distinct
+   * name lets the accessor do what it was written to do.
+   */
+  private readonly skillList: SkillDescriptor[];
   private readonly limits: RecoveryLimits;
   /**
    * Boundary used to verify produced artifacts.
@@ -287,7 +302,7 @@ export class KernelAdapter {
   constructor(options: KernelAdapterOptions = {}) {
     this.tools = new ToolRegistry();
     this.memory = options.memory ?? new InMemoryStore();
-    this.skills = options.skills ?? [];
+    this.skillList = options.skills ?? [];
     this.boundary = options.boundary;
     this.vault = options.vault;
     // F-006: DEFAULT_LIMITS is the single source of truth for these bounds.
@@ -333,15 +348,15 @@ export class KernelAdapter {
   }
 
   setSkills(skills: SkillDescriptor[]): void {
-    this.skills.splice(0, this.skills.length, ...skills);
+    this.skillList.splice(0, this.skillList.length, ...skills);
   }
 
   get skills(): SkillDescriptor[] {
-    return [...this.skills];
+    return [...this.skillList];
   }
 
   findSkillsByCapabilities(capabilities: string[]): SkillDescriptor[] {
-    return skillsForCapabilities(this.skills, capabilities);
+    return skillsForCapabilities(this.skillList, capabilities);
   }
 
   /** Install the policy used by preflight. Used to select the trust model. */
@@ -915,7 +930,7 @@ export class KernelAdapter {
         selectedSkills: plan.selectedSkills,
       };
       this.advance("PLAN_VALIDATION", "Plan step built for the requested tool", { expectTaskId: taskId });
-      validatePlan(plan, this.skills, this.tools.list());
+      validatePlan(plan, this.skillList, this.tools.list());
       await this.events.emit(event("PLAN_VALIDATED", taskId, { planId: plan.planId, toolCallId }));
       for (const skill of plan.selectedSkills) await this.events.emit(event("SKILL_SELECTED", taskId, { skill }));
       await this.events.emit(event("TOOL_SELECTED", taskId, { tool: toolName, toolCallId, inputMetadata }));
@@ -964,7 +979,7 @@ export class KernelAdapter {
       objective: task.objective,
       assumptions: ["Pi selected the requested tool"],
       steps: [step],
-      selectedSkills: this.skills.filter((skill) => skill.requiredTools.includes(toolName)).map((skill) => skill.name),
+      selectedSkills: this.skillList.filter((skill) => skill.requiredTools.includes(toolName)).map((skill) => skill.name),
       selectedTools: [toolName],
       expectedOutputs: [step.expectedOutput],
       validationCriteria: [step.validationCriteria[0]],
@@ -1314,7 +1329,7 @@ export class KernelAdapter {
     this.plan = plan;
     this.task = { ...this.task, currentPlan: plan, currentStep: step.stepId, selectedTools: [toolName], selectedSkills: plan.selectedSkills };
     this.advance("PLAN_VALIDATION", "Legacy planToolCall built a plan step");
-    validatePlan(plan, this.skills, this.tools.list());
+    validatePlan(plan, this.skillList, this.tools.list());
     await this.events.emit(event("PLAN_VALIDATED", this.task.taskId, { planId: plan.planId }));
     for (const skill of plan.selectedSkills) await this.events.emit(event("SKILL_SELECTED", this.task.taskId, { skill }));
     await this.events.emit(event("TOOL_SELECTED", this.task.taskId, { tool: toolName, inputMetadata }));
@@ -1479,7 +1494,7 @@ export class KernelAdapter {
     this.plan = plan;
     this.task = { ...this.task, currentPlan: plan, currentStep: step.stepId };
     this.advance("PLAN_VALIDATION", "No-tool task: response plan", { expectTaskId: taskId });
-    validatePlan(plan, this.skills, this.tools.list());
+    validatePlan(plan, this.skillList, this.tools.list());
     await this.events.emit(event("PLAN_VALIDATED", this.task.taskId, { planId: plan.planId }));
     this.advance("EXECUTING", "No-tool task: plan validated", { expectTaskId: taskId });
 
