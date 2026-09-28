@@ -17,6 +17,11 @@ __pycache__/
 workspace/*
 !workspace/.gitkeep
 
+# Credentials vault (D-016). Covered by the wildcard above; named explicitly so
+# the intent is readable without tracing the pattern. The vault file is the one
+# place values are stored unredacted, so it must never reach the repository.
+workspace/vault/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

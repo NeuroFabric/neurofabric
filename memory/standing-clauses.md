@@ -1,6 +1,6 @@
 # Standing Clauses
 
-Four clauses that bind every future session in this repository. They are
+Six clauses that bind every future session in this repository. They are
 standing rules, not decisions: no ruling is recorded here, and none should
 be. Dated decisions live in **[docs/DECISIONS.md](../docs/DECISIONS.md)**,
 which is the single canonical record. This file exists because
@@ -59,3 +59,36 @@ byte-for-byte what was specified — and surfaced only in CI, one cycle later.
 The lesson, stated plainly: **diff verification proves the edit is the one
 specified; only execution proves the specification is correct.** A green
 diff is not a green test.
+
+## 5. VAULT
+
+**Metadata is free; values are gated.**
+
+The vault file is **the one sanctioned unredacted store**. One. It is not a
+precedent for a second, and it is not an exception to be generalized.
+
+Every event surface is **redaction-sink-wrapped**. A value that reaches a
+trace, a log, an event, or a tool result is wrapped at the sink, not at the
+call site, so a new caller cannot bypass the wrap by being new.
+
+**The vault ships dark.** There is no vault block in the committed policy, so
+nothing activates on merge. **Enablement is operator hands** — a policy edit,
+never an agent default, never a constructor that quietly opens a store. A
+vault that has stored nothing has **no file on disk**, and a stray file there
+is a defect, not a fixture.
+
+## 6. GUARD LIMITS
+
+**Limits in the committed policy are operator-owned. The agent never edits
+its own constraints.**
+
+Exhaustion of a limit is a **stop-and-report**. It is never a self-raise —
+not a config edit, not a test pin edit, not a re-run under a relaxed profile.
+When the work needs more room than the limit allows, the correct output is the
+report of exhaustion, not the removal of the ceiling.
+
+An operator limit change **carries a paired pin update in the same sitting**,
+and is **disclosed in the D-record**. A raised limit with a stale pin behind
+it is a broken build; a limit changed quietly is a worse one. The pin breaking
+on a real raise is the pin **working** — record the refusal and the
+resolution rather than smoothing over either.

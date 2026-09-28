@@ -1438,11 +1438,17 @@ Timeline: measured from commit and CI timestamps — PR 17 CI completed 2026-09-
 ## D-016: Credentials Vault — intake record, config-amendment provenance, and the fixture carve-out
 
 - **Date:** 2026-09-28
-- **Status:** OPEN
+- **Status:** IMPLEMENTED (closes on merge)
 - **Plane:** Safety (home); touches Execution, Knowledge, Control
 - **Amends:** none
-- **Affects:** `platform/pi/policy-port.test.ts`, the committed secret-scanner
-  config, `docs/handoff.md`, `SUMMARY.md`, `.gitignore`
+- **Affects:** `platform/core/vault.ts`, `platform/core/vault.test.ts`,
+  `platform/core/vault-redaction.test.ts`, `platform/core/policy-config.ts`
+  (limit-profile surface), `platform/pi/vault-tools.ts`,
+  `platform/pi/vault-boundary.test.ts`, `platform/pi/kernel-adapter.ts`,
+  `.gitignore`, `docs/DECISIONS.md`, `memory/standing-clauses.md`,
+  `docs/handoff.md`, `SUMMARY.md`
+- **Not affected, by design:** `platform/pi/policy-port.test.ts` — see the
+  fixture ruling and the limit saga below
 
 ### Task
 
@@ -1480,6 +1486,120 @@ committed config. It is consumed by tests 3a, 3b, 3c, 3d, and 6, pinning
 deny-on-write / allow-on-read-search semantics against the maximally-strict
 legacy shape, independent of the committed config. It is never synchronized
 with the config.
+
+### Open-question rulings (operator; abstract transcription)
+
+Abstract transcription only, in the same form as the ruling set above. The
+literal shape is not reproduced here; cite the source to read it. The
+sequence is OQ-1 through OQ-4.
+
+1. **OQ-1 — residual risk is accepted.** The residual exposures named in the
+   survey are not remediated in this arc and are carried knowingly. The
+   acceptance is scoped to the vault file and to nothing else.
+2. **OQ-2** — the reveal path stays split; see R-2.
+3. **OQ-3** — the stored-file lifecycle stays as built; see R-3.
+4. **OQ-4 — retired.** The whole-object pin question is closed as a question.
+   The disposition is stated plainly, because it is not the same as done:
+   `platform/pi/trusted-execution.test.ts` was **not touched** in this arc —
+   it is a zero-touch path — so the survey #4 S-1 narrowing of the pin at
+   line 182 was **not performed**. The question retires; the narrowing stays
+   unperformed backlog, and the corresponding open item below stays open.
+
+### Acceptance criteria A1 through A7
+
+1. **A1** — the store persists credential material to the operator-designated
+   path. The file is created on first store, never at construction: an empty
+   vault has no file on disk.
+2. **A2** — metadata is free. Listing and describing return names and
+   metadata and never expose a value.
+3. **A3** — retrieval is gated twice over, by mode and by approval; see R-1
+   and R-2.
+4. **A4** — enablement is a vault block in the committed policy, and the
+   block **ships absent**. The vault is dark on merge.
+5. **A5** — every event surface the vault writes to is redaction-sink-wrapped.
+6. **A6** — the tools are registered through the kernel adapter and run under
+   policy tier like any other tool.
+7. **A7 — reconciled OUT.** The full sequence is recorded, since this one
+   moved five times: the criterion was **original**ly proposed as an
+   acceptance requirement; it then met a **P-1 contradiction** when the
+   ported surface did not support it; it was **amended by R-1** to a form
+   the surface did support; an **unruled scan** was run to test whether the
+   amended form was already ruled on elsewhere in this record, and it was not
+   — the scan returned nothing governing it, so **silence was not authority**
+   and the item was not closed on the scan; it was finally **reconciled OUT**
+   on operator ruling. A7 is not an acceptance criterion of the shipped
+   build. It is recorded here because the path to "no" is the auditable
+   part.
+
+### Rulings from the build round (operator)
+
+**R-1 — the reveal path is split, and one branch of the split is absolute.**
+A reveal is a distinct operation from a retrieve. A retrieve in redacted mode
+returns a masked form and stays masked.
+
+**R-2 — mode outranks approval.** When `retrieveMode` is `redacted`, the
+store **refuses the reveal**, and it refuses it *even after* a per-call
+approval has been granted. Approval is a gate on a permitted operation, not
+a key that unlocks a forbidden one; granting approval cannot raise the mode.
+This is a mode-level refusal, not a policy denial, and the two are
+distinguished in the tool's reason output.
+
+**R-3 — as built.** The file is created on first store and never before; a
+vault that has stored nothing has no file, and `vault_list` over a
+never-written vault returns empty rather than inventing a source.
+
+### Enablement runbook (operator hands)
+
+Enablement is operator work. The agent does not perform it, and D-004 holds
+throughout.
+
+1. Add a vault block to the committed policy, with `enabled: true` (per A4).
+2. Point the block at the store path. Configuration reaches the store either
+   through the `setVault` constructor argument or the equivalent setter; both
+   are operator-supplied choices, and neither has an agent-side default that
+   silently activates a store.
+3. The file is **created on first store**. Until something is stored there is
+   no file, and that is correct — **the vault starts EMPTY and must not carry
+   a stray file.**
+4. `retrieveMode` semantics are R-1/R-2: `redacted` masks and refuses a
+   reveal even under per-call approval. The revealed branch is the only path
+   to a value, and it is the one the redaction plane does not cover — by
+   design, and by ruling.
+
+### Limit saga (disclosed)
+
+The operator raised `maxToolCallsPerTask` from **40 to 80** by operator
+hands, and committed the change on this branch **together with the paired pin
+update**, dated and disclosed here. `maxFileWritesPerTask` (10) and
+`maxBytesPerWrite` (2,000,000) were not raised.
+
+**The pin break was the pin working.** The raise collided with the legacy
+limit pin; the agent correctly refused both available remedies — the first
+under D-004, the second as a zero-touch violation — and the resolution was
+operator hands on both counts. The refusal was the correct outcome, and it is
+recorded here rather than smoothed over.
+
+`platform/pi/policy-port.test.ts` was touched **by operator hands only**, in
+the chore commit `d417a6d`. The line-35 fixture is **untouched**; the clause
+1 ruling and the fixture ruling above stand without exception.
+
+**Stray-file cleanup.** Two stray synthetic files had been written into
+`workspace/vault/`, and phantom `vault_list` entries were once enabled by
+them. The sandbox-root harness fix stands; the operator deleted the
+droppings. `workspace/vault/` is verified empty on this branch.
+
+**check-ignore disposition:** operator-executed, result pending. The
+`.gitignore` entries (+5) are committed in this arc; the operator appended
+the result of the `check-ignore` run against them, and this record is updated
+on receipt.
+
+**Budgets derive from the measured limits, not from a carried number.** The
+two supplier budget defects are named, as in prior rounds: a budget quoted
+from an unmeasured figure, and a budget quoted from a stale anchor after a
+count moved. Both are the same kind of defect, and the remedy is the same —
+re-measure, then state the number.
+
+**Seal 17.**
 
 ### Open items
 

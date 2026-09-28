@@ -32,6 +32,7 @@ import {
   type ValidationResult,
 } from "../core/index.ts";
 import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type RecoveryLimits } from "../core/index.ts";
+import { vaultToolDescriptors, vaultToolsEnabled, type VaultWiring } from "./vault-tools.ts";
 
 export interface KernelAdapterOptions {
   skills?: SkillDescriptor[];
@@ -43,6 +44,15 @@ export interface KernelAdapterOptions {
    * containment.
    */
   boundary?: WorkspaceBoundary;
+  /**
+   * The operator-configured credentials vault, when there is one (D-016).
+   *
+   * Absent means the vault ships dark: no tools are registered and nothing
+   * about it exists here. The adapter holds the WIRING only — enough to decide
+   * whether the four descriptors attach — and never the handlers, because a
+   * descriptor is a declaration and the binding belongs to the extension (M2).
+   */
+  vault?: VaultWiring;
 }
 
 export interface ToolCallDecision {
@@ -203,6 +213,13 @@ export class KernelAdapter {
    * containment.
    */
   private boundary?: WorkspaceBoundary;
+  /**
+   * The operator's vault wiring, or absent when the vault ships dark.
+   *
+   * Held so registration can ask whether the tools should exist. It is never
+   * read on a call path, so no execution behaviour depends on it.
+   */
+  private vault?: VaultWiring;
   private task?: Task;
   private plan?: Plan;
   private lastValidation?: ValidationResult;
@@ -272,6 +289,7 @@ export class KernelAdapter {
     this.memory = options.memory ?? new InMemoryStore();
     this.skills = options.skills ?? [];
     this.boundary = options.boundary;
+    this.vault = options.vault;
     // F-006: DEFAULT_LIMITS is the single source of truth for these bounds.
     // They used to be written out again here, which meant a change to the
     // exported defaults silently left recovery enforcing the old numbers.
@@ -329,6 +347,22 @@ export class KernelAdapter {
   /** Install the policy used by preflight. Used to select the trust model. */
   setPolicy(policy: PolicyEngine): void {
     this.policy = policy;
+  }
+
+  /**
+   * Install, replace, or clear the vault wiring.
+   *
+   * The policy document is read asynchronously, so the configuration can arrive
+   * either side of the extension's first `registerTools`. Both funnel through
+   * `vaultDescriptors`, which makes the order irrelevant. Clearing it removes
+   * nothing that is already registered — the registry is append-only by design —
+   * but it does mean nothing further is added.
+   */
+  setVault(wiring?: VaultWiring): void {
+    this.vault = wiring;
+    for (const descriptor of this.vaultDescriptors()) {
+      if (!this.tools.has(descriptor.name)) this.tools.register(descriptor);
+    }
   }
 
   /**
@@ -490,9 +524,21 @@ export class KernelAdapter {
   }
 
   registerTools(descriptors: ToolDescriptor[]): void {
-    for (const descriptor of descriptors) {
+    for (const descriptor of [...descriptors, ...this.vaultDescriptors()]) {
       if (!this.tools.has(descriptor.name)) this.tools.register(descriptor);
     }
+  }
+
+  /**
+   * The vault's four descriptors, or none of them.
+   *
+   * One funnel, reached from both `registerTools` and `setVault`, so the vault
+   * attaches whether the configuration arrived before or after the extension's
+   * first registration — and attaches not at all when the block is absent or
+   * disabled, which is what "ships dark" means (A2).
+   */
+  private vaultDescriptors(): ToolDescriptor[] {
+    return vaultToolsEnabled(this.vault) ? vaultToolDescriptors() : [];
   }
 
   get currentTask(): Task | undefined {

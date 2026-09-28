@@ -17,7 +17,7 @@ Quote code in fenced code blocks in reports — inline backticks have been mangl
 
 ## 0. Current finding status
 
-As of `4bca4f2` on `main` (PR #21 merged). Full detail in `verification/findings/`.
+As of `8f9f0c2` on `d-016-vault` (the D-016 build commit; `main` last at `d678435`, PR #24 merged). Full detail in `verification/findings/`.
 
 | ID | Status |
 | --- | --- |
@@ -63,18 +63,18 @@ task was already terminal, which are not policy decisions).
 
 ## 0b. Current verification baseline
 
-Measured on `main` at `4bca4f2` and re-run in CI on every pull request:
+Measured on `d-016-vault` at `8f9f0c2` and re-run in CI on every pull request:
 
 | Suite | Command | Result |
 | --- | --- | --- |
 | Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 |
-| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 292 / 292 |
-| **Unit/integration total** | | **314 / 314** |
+| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 320 / 320 |
+| **Unit/integration total** | | **342 / 342** |
 | F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed |
 
-The 21 live-proof checks are **counted separately** from the 314. They are
+The 21 live-proof checks are **counted separately** from the 342. They are
 assertions driven by a standalone script rather than `node:test` cases, so
-314 + 21 is not a suite total of 335. The proof is headless and self-contained —
+342 + 21 is not a suite total of 363. The proof is headless and self-contained —
 it drives the real `KernelAdapter` and the real recovery decision function with
 stubbed tool results, uses no model and no network, and runs unchanged on a CI
 runner.

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { CoreError } from "./errors.ts";
+import { parseVaultConfig, type VaultConfig } from "./vault.ts";
 
 /**
  * Declarative kernel policy.
@@ -77,6 +78,17 @@ export interface PolicyConfig {
    */
   limitProfiles?: Record<string, Partial<PolicyLimits>>;
   activeLimitProfile?: string;
+  /**
+   * The credentials vault block, when the operator has configured one (D-016).
+   *
+   * ABSENT means inert, not enabled: with no block the vault's tools are not
+   * registered and nothing about the vault exists to this engine. A block that
+   * IS present is validated in full, and an unknown field inside it fails the
+   * load rather than being ignored — the same rule the unscoped content field
+   * follows, for the same reason (a key an operator believes is in force but
+   * which is silently dropped is the usability bug this avoids).
+   */
+  vault?: VaultConfig;
   onViolation: OnViolation;
   /** Absolute path of the file this came from, for every decision message. */
   source: string;
@@ -274,6 +286,9 @@ export function parsePolicyConfig(raw: unknown, source: string): PolicyConfig {
     limits,
     limitProfiles,
     ...(activeLimitProfile !== undefined ? { activeLimitProfile } : {}),
+    // A present block is validated here, at load, so nothing downstream has to
+    // re-check it and no caller can receive a half-valid vault config.
+    ...(root.vault === undefined ? {} : { vault: parseVaultConfig(root.vault, source) as VaultConfig }),
     onViolation,
     source,
   };
