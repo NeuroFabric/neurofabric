@@ -1,15 +1,20 @@
 import type { ContextSource, MemoryRecord, MemoryStore, ValidationResult } from "./types.ts";
-import { DEFAULT_LIMITS } from "./limits.ts";
 
 /**
  * Select context sources within a token budget.
  *
- * D-009: the budget defaults to `DEFAULT_LIMITS.maxContextTokens` rather than
- * being supplied by every caller. It was previously a required argument with no
- * production caller at all, which left `maxContextTokens` declared on
- * `CoreLimits` and read by nothing.
+ * D-016b: `maxContextTokens` was REMOVED from `CoreLimits`. D-009 had wired it
+ * to this function's default argument, but the function still had no production
+ * caller and the `estimatedTokens` input has no producer, so the field
+ * advertised a bound that could not occur — the same defect F-006 was raised
+ * for. With the field gone there is nothing truthful to default to, so the
+ * budget is a required argument again.
+ *
+ * `maxTokens` is a budget over the CALLER's own `estimatedTokens` figures. This
+ * is arithmetic over an attributed estimate, not a token count: no tokenizer
+ * runs here and no estimate is validated.
  */
-export function selectContext(sources: ContextSource[], maxTokens: number = DEFAULT_LIMITS.maxContextTokens): ContextSource[] {
+export function selectContext(sources: ContextSource[], maxTokens: number): ContextSource[] {
   const selected: ContextSource[] = [];
   let used = 0;
   const required = sources.filter((source) => source.required).sort((a, b) => b.priority - a.priority);

@@ -706,6 +706,21 @@ consumers, and adding one without a choke point to enforce it reopens the exact
 defect this decision closed — which is why the enforcement tests assert the key
 set rather than only the presence of each key.
 
+> **SUPERSEDED IN PART (D-016b).** The decision above is preserved as the record
+> of what was decided then and is not rewritten. One of its six fields has since
+> been removed: `maxContextTokens` went the way F-006 established for
+> `maxStepRetries` — a bound with no reachable consumer. D-009 wired it to
+> `selectContext`, but that function still had no production caller and the
+> `estimatedTokens` input it budgets has no producer, so the field advertised a
+> guarantee that could not occur. `selectContext` now takes its budget as a
+> required argument again. The current state is **five** declared fields, all
+> five enforced: `maxToolRetries`, `maxReplans`, `maxRecoveryDepth`,
+> `maxExecutionTimeMs`, `maxArtifactBytes`. The rationale at point 3 below
+> ("wiring beats removal wherever a choke point genuinely exists") is
+> deliberately NOT overturned: a choke point existed, but nothing called it.
+> See the Task C note below, whose status this changes from outstanding
+> CoreLimits work to a known `selectContext` defect.
+
 ### Open items
 
 Both findings below are properties of code this decision deliberately did not
@@ -734,6 +749,13 @@ change. They are fenced, tested as-is, and carried forward.
    truncated, or reported as unsatisfiable, and those differ. The current
    behaviour is pinned by test `D009.2c` with the defect stated; Task C owns the
    decision and has a pinned case to turn green.
+
+   **D-016b:** the operator ruled that Task C is NOT a CoreLimits implementation
+   requirement and that the existing behaviour may stand unchanged, so this is no
+   longer outstanding CoreLimits work. The pin in `D009.2c` is retained, now
+   documenting a known `selectContext` defect and still failing relative to the
+   intuitive behaviour, so a future decision on the required-source policy is a
+   deliberate change rather than a silent one.
 
 ### Alternatives rejected
 

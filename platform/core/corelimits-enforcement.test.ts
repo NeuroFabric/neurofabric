@@ -3,9 +3,11 @@
  *
  * F-006 removed `maxStepRetries` for advertising a bound that did not exist,
  * and recorded that eight more limits were in the same state. D-009 removed six
- * of them and enforced the three that had a natural choke point. These tests
- * pin each enforced cap, and pin the removal of the rest, so a future edit that
- * reintroduces a paper limit fails here rather than in production.
+ * of them and enforced the three that had a natural choke point. D-016b removed
+ * a seventh — `maxContextTokens`, whose only consumer still had no production
+ * caller. These tests pin each enforced cap, and pin the removal of the rest,
+ * so a future edit that reintroduces a paper limit fails here rather than in
+ * production.
  */
 
 import { test } from "node:test";
@@ -26,6 +28,10 @@ const REMOVED = [
   "maxParallelTasks",
   "maxParallelTools",
   "maxOutputBytes",
+  // D-016b: removed because `selectContext` — its only consumer — had no
+  // production caller and no producer for `estimatedTokens`, so the field
+  // advertised a bound that could not occur.
+  "maxContextTokens",
 ] as const;
 
 function tempDir(): string {
@@ -43,10 +49,9 @@ const write = (name: string, riskLevel: ToolDescriptor["riskLevel"] = "WRITE"): 
 
 // --- 1. the interface is exactly the enforced set ---------------------------
 
-test("D009.1 CoreLimits declares exactly the six enforced limits", () => {
+test("D009.1 CoreLimits declares exactly the five enforced limits", () => {
   assert.deepEqual(Object.keys(DEFAULT_LIMITS).sort(), [
     "maxArtifactBytes",
-    "maxContextTokens",
     "maxExecutionTimeMs",
     "maxRecoveryDepth",
     "maxReplans",
@@ -54,7 +59,7 @@ test("D009.1 CoreLimits declares exactly the six enforced limits", () => {
   ]);
 });
 
-test("D009.1b the six removed limits are gone from the surface and the validator", () => {
+test("D009.1b the seven removed limits are gone from the surface and the validator", () => {
   for (const limit of REMOVED) {
     assert.equal(limit in DEFAULT_LIMITS, false, `${limit} must not be declared`);
     // validateLimits merges over DEFAULT_LIMITS, so a removed field would also
@@ -66,7 +71,7 @@ test("D009.1b the six removed limits are gone from the surface and the validator
 
 test("D009.1c validateLimits still rejects a non-positive limit", () => {
   assert.throws(() => validateLimits({ maxToolRetries: 0 }), /Invalid core limit/);
-  assert.throws(() => validateLimits({ maxContextTokens: -1 }), /Invalid core limit/);
+  assert.throws(() => validateLimits({ maxArtifactBytes: -1 }), /Invalid core limit/);
 });
 
 test("D009.1d validateLimits passes an unknown key through instead of rejecting it", () => {
@@ -88,17 +93,21 @@ test("D009.1d validateLimits passes an unknown key through instead of rejecting 
   assert.equal("maxParallelTools" in validateLimits(forged), true);
 });
 
-// --- 2. maxContextTokens is enforced ----------------------------------------
+// --- 2. selectContext honours the budget it is given -----------------------
 
-test("D009.2 selectContext defaults to the declared context budget", () => {
-  const source = (id: string, estimatedTokens: number, required = false): ContextSource =>
-    ({ id, content: id, scope: "TASK", estimatedTokens, priority: 1, required }) as ContextSource;
+test("D009.2 selectContext admits exactly the budget and drops one token past it", () => {
+  const source = (id: string, estimatedTokens: number): ContextSource =>
+    ({ id, content: id, scope: "TASK", estimatedTokens, priority: 1, required: false }) as ContextSource;
 
-  // Two sources that together exceed the default budget: only one fits.
-  const half = Math.ceil(DEFAULT_LIMITS.maxContextTokens / 2) + 1;
-  const selected = selectContext([source("a", half), source("b", half)]);
-  assert.equal(selected.length, 1, "the default budget must bound the selection");
-  assert.equal(selected[0].id, "a");
+  // D-016b: the budget is a required argument again, because the declared
+  // default it used to carry was removed with `maxContextTokens`. The boundary
+  // property that made the cap real is unchanged: a budget that exactly covers
+  // the sources admits them, and one token less drops the last.
+  const two = [source("a", 60), source("b", 40)];
+
+  assert.equal(selectContext(two, 100).length, 2, "a budget equal to the total must admit both");
+  assert.equal(selectContext(two, 99).length, 1, "one token short of the total must drop a source");
+  assert.equal(selectContext(two, 99)[0].id, "a", "the dropped source is the one that no longer fits");
 });
 
 test("D009.2b an explicit budget still wins, and a larger one admits both", () => {
@@ -127,12 +136,18 @@ test("D009.2c a required source is dropped by the budget when it does not fit", 
   // disappears.
   //
   // D-009 wired `maxContextTokens` to this function. Wiring a cap is what
-  // makes the cap real, and this is what enforcing it revealed. D-009 fenced
-  // `selectContext` because deciding the correct behaviour is Task C: a
-  // required source may have to be admitted over budget, truncated, or
-  // reported as unsatisfiable, and those are different product answers. The
-  // current behaviour is pinned here so the cap is honestly characterised and
-  // so Task C has a red test to turn green.
+  // makes the cap real, and this is what enforcing it revealed.
+  //
+  // D-016b removed `maxContextTokens`, which ends this defect's status as a
+  // CoreLimits requirement: the operator ruled that Task C is not part of the
+  // removal and that the existing behaviour may stand. The pin therefore now
+  // documents a known `selectContext` defect rather than outstanding CoreLimits
+  // work. It is deliberately left RED relative to the intuitive behaviour — a
+  // required source that does not fit should arguably survive — so that if a
+  // future task does decide the required-source policy, the change is a
+  // deliberate one with a failing test to turn green, not a silent edit. The
+  // budget this test supplies is now passed explicitly, because the declared
+  // default it used to rely on no longer exists.
   const required = { id: "r", content: "r", scope: "TASK", estimatedTokens: 10_000, priority: 1, required: true } as ContextSource;
   const optional = { id: "o", content: "o", scope: "TASK", estimatedTokens: 10_000, priority: 1, required: false } as ContextSource;
 

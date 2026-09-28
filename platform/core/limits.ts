@@ -2,10 +2,11 @@
  * D-009: a limit declared here is a limit that is enforced.
  *
  * F-006 removed `maxStepRetries` because it advertised a bound that did not
- * exist. The same sweep found eight more on this interface. Six were removed
- * (below) and three are now enforced, so every field declared here is read by
- * live code on the production path. Adding a field without enforcing it
- * reintroduces the exact defect F-006 was raised for.
+ * exist. The same sweep found eight more on this interface. Seven are now
+ * removed (including `maxContextTokens`, D-016b) and five are enforced, so
+ * every field declared here is read by live code on the production path.
+ * Adding a field without enforcing it reintroduces the exact defect F-006 was
+ * raised for.
  */
 export interface CoreLimits {
   /** Task-wide bound on identical tool retries. Read by recovery.ts. */
@@ -18,8 +19,6 @@ export interface CoreLimits {
   maxExecutionTimeMs: number;
   /** Largest artifact a tool may declare. Read by artifact.ts createArtifact. */
   maxArtifactBytes: number;
-  /** Context budget for a single selection. Read by context-memory.ts. */
-  maxContextTokens: number;
 }
 
 export const DEFAULT_LIMITS: CoreLimits = {
@@ -28,7 +27,6 @@ export const DEFAULT_LIMITS: CoreLimits = {
   maxRecoveryDepth: 3,
   maxExecutionTimeMs: 30 * 60 * 1000,
   maxArtifactBytes: 10 * 1024 * 1024,
-  maxContextTokens: 200_000,
 };
 
 export function validateLimits(limits: Partial<CoreLimits>): CoreLimits {

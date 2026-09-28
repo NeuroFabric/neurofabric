@@ -274,8 +274,8 @@ execution-time bound is `maxExecutionTimeMs`. The remaining entries in
 `DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
 implementing them is open work, not a latent guarantee. Do not rely on
 `maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
-`maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, `maxArtifactBytes`, or
-`maxContextTokens` to reject anything today.
+`maxParallelTasks`, `maxParallelTools`, `maxOutputBytes`, or `maxArtifactBytes`
+to reject anything today.
 
 | Setting | Default | Enforced? |
 | --- | --- | --- |
@@ -290,7 +290,13 @@ implementing them is open work, not a latent guarantee. Do not rely on
 | `maxParallelTools` | 1 | no — declared only; Pi owns tool-execution mode |
 | `maxOutputBytes` | 2,097,152 (2 MiB) | no — declared only |
 | `maxArtifactBytes` | 10,485,760 (10 MiB) | no — declared only |
-| `maxContextTokens` | 200,000 | no — declared only |
+
+`maxContextTokens` was **removed** (D-016b). D-009 had wired it to
+`selectContext`, but that function still had no production caller and the
+`estimatedTokens` input it budgets has no producer, so the field advertised a
+bound that could not occur. With no truthful default left, `selectContext` takes
+its budget as a required argument again. It is a budget over the caller's own
+`estimatedTokens` figures, not a token count: no tokenizer runs in it.
 
 `maxStepRetries` was **removed** (F-006 Phase 1). It was declared but never read
 by any recovery decision, so it advertised a bound that did not exist. Per-step
