@@ -36,3 +36,4 @@ coverage/
 
 !tests/fixtures/**/*.log
 .session-archive/
+OmniRoute/
