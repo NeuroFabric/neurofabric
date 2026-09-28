@@ -26,9 +26,19 @@ import type {
  * the trust model would otherwise require approval for.
  */
 /**
- * Argument names that carry the payload a write persists. Used for both the
- * secret patterns and the write-size limit, so the two always agree on what
- * "the content" is.
+ * Argument names that carry the payload a write persists. Used for the
+ * write-SIZE limit, so the size limit measures what a write persists.
+ *
+ * D-022: this set is deliberately NOT the set the secret scan uses. It is an
+ * allowlist, and an allowlist is not a boundary: a field name it does not
+ * already know about is unscanned, which is how the harness's camelCase
+ * `newText` / `oldText` came to bypass the secret rule entirely while
+ * `content` was refused. The secret scan is fail-closed instead — see
+ * `PATH_PARAM_NAMES` and `collectScannedStrings`.
+ *
+ * The two therefore disagree on purpose. Broadening this set to match the scan
+ * would change what `maxBytesPerWrite` measures, which is a separate control and
+ * a separate product decision; it is not changed here.
  */
 const CONTENT_PARAM_NAMES: ReadonlySet<string> = new Set([
   "content",
@@ -39,6 +49,65 @@ const CONTENT_PARAM_NAMES: ReadonlySet<string> = new Set([
   "new_string",
   "old_string",
 ]);
+
+/**
+ * Field names whose values are LOCATORS — where a write lands — rather than
+ * content it persists. These are the ONLY exemption in the secret scan.
+ *
+ * A file named for the concept is not a secret, so `docs/password-policy.md` is
+ * allowed to be created by a write whose content is clean. That exemption is
+ * preserved here by name, and everything else is scanned.
+ */
+const PATH_PARAM_NAMES: ReadonlySet<string> = new Set([
+  "path",
+  "paths",
+  "new_path",
+  "newPath",
+  "newPaths",
+  "old_path",
+  "oldPath",
+  "oldPaths",
+  "file_path",
+  "filePath",
+  "filePaths",
+  "files",
+  "notebook_path",
+  "notebookPath",
+]);
+
+/**
+ * Tools whose write payload is exempt from the deny-scan, by NAME.
+ *
+ * D-022: the deny-scan and the vault have different jurisdictions. The scan
+ * exists to stop a credential reaching an un-sanctioned persistence; `vault_store`
+ * IS the sanctioned credential store, and its control is the approval gate. A
+ * deny-scan there would let an automated control override a human sanction, and
+ * a vault that cannot store a credential is a dead design. This is a boundary,
+ * not a hole.
+ *
+ * It lives in platform code rather than in the policy file deliberately: a
+ * security exemption should be a reviewed code change, not a config flip.
+ */
+const SCAN_EXEMPT_TOOLS: ReadonlySet<string> = new Set(["vault_store"]);
+
+/**
+ * Every string in a write payload, at any depth, except values whose key is a
+ * locator name.
+ *
+ * Fail-closed by construction: there is no allowlist of "content-ish" fields to
+ * fall out of. A field name this function has never heard of is scanned, so a
+ * new harness field cannot become a silent bypass — it would have to be added
+ * to `PATH_PARAM_NAMES` to escape, which is a visible edit to this file.
+ */
+function collectScannedStrings(value: unknown, key?: string): string[] {
+  if (key !== undefined && PATH_PARAM_NAMES.has(key)) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((item) => collectScannedStrings(item));
+  if (value === null || typeof value !== "object") return [];
+  return Object.entries(value as Record<string, unknown>).flatMap(([childKey, child]) =>
+    collectScannedStrings(child, childKey),
+  );
+}
 
 /**
  * Where a metered budget starts warning, as a fraction of the limit.
@@ -242,10 +311,10 @@ export class ConfiguredPolicy implements PolicyEngine {
     );
     if (tokenDenial) return tokenDenial;
 
-    if (tool.riskLevel === "WRITE") {
+    if (tool.riskLevel === "WRITE" && !SCAN_EXEMPT_TOOLS.has(tool.name)) {
       const secretDenial = this.matchIn(
         this.config.secretWritePatterns,
-        this.contentPayloadStrings(input),
+        collectScannedStrings(input),
         "secret write pattern matched",
         where,
       );

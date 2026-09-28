@@ -2117,3 +2117,130 @@ deferral is visible to whoever picks it up.
 - `docs/handoff.md` §4 — the analog roadmap item, explicitly not a sign-off.
 - F-006 — the same failure class this record prevents: work proceeding on an
   uncheckable reference.
+
+## D-022: The write deny-scan is fail-closed, with the vault exempt by tool name
+
+- **Date:** 2026-09-28
+- **Status:** accepted
+- **Amends:** none; closes a control gap found in live operation
+- **Affects:** `platform/core/configured-policy.ts`, `platform/pi/write-scan-fail-closed.test.ts`
+
+### Context
+
+The gap was found by a live refusal, not by reading the code. Drafting a pull
+request body was denied:
+
+```
+policy neurofebric-policy.json: secret write pattern matched: 'authorization'
+```
+
+The word was ordinary prose, not a credential. Investigating the false positive
+turned up a real bypass in the same mechanism. The scanner selected payload
+values with a closed allowlist:
+
+```ts
+const CONTENT_PARAM_NAMES: ReadonlySet<string> = new Set([
+  "content", "contents", "text", "body", "data", "new_string", "old_string",
+]);
+```
+
+and read only TOP-LEVEL keys whose name was in it. The harness Edit tool carries
+its payload in camelCase `newText` / `oldText`. Neither name is in the set.
+A write-tier call carrying a guarded literal in `content` was refused; the
+identical literal in `newText` was authorized.
+
+An allowlist is not a boundary. Any field name it had not already seen was
+unscanned, so a new harness field would have become a silent bypass rather than
+a test failure.
+
+### Red-first evidence
+
+`platform/pi/write-scan-fail-closed.test.ts` was written and run against
+unmodified code first. Four of five tests failed, with the bypass visible as an
+actual decision rather than an inference:
+
+```
+not ok 1  newText / oldText must be scanned     actual: REQUIRE_APPROVAL
+not ok 2  nested at any depth must be scanned    actual: REQUIRE_APPROVAL
+not ok 3  unknown field must be scanned          actual: REQUIRE_APPROVAL
+ok     4  path/locator exemption preserved
+not ok 5  every declared string field scanned    actual: 'oldText' unscanned
+```
+
+The marker is assembled from fragments at runtime so the test file is not itself
+a refused write payload, and the suite uses `precheckToolCall` only — it decides,
+it never writes to disk.
+
+### Ruling
+
+For a WRITE-tier tool, every string value in the payload is scanned at any depth.
+The only exemptions are, by name:
+
+- `PATH_PARAM_NAMES` — locator fields, so a file named for the concept is not a
+  secret and `docs/password-policy.md` can still be created by a clean write.
+- `SCAN_EXEMPT_TOOLS` — `vault_store`, and nothing else.
+
+There is deliberately no allowlist of "content-ish" field names to fall out of.
+A field name the scanner has never heard of is scanned, so escaping requires an
+explicit, reviewable edit to this file.
+
+### The vault conflict, and how it was resolved
+
+The first run of the fix turned the suite red on `R-1 / P-1`:
+
+```
+not ok 352 - a configured write pattern does not deny a store
+             actual: 'DENY'   expected: 'REQUIRE_APPROVAL'
+```
+
+`vault_store` is `riskLevel: "WRITE"` and takes a `value` field. The vault is the
+one sanctioned unredacted store — it exists to hold credentials — and `R-1 / P-1`
+pins, deliberately, that the deny-scan must not reach its payload: *"the approval
+IS the sanction: a vault-local deny-scan could only have fired here, overriding
+it."*
+
+A scan over every write-tier string makes the vault unable to store a credential,
+which is the one thing it is for. The two requirements were therefore mutually
+unsatisfiable, and choosing between them is a product decision rather than a
+mechanical one. The operator ruled on the jurisdiction: the deny-scan exists to
+stop a credential reaching an **un-sanctioned** persistence, while `vault_store`
+IS the sanctioned store and its control is the **approval gate**. A deny-scan
+there would let an automated control override a human sanction. Exempting the
+vault is the correct boundary, not a hole.
+
+`R-1 / P-1` is unchanged and green.
+
+### Why the exemption is code, not config
+
+`SCAN_EXEMPT_TOOLS` lives in `platform/core/configured-policy.ts`, not in the
+policy file. A security exemption should be a reviewed code change that appears
+in a diff and a test, not a config flag that can be flipped without one.
+
+### Alternatives rejected
+
+- **Fail closed everywhere and update `R-1 / P-1` to expect DENY.** Rejected: a
+  vault that cannot store a credential is a dead design. The test encodes a
+  deliberate decision, not a stale expectation.
+- **Declare credential-bearing fields on the tool descriptor.** Rejected for now:
+  the descriptor contract is fenced (M2 — a descriptor is a declaration with no
+  handler, and the binding belongs to the extension). Carried on the backlog as
+  the principled successor.
+- **Exclude the vault test from the suite.** Rejected: it hides the conflict
+  rather than resolving it, which is the same failure class as the gap itself.
+
+### Consequence
+
+The companion doc change is the policy file's scanned-fields note, which still
+enumerates the old seven names. **That update is operator-side and happens after
+this record merges.** Until it lands, the note in
+`.pi/neurofebric-policy.json` describes a scope narrower than the one now
+implemented — the fourth instance of declared-state-diverging-from-actual-state
+this cycle.
+
+### Cross-references
+
+- D-021 — the preceding record by merge order.
+- D-016, D-017 — the vault this exemption protects; D-017 records it as
+  INTENTIONALLY UNWIRED, so the exemption is currently latent rather than live.
+- D-019 — the static type gate covering both changed files.
+- `platform/pi/vault-boundary.test.ts` `R-1 / P-1` — the pinned vault behaviour.
