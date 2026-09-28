@@ -13,7 +13,7 @@ __pycache__/
 
 # Logs / runtime data
 *.log
-logs/
+/logs/
 workspace/*
 !workspace/.gitkeep
 
@@ -37,3 +37,4 @@ coverage/
 !tests/fixtures/**/*.log
 .session-archive/
 OmniRoute/
+.pi-tools/
