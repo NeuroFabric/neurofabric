@@ -86,7 +86,7 @@ merged reality are WHITE and name-only.
 - **PR #4 hardening** — production artifact boundary, provenance propagation, and policy recovery semantics.
 - **PR #5 documentation sync** — merged and verified.
 - **CI green on every pull request and on push to `main`** — 22 `.mjs` + 320 core/Pi `.ts` + 21 live-proof checks.
-- **Decisions D-001 through D-007 recorded**; `limitProfiles` (D-007); `maxFileWritesPerTask` = 10.
+- **Decisions D-001 through D-007 recorded**; `limitProfiles` (D-007); `maxFileWritesPerTask` = 30.
 
 **ORANGE — partially done, or awaiting an operator decision**
 
