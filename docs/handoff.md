@@ -68,13 +68,13 @@ Measured on `d-016-vault` at `8f9f0c2` and re-run in CI on every pull request:
 | Suite | Command | Result |
 | --- | --- | --- |
 | Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 |
-| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 320 / 320 |
-| **Unit/integration total** | | **342 / 342** |
+| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 372 / 372 |
+| **Unit/integration total** | | **394 / 394** |
 | F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed |
 
-The 21 live-proof checks are **counted separately** from the 342. They are
+The 21 live-proof checks are **counted separately** from the 394. They are
 assertions driven by a standalone script rather than `node:test` cases, so
-342 + 21 is not a suite total of 363. The proof is headless and self-contained —
+394 + 21 is not a suite total of 415. The proof is headless and self-contained —
 it drives the real `KernelAdapter` and the real recovery decision function with
 stubbed tool results, uses no model and no network, and runs unchanged on a CI
 runner.

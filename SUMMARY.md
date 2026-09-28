@@ -85,7 +85,7 @@ merged reality are WHITE and name-only.
 - **F-006 Phase 1 (PR #3)**, **F-007 resolved**, **F-008 resolved (PR #2)**.
 - **PR #4 hardening** — production artifact boundary, provenance propagation, and policy recovery semantics.
 - **PR #5 documentation sync** — merged and verified.
-- **CI green on every pull request and on push to `main`** — 22 `.mjs` + 320 core/Pi `.ts` + 21 live-proof checks.
+- **CI green on every pull request and on push to `main`** — 22 `.mjs` + 372 core/Pi `.ts` + 21 live-proof checks.
 - **Decisions D-001 through D-007 recorded**; `limitProfiles` (D-007); `maxFileWritesPerTask` = 30.
 
 **ORANGE — partially done, or awaiting an operator decision**
@@ -159,9 +159,9 @@ All skills follow the pattern: a `SKILL.md` with frontmatter (name, description,
 ## 6. Verification & Testing
 
 - **Platform .mjs suites:** 22/22 pass.
-- **Core and Pi TypeScript suites:** 320/320 pass.
+- **Core and Pi TypeScript suites:** 372/372 pass.
 - **F-006 live recovery proof:** 21 checks, 0 failed. Headless and self-contained, so it runs unchanged on a CI runner.
-- **Canonical total: 342 tests**, up from the 253-era baseline as F-003, F-006 Phase 1, F-007, F-008 and the PR #4 hardening landed.
+- **Canonical total: 394 tests**, up from the 253-era baseline as F-003, F-006 Phase 1, F-007, F-008 and the PR #4 hardening landed.
 - **CI:** `ci.yml` runs all three commands above on every pull request and on push to `main`. The step labels carry the test counts as of when they were written and are cosmetic; the job's verdict comes from each command's exit code.
 - **Verification Gauntlet (Phases A–H):** All passed — coverage includes cross‑skill chained analysis, parallel multi‑file analysis, structured‑data audits, policy bypass protection, prompt‑injection defense, skill conformance, artifact integrity, and resiliency/error recovery.
 - **Gauntlet Report:** `reports/REPORT.md` confirms **READY FOR PHASE 2** with operational hardening recommendations.
@@ -182,7 +182,7 @@ memory store, optional human-approval gates) are unchanged and remain deferred.
 
 ## 8. Key Takeaways
 
-- The platform is **fully tested** (342 tests pass) and **verified** (gauntlet A–H all PASSED).
+- The platform is **fully tested** (394 tests pass) and **verified** (gauntlet A–H all PASSED).
 - **OmniRoute** is the sole production‑ready model provider; fallbacks are documented escape hatches.
 - **Pi** is the central runtime — the orchestrator is a thin extension that never makes model calls directly.
 - The **file‑analysis skill** is the first proof‑of‑concept and demonstrates the bounded‑inspection philosophy (read only, no full‑file loading).

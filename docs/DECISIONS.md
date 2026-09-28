@@ -2373,3 +2373,138 @@ billing rule is recorded here and pinned by
   differ deliberately.
 - D-019 — the static type gate covering both changed files.
 - DEV-003 — the reserved-file bundling and its recovery.
+
+## D-024: Backlog closure — every item reaches a terminal state
+
+- **Date:** 2026-09-28
+- **Status:** accepted
+- **Affects:** no runtime behaviour. One mechanical conformance change
+  (`package.json`), one documentation sweep, one drafted spec.
+- **Purpose:** close the cycle's backlog to zero open items. Every item below is
+  fixed and merged, closed by recorded decision with rationale, or converted to a
+  written spec awaiting approval. None is silently deferred.
+
+### The two already-enforced surfaces, stated so they are not re-litigated
+
+The concurrency races in this codebase are **stale-event races**, and they are
+already fenced and pinned by `platform/pi/kernel-adapter-reentrancy.test.ts` —
+19 cases across groups A–H. Recovery is already specified and verified by
+`verification/live-f006-proof.mjs` (21 checks). Both are documented in
+`docs/CONCURRENCY_RECOVERY_SPEC.md` §1–§2 so that any future "harden
+concurrency" proposal must name a specific uncovered case rather than a label.
+
+### Item-by-item terminal state
+
+| Item | Terminal state | Where |
+|---|---|---|
+| `MODULE_TYPELESS_PACKAGE_JSON` warning | **Fixed and merged** — `"type": "module"` added to `package.json` | this commit |
+| GitHub issue #23 (D-016 vault intake) | **Closed with rationale** — stale against D-017 | this commit |
+| Test-comment truth audit | **Clean — none found** | this commit |
+| Stale test counts in docs | **Fixed** — 320→372, 342→394 | this commit |
+| F-006 | **Split and closed** — see below | this commit |
+| D-017 | **Confirmed closed by design** — see below | this commit |
+| Concurrency/recovery hardening | **Converted to a written spec**, awaiting approval | `docs/CONCURRENCY_RECOVERY_SPEC.md` |
+| Descriptor-based credential-field declarations | **Closed decision: deferred by design fence, revisit at M2** | this commit |
+| Transport guard vs refspec policy mismatch | **Closed decision: operator-side publication sanctioned; guard narrowing needs a written spec** | this commit |
+
+### F-006 — split, and closed
+
+F-006 was carried as "Phase 1 merged, Phase 2 open" with three residual items.
+They do not share a terminal state, so they are closed individually:
+
+- **Real retryability propagation** → **moved to the drafted spec, §3.3.** It
+  looked mechanical, and it is conformance-shaped, but it depends on the external
+  tool-error contract, which is not defined in this repository. Guessing that
+  interface would be inventing one. It is the highest-value item on the spec
+  page and is flagged for operator decision.
+- **Strategy-change recovery** → **moved to the spec, §3.2,** as a product
+  question. Bounded recovery is intentional and tested; the absence of a replan
+  admission for repeated same-class failure is a defensible design position, not
+  obviously a defect, and is not the agent's to settle.
+- **Trace evidence for the original observation** → **closed as unclosable.**
+  The event-level hypothesis was never confirmed out of band and cannot be
+  supplied retrospectively. The Phase 1 diagnostics make the mechanism
+  observable in future; the original observation stays unconfirmed, and saying so
+  is more honest than leaving an item open forever.
+
+### D-017 — confirmed closed by design
+
+D-017 records the credentials vault as **ARCHITECTURAL DECISION, INTENTIONALLY
+UNWIRED**. The vault ships dark: its tools attach only when configured, and
+`vaultStoreEnabled` is not enabled in this configuration. The work the issue
+tracked — spec, implementation, tests, and a decision record — exists. The
+registry wiring the issue asked for was the one element D-017 deliberately
+declined, so the issue is stale against a standing ruling rather than pending.
+Closed on that basis; no code changes.
+
+### GitHub issue #23 — closed with rationale
+
+Issue #23 ("D-016 Credentials Vault — intake") lists its acceptance as "spec +
+implementation + tests green, PR to main, operator merges, D-record at close".
+All of that exists. Its remaining element, tool-registry wiring, is precisely
+what D-017 declined. Leaving it open implied outstanding work that is in fact a
+settled decision, which is the declared-state-vs-actual-state class this cycle
+exists to eliminate. Closed with a comment citing D-016, D-017 and this record.
+
+### `"type": "module"` — proven safe before merging
+
+The `MODULE_TYPELESS_PACKAGE_JSON` warning was triaged rather than suppressed.
+Before changing anything:
+
+- The repository contains **no `.js` and no `.cjs` files at all** — 9 `.mjs` plus
+  TypeScript — so entry-point resolution cannot be affected by the module type.
+- The codebase is already ESM: every file uses `import`, and the test scripts
+  depend on it.
+- With the field added, the warning count goes **1 → 0** and all four gates stay
+  green: 22 mjs, 372 ts, 21/0 proof, `tsc` 0.
+
+The change removes real noise on every CI run and changes no resolution
+behaviour. It was merged rather than closed, because it is correct rather than
+merely tolerated.
+
+### Descriptor-based credential-field declarations — closed by fence
+
+D-022 identified the principled successor to the tool-named deny-scan exemption:
+let a tool **declare** which of its fields carry credential material, so the scan
+needs no tool list. It was rejected for now because the descriptor contract is
+fenced — M2 records that a descriptor is a declaration with no handler and the
+binding belongs to the extension.
+
+**Terminal state: deferred by design fence, revisit at M2.** This is a closed
+decision, not an open item. The deny-scan works today via a one-name exemption
+in reviewed platform code, and the alternative is parked behind the same fence
+that blocks it.
+
+### Transport guard vs refspec policy mismatch — closed, operator-side
+
+The transport guard blocks `/push\s+--force/`, which also matches
+`--force-with-lease`. The consequence is that **no force form is publishable from
+the harness**, so an agent that rebases a published branch cannot republish it.
+The guard and the standing rebase instruction therefore cannot both be satisfied
+by an agent.
+
+**Terminal state: operator-side publication of rewritten history is sanctioned.**
+The operator publishes; the agent rebases locally, reports that publication
+requires a force form, and stops. Narrowing the guard so that a with-lease force
+becomes harness-publishable is **not** done here — it would change a security
+control's surface and needs its own written operator spec. Recorded as a
+decision, not code-fixed.
+
+This is the same lesson as DEV-004, recorded structurally rather than as an
+incident: a blocked control is a STOP condition, not a routing problem.
+
+### Consequence
+
+The backlog is at zero open items. Two items now await **operator approval**
+rather than agent work — the concurrency/recovery spec §3.1–§3.3, and the
+narrowing of the transport guard. Both are written specifications, not
+deferrals.
+
+### Cross-references
+
+- D-021 — the de-scope this spec answers.
+- D-022, D-023 — the deny-scan and billing fixes whose exemptions this record
+  bounds.
+- DEV-003, DEV-004 — the two process deviations of this cycle.
+- `docs/CONCURRENCY_RECOVERY_SPEC.md` — the drafted spec.
+- `verification/live-f006-proof.mjs` — the recovery proof, 21 checks.
