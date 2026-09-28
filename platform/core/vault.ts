@@ -69,6 +69,16 @@ export interface VaultEvent {
   name?: string;
   shape?: string;
   /**
+   * Set on a store that REPLACED an existing entry.
+   *
+   * A store over an existing name is a rotation, and the entry's own
+   * `rotatedAt` records the new stamp. This records the fact that something was
+   * replaced at all: without it the audit trail for two stores under one name
+   * is two identical `store/ok` lines, and a credential that was silently
+   * swapped cannot be told apart from one that was created.
+   */
+  replaced?: boolean;
+  /**
    * Set on an unredacted read: the FACT that an operator approved one.
    *
    * This is the whole audit record of a reveal, and it is deliberately not the
@@ -247,10 +257,11 @@ export class CredentialVault {
     if (typeof value !== "string") refuse(`vault entry '${name}' needs a string value`);
 
     const file = await this.readQuietly();
+    const replaced = file.entries[name] !== undefined;
     const entry: VaultEntry = { shape, value, rotatedAt: this.now() };
     file.entries[name] = entry;
     await this.persist(file);
-    this.event({ op: "store", outcome: "ok", name, shape });
+    this.event({ op: "store", outcome: "ok", name, shape, ...(replaced ? { replaced: true } : {}) });
     return { ...entry };
   }
 

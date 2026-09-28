@@ -179,6 +179,39 @@ test("storing an existing name overwrites it and updates rotatedAt", async () =>
   }
 });
 
+test("the audit trail distinguishes a rotation from a first store", async () => {
+  const root = await sandbox();
+  try {
+    // A rotation is the security-relevant event: something that was already
+    // there has been replaced. Two identical store/ok lines cannot show that,
+    // so the replacement is recorded explicitly.
+    const recorded: Record<string, unknown>[] = [];
+    const vault = new CredentialVault(vaultAt(root), {
+      persist: (entry) => { recorded.push(entry as Record<string, unknown>); },
+      now: clock("2026-02-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"),
+    });
+
+    await vault.store("tracked", "opaque-string", "fixture-value-0010");
+    const stores = () => recorded.filter((entry) => entry.op === "store");
+
+    assert.equal(stores().length, 1);
+    assert.equal(stores()[0]!.replaced, undefined, "a first store is not a replacement");
+
+    await vault.store("tracked", "opaque-string", "fixture-value-0011");
+    assert.equal(stores().length, 2);
+    assert.equal(stores()[1]!.replaced, true, "a rotation must be recorded as a replacement");
+    assert.equal(stores()[1]!.name, "tracked");
+    assert.equal(stores()[1]!.shape, "opaque-string");
+
+    // The audit trail is redacted by construction, like every vault event.
+    const serialised = JSON.stringify(recorded);
+    assert.ok(!serialised.includes("fixture-value-0010"), "the replaced value must not reach the audit trail");
+    assert.ok(!serialised.includes("fixture-value-0011"), "the new value must not reach the audit trail");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an unredacted read is refused outright when the mode does not opt in", async () => {
   const root = await sandbox();
   try {
