@@ -17,7 +17,7 @@ function parsePlan(value: unknown): Plan {
   }
   const steps = candidate.steps.map((step, index) => {
     if (!step || typeof step !== "object") throw new CoreError("PLANNING_ERROR", `Planner step ${index} is invalid`);
-    const value = step as Record<string, unknown>;
+    const value = step as unknown as Record<string, unknown>;
     if (typeof value.stepId !== "string" || typeof value.description !== "string" || !Array.isArray(value.tools) || !Array.isArray(value.dependencies)) {
       throw new CoreError("PLANNING_ERROR", `Planner step ${index} is missing required fields`);
     }

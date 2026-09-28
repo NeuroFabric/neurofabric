@@ -259,3 +259,10 @@ export interface MemoryStore {
   search(scope: MemoryRecord["scope"], query: string): Promise<MemoryRecord[]>;
   delete(id: string): Promise<void>;
 }
+
+// Type-only re-exports. The policy contract is DECLARED in policy.ts, but
+// `configured-policy.ts` legitimately imports it from here, so it is re-exported
+// from the module that centralises the kernel's type surface. These are erased
+// at runtime, so no import cycle is created.
+export type { ApprovalProvider, PolicyEngine, PolicyMode } from "./policy.ts";
+export type { RuleVerdict } from "./policy-config.ts";

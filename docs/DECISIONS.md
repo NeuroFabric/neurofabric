@@ -1881,3 +1881,53 @@ test that pins them move together in this commit.
 
 
 
+
+## D-019: A real static type gate
+
+The harness executes TypeScript by type erasure: the --experimental-strip-types
+flag discards types without checking them. Nothing in CI ever read
+`platform/` sources as source, so a green suite established only that the
+executed paths behaved.
+
+D-018 raised the tool budgets because this work kept reaching them.
+This records the gate that work produced.
+
+### What was added
+
+- `tsconfig.json` — `strict: true` over `platform/**` non-test sources.
+- `npm run typecheck` — `tsc --noEmit`.
+- A `typecheck` job in `.github/workflows/ci.yml`, kept separate from the
+  required `platform test suites` check so neither gate can mask the other.
+
+### Scope
+
+Production sources only. `**/*.test.ts` is excluded because the suite
+already executes those files at runtime under strip-types. The exclusion is a
+measured boundary, not a blanket suppression: no `@ts-ignore` is used
+anywhere to reach green, and this change introduced no `as any`.
+
+Two pre-existing `as any` remain at `platform/pi/kernel-adapter.ts` lines 175
+and 1490, in `isCleanTerminal` and the no-tool stream-death branch. Both
+predate this gate and are not touched by it. They are recorded here rather
+than silently fixed, because narrowing them is its own increment and not a
+side effect of a build change.
+
+### One documented exception
+
+`platform/pi/model-planner.ts` retains a double cast. Genuine narrowing
+there needs a full shape validator ahead of the cast, which is not cheap. The
+cast is justified in a code comment.
+
+### Value, immediate
+
+The gate surfaced a getter-shadowing bug on its first run: a defect that
+type erasure had hidden and that the runtime suite had not reached.
+
+### Migration
+
+None. Dev-time tooling only. No runtime dependency is added and nothing
+under `platform/` imports typescript.
+
+### Cross-references
+
+- D-018 — the budget raise this work motivated.

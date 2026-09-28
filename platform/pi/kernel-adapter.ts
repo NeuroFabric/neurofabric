@@ -181,6 +181,30 @@ function isCleanTerminal(result: unknown): boolean {
   return hasContent || hasFinishReason;
 }
 
+/**
+ * Reduce an unknown rejection value to text that is safe to place on an error
+ * surface.
+ *
+ * A tool call rejects with `unknown`, and the kernel copies that value into
+ * `ToolResult.error`, which is a trace field that flows into diagnostics and
+ * into anything a human reads afterwards. Interpolating such a value directly
+ * would let a hostile rejection smuggle arbitrary text into that surface, so
+ * anything that is not a real `Error` is described by its TYPE and never by
+ * its content.
+ *
+ * `typeof` is used deliberately in place of `Object.prototype.toString`,
+ * whose tag is controllable by the value itself through `Symbol.toStringTag`
+ * and would therefore reopen the injection this function exists to close.
+ */
+function describeError(error: unknown): string | undefined {
+  // Nullish means the call failed without carrying a value, which describes
+  // nothing, so the field is left absent rather than filled with a filler.
+  if (error === null || error === undefined) return undefined;
+  if (error instanceof Error) return error.message;
+  // `typeof` yields a closed set of literals that the value cannot influence.
+  return `<rejection value of type ${typeof error}>`;
+}
+
 function event(type: Parameters<EventBus["emit"]>[0]["type"], taskId: string, payload: Record<string, unknown> = {}) {
   return {
     eventId: randomUUID(),
@@ -1038,7 +1062,7 @@ export class KernelAdapter {
       executionId,
       stepId: bound.stepId,
       tool: result.execution.tool,
-      error: error?.message,
+      error: describeError(error),
       // Provenance is a fact about the execution, not a diagnostic decoration.
       // It used to stop at the `ToolResult` object and was lost the moment the
       // call returned, so nothing downstream could attribute a result to the
@@ -1368,8 +1392,16 @@ export class KernelAdapter {
       // nothing fails; the caller is told why, and the task is left as it is.
       if (precheck.decision.violation === "block") return { decision: precheck.decision, task: this.task };
       this.advance("RECOVERING", "Legacy path: policy denial after planning");
-      this.advance("FAILED", "Legacy path: policy denial", { failureReason: precheck.decision.reason });
-      await this.events.emit(event("TASK_FAILED", this.task.taskId, { reason: precheck.decision.reason }));
+      // `reason` is optional on a PolicyDecision, but both the terminal state
+      // and the TASK_FAILED event need actual text. One fallback, resolved
+      // once, so the two surfaces can never disagree about why this failed.
+      const reason = precheck.decision.reason ?? "policy denial";
+      this.advance("FAILED", "Legacy path: policy denial", { failureReason: reason });
+      // `this.task!` uses the same non-null assertion as `advance()` above: this
+      // path is only reachable after `planToolCall` has installed a task, and
+      // the assertion states that invariant without adding a runtime check to a
+      // legacy branch.
+      await this.events.emit(event("TASK_FAILED", this.task!.taskId, { reason }));
       return { decision: precheck.decision, task: this.task };
     }
     return { ...planned, decision: precheck.decision };

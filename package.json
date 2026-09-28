@@ -1,0 +1,16 @@
+{
+  "name": "agent-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Neurofebric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018).",
+  "scripts": {
+    "test:mjs": "node --test platform/*.test.mjs",
+    "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts",
+    "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.5",
+    "typescript": "5.6.3"
+  }
+}

@@ -1,9 +1,11 @@
 # CI gate for the Neurofebric harness.
 #
-# Dependencies: there is no root package.json dependency graph. The root
-# package-lock.json declares name "agent-harness" with "packages": {}, so the
-# harness has zero runtime dependencies and no install step is required. The
-# suites run on bare node, which is the repo convention.
+# Dependencies: the harness has ZERO RUNTIME dependencies — nothing under
+# platform/ imports anything outside node's own stdlib — so the three test
+# jobs run on bare node, with no install step, which is the repo convention.
+# There is now a root package.json carrying exactly one devDependency,
+# typescript, added by the static type gate below (D-019). The typecheck job is
+# therefore the only job here that installs anything.
 #
 # Node version: nothing in the repo pins a version (no .nvmrc, no engines
 # field), so 22 LTS is used. 22 is also the floor for
@@ -83,3 +85,35 @@ jobs:
 
       - name: F-006 live recovery proof
         run: node --experimental-strip-types verification/live-f006-proof.mjs
+
+  # The static half of the gate (D-019). Every other job here executes the
+  # source; none of them reads it. That gap was not theoretical: type erasure
+  # under --experimental-strip-types means the compiler never sees platform
+  # sources, so a wrong-shaped accessor shipped green until the new gate
+  # surfaced it on its first run. Runtime execution and static checking cover
+  # different failure modes, and only one of the two was wired.
+  #
+  # SEPARATE JOB rather than a step on `test`, for the same reason
+  # `test-windows` is one: the required check context is exactly
+  # `platform test suites`, and a type error must not be able to fail the
+  # runtime suite's job, nor a runtime failure to hide a type error. Separate
+  # contexts also make a red run say which kind of gate is red.
+  #
+  # Unlike the test jobs this one DOES install: typescript is a devDependency,
+  # so node_modules must exist before the compiler can run.
+  typecheck:
+    name: static type gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dev dependencies
+        run: npm ci
+
+      - name: TypeScript noEmit
+        run: npm run typecheck
