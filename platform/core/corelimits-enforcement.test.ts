@@ -74,23 +74,48 @@ test("D009.1c validateLimits still rejects a non-positive limit", () => {
   assert.throws(() => validateLimits({ maxArtifactBytes: -1 }), /Invalid core limit/);
 });
 
-test("D009.1d validateLimits passes an unknown key through instead of rejecting it", () => {
+test("D009.1d validateLimits rejects an unknown key instead of merging it through", () => {
   const forged = { maxParallelTools: 4 } as unknown as Partial<CoreLimits>;
-  // DEFECT, PINNED AS-IS — Task B. `validateLimits` merges the caller's object
-  // over DEFAULT_LIMITS with a spread and only range-checks the merged
-  // entries, so a key that is not on `CoreLimits` is neither rejected nor
-  // dropped: it rides through into the returned object. The range check even
-  // applies to it. So removal of a limit from the interface is not enforced at
-  // the validation boundary; a caller can still construct a "limits" object
+  // RESOLVED (Task B). `validateLimits` used to merge the caller's object over
+  // DEFAULT_LIMITS with a spread and only range-check the merged entries, so a
+  // key that is not on `CoreLimits` was neither rejected nor dropped: it rode
+  // through into the returned object, and the range check even applied to it.
+  // Removal of a limit from the interface was therefore not enforced at the
+  // validation boundary, and a caller could construct a "limits" object
   // carrying a field the platform no longer claims to honour.
   //
-  // This is a weaker guarantee than the D009.1b test above, which only holds
-  // for `validateLimits({})`. D-009 fenced `validateLimits` because changing
-  // it would alter the shape callers receive, so the behaviour is pinned here
-  // as current behaviour rather than corrected. Task B owns the fix and this
-  // test must be updated to assert the rejection when it lands.
-  assert.doesNotThrow(() => validateLimits(forged));
-  assert.equal("maxParallelTools" in validateLimits(forged), true);
+  // Unknown keys are now rejected by name, matching the fail-loudly contract
+  // `parsePolicyConfig` already applies to an unknown policy field. The
+  // supported contract is unchanged: a well-typed caller can only pass keys
+  // that are on the interface, and a partial of declared keys still merges
+  // over the defaults exactly as before.
+  assert.throws(() => validateLimits(forged), /Unknown core limit: maxParallelTools/);
+});
+
+test("D009.1e a rejected unknown key is not merged, and declared keys still merge", () => {
+  // The rejection happens before the merge, so nothing partially applies.
+  assert.throws(
+    () => validateLimits({ maxToolRetries: 5, bogusLimit: 1 } as unknown as Partial<CoreLimits>),
+    /Unknown core limit: bogusLimit/,
+  );
+
+  // A partial of REAL keys is still accepted and still fills from the defaults.
+  const partial = validateLimits({ maxToolRetries: 5 });
+  assert.equal(partial.maxToolRetries, 5, "a declared key is applied");
+  assert.equal(partial.maxReplans, DEFAULT_LIMITS.maxReplans, "an undeclared key keeps its default");
+  assert.equal(partial.maxArtifactBytes, DEFAULT_LIMITS.maxArtifactBytes);
+
+  // An empty object is still valid, which is what D009.1b already pinned.
+  assert.doesNotThrow(() => validateLimits({}));
+
+  // Every key the result carries is a key the interface declares, so a
+  // validated object can never contain a phantom field.
+  for (const key of Object.keys(validateLimits({}))) {
+    assert.ok(
+      (DEFAULT_LIMITS as Record<string, unknown>)[key] !== undefined,
+      `validated limits must not carry a field outside the interface: ${key}`,
+    );
+  }
 });
 
 // --- 2. selectContext honours the budget it is given -----------------------
