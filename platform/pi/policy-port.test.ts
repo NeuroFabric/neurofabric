@@ -404,7 +404,7 @@ test("4b. the file-write and write-size limits are enforced too", async () => {
   const justUnder = await sizing.precheckToolCall(
     "write",
     "execute",
-    { path: "ok.md", content: "x".repeat(60) },
+    { path: "ok.md", content: "x".repeat(50) },
     undefined,
     "w-ok",
   );
