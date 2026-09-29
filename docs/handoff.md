@@ -19,7 +19,7 @@ Never use past tense for undelivered work. **Drafted is not recorded, and record
 
 ## 0. Current finding status
 
-As of `8f9f0c2` on `d-016-vault` (the D-016 build commit; `main` last at `d678435`, PR #24 merged). Full detail in `verification/findings/`.
+Finding statuses below were measured on `8f9f0c2` on `d-016-vault` and have not been re-measured since; `main` has advanced well past `d678435` (PR #24). Current queue state is in section 9. Full detail in `verification/findings/`.
 
 | ID | Status |
 | --- | --- |
@@ -65,18 +65,18 @@ task was already terminal, which are not policy decisions).
 
 ## 0b. Current verification baseline
 
-Measured on `d-016-vault` at `8f9f0c2` and re-run in CI on every pull request:
+The commands are unchanged since `d-016-vault` (`8f9f0c2`); the counts are current and re-run in CI on every pull request:
 
 | Suite | Command | Result |
 | --- | --- | --- |
 | Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 |
-| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 372 / 372 |
-| **Unit/integration total** | | **394 / 394** |
+| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 374 / 374 |
+| **Unit/integration total** | | **396 / 396** |
 | F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed |
 
-The 21 live-proof checks are **counted separately** from the 394. They are
+The 21 live-proof checks are **counted separately** from the 396. They are
 assertions driven by a standalone script rather than `node:test` cases, so
-394 + 21 is not a suite total of 415. The proof is headless and self-contained —
+396 + 21 is not a suite total of 417. The proof is headless and self-contained —
 it drives the real `KernelAdapter` and the real recovery decision function with
 stubbed tool results, uses no model and no network, and runs unchanged on a CI
 runner.
@@ -332,19 +332,23 @@ squash SHA on `main`; anything else is *not started* or an *open flag*.
 
 | # | Item | State | Evidence |
 |---|---|---|---|
-| 0 | Standing rule + this snapshot recorded in `docs/handoff.md` | in progress | this PR |
-| 1 | D-025 wall-clock assertion removal from `tool-paths-recursion.test.ts` | not started | — |
-| 2 | Order-dependence probe (`platform/core` and `platform/pi` as separate processes) | not started | — |
+| 0 | Standing rule + this snapshot recorded in `docs/handoff.md` | **done** | PR #48, `d09e7ea` |
+| 1 | D-025 wall-clock assertion removal from `tool-paths-recursion.test.ts` | **done** | PR #49, `ca9f5de` |
+| 2 | Order-dependence probe (`platform/core` and `platform/pi` as separate processes) | **done** | No dependence found; 171 + 201 = 372; 14 executions, 0 fail. Report-only, no PR |
 | 3 | D-026 operator ruling recorded on the concurrency spec | **done** | PR #47, squash `6758220` |
-| 4 | Held byte note in `.pi/neurofebric-policy.json` | not started | check #44 `76c91f6` first |
-| 5 | Conformance PR A — pin byte-cap edge cases | not started | — |
-| 6 | Conformance PR B — pin guard fail-closed at depth | not started | — |
-| 7 | Conformance PR C — pin vault billing path | not started | — |
-| 8 | Docs truth pass — README + `docs/` stale facts | not started | — |
+| 4 | Held byte note in `.pi/neurofebric-policy.json` | **open flag** | "byte note requires operator content" — #44 `76c91f6` landed a secret-scan note, not a byte note; no `_maxBytesPerWriteNote` exists; held text verifiable nowhere; D-004 bars authoring it |
+| 5 | Conformance PR A — pin byte-cap edge cases | **done** | PR #50, `0f30913` — UTF-8 byte accounting |
+| 6 | Conformance PR B — pin guard fail-closed at depth | **open flag** | Deny-scan **throws `RangeError`** past ~2000–3000 nesting instead of denying; no depth bound (cf. `redaction.ts` `MAX_DEPTH = 12`). Fix is new semantics, deferred |
+| 7 | Conformance PR C — pin vault billing path | **done** | PR #51, `5f00279` — `setVault` funnel path |
+| 8 | Docs truth pass — README + `docs/` stale facts | in progress | this PR |
 | 9 | PR #45 timeline evidence (blocked → green → merged) | not started | — |
 | 10 | Squash-only merge methods via ruleset | not started | — |
 | 11 | Residue branch cleanup (local squash-residue branches) | not started | — |
 | 12 | Final verification pass | not started | — |
+
+Two open flags (items 4 and 6) are terminal for this cycle and are **not**
+agent work. Item 4 needs operator-supplied content; item 6 needs a semantics
+decision that this cycle is not authorised to make.
 
 Standing constraints for every item above: full gate on every PR
 (3/3 suites, squash merge, SHA recorded), no new semantics, no M2
