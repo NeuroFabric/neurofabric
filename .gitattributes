@@ -1,0 +1,30 @@
+# Line-ending policy for the Neurofebric harness.
+#
+# The repository stores every text file with LF endings. That was already true
+# of every committed blob before this file existed -- verified by scanning
+# origin/main for CR bytes and finding none -- so this file RECORDS the existing
+# state and pins it. It does not change any byte already in the repository, and
+# `git add --renormalize .` over this tree is a no-op. That no-op is the
+# evidence that the policy matches reality rather than a migration applied over
+# it.
+#
+# `text=auto` lets git detect text by content and normalize on check-in.
+# `eol=lf` forces LF in the working tree as well, so a checkout on Windows
+# stops producing CRLF. That matters here: this harness is developed on Windows
+# and gated on linux runners, and a CRLF checkout is a class of spurious diff
+# that a mixed-platform team will eventually commit by accident.
+#
+# The Windows carve-out is deliberately absent. No tracked file is a .bat, .cmd
+# or .ps1 -- 213 tracked files, zero of them -- so the carve-out protects
+# nothing that exists today. It is written anyway, FORWARD-LOOKING ONLY: a
+# Windows-native script with CRLF endings is correct, and the first person to
+# add one should not have to rediscover that `text=auto` will rewrite it.
+#
+# D-028 -- the CI gate that consumes this checkout.
+# D-024  -- the terminal-state discipline for a change with no runtime effect.
+
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
