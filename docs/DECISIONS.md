@@ -2662,3 +2662,70 @@ record would have said.
   from the same cycle.
 - `platform/pi/write-byte-fail-closed.test.ts` — the same class of conformance
   pinning applied to the byte cap (PR #50, `0f30913`; PR #51, `5f00279`).
+
+## D-027: The write deny-scan enforces a hard depth bound of 12
+
+- **Date:** 2026-09-29
+- **Status:** accepted
+- **Ruling authority:** operator
+- **Affects:** `platform/core/configured-policy.ts`,
+  `platform/pi/write-scan-fail-closed.test.ts`. New control behaviour on
+  write-tier payloads nested deeper than the bound.
+
+### Context — a crash where a decision belongs
+
+Cycle-1 item 6 probed the write deny-scan with a marker at increasing nesting
+depth and found the guard is fail-closed only to roughly 2000–3000 levels.
+Past that, `collectScannedStrings` throws
+`RangeError: Maximum call stack size exceeded`, and because `precheckToolCall`
+has no `catch`, the exception escapes the guard instead of producing a `DENY`.
+The boundary therefore had an input on which it crashed rather than decided.
+Cycle 1 recorded the defect and declined to choose a bound, because choosing one
+is new semantics and was not authorised.
+
+### Ruling
+
+**A write-tier payload nested deeper than 12 is DENIED.** The bound is hard: the
+guard does not descend past it and does not attempt to scan the remainder.
+
+The value **12** is taken from `platform/core/redaction.ts`, where
+`const MAX_DEPTH = 12` already bounds the redaction plane and returns
+`REDACTED` at the limit. Using the same number is the point: the repository now
+has **one** depth convention across its two recursive boundary walkers, and a
+future reader does not have to learn two different limits for the same concern.
+
+The failure mode is also made uniform. `redactValue` does not crash at depth; it
+stops and returns a safe value. The scan now does not crash at depth; it stops
+and returns a safe **decision**. A guard that cannot answer must fail closed, and
+"fail closed" for a policy engine means `DENY`, not an exception.
+
+### Scope of the control
+
+The bound is checked on the **write-tier path before the tool exemption**, not
+only on the scanned subset. This is a deliberate choice: `vault_store` is exempt
+from the deny-scan, but its payload still reaches `collectBilledStrings` for the
+byte cap, and that walker was equally unbounded. Checking the bound ahead of the
+exemption means a too-deep payload is refused on the way in, so no unbounded
+recursive walker is ever entered on a write. Scoping it to the scanned subset
+only would have left the vault reachable.
+
+### Consequence
+
+- A write payload nested deeper than 12 is refused with a depth-specific
+  reason, whatever it contains. The refusal does not depend on finding a
+  marker, because "too deep to scan safely" is itself the reason.
+- The denial happens before the byte cap, so the billing walker is never handed
+  an unbounded payload.
+- Real write payloads are shallow (a path plus a body). The bound is generous
+  for every shape the harness actually produces.
+- The file header in `write-scan-fail-closed.test.ts` said the payload "is
+  scanned at any depth". That statement becomes false the moment the bound
+  exists, so rewording it is part of making the documented semantics true rather
+  than a separate editorial change.
+
+### Cross-references
+
+- D-022 — made the deny-scan fail-closed over depth; this bounds that depth.
+- D-023 — the byte cap, whose walker this bound also protects.
+- `platform/core/redaction.ts` — `MAX_DEPTH = 12`, the source of the number.
+- `docs/handoff.md` §9 — the queue entry this closes.

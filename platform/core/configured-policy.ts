@@ -105,6 +105,59 @@ function collectBilledStrings(value: unknown): string[] {
 }
 
 /**
+ * D-027: the hard nesting bound for a write payload.
+ *
+ * 12 is `MAX_DEPTH` from `platform/core/redaction.ts`, deliberately the same
+ * number, so the repository has one depth convention across both of its
+ * recursive boundary walkers rather than two limits to learn for one concern.
+ */
+const MAX_WRITE_PAYLOAD_DEPTH = 12;
+
+/**
+ * The deepest container nesting in a write payload's values, or 0 if there is
+ * none.
+ *
+ * ITERATIVE on purpose. A guard that measures depth by recursing would be
+ * vulnerable to the very stack exhaustion it exists to prevent, so this walks an
+ * explicit stack and cannot overflow at any input depth. A `visited` set makes it
+ * terminate on a cyclic payload, which `JSON.parse` would never produce but a
+ * hand-built tool argument could.
+ *
+ * The top-level argument object is the baseline, not a level: a payload of
+ * `{ path, body }` where `body` is nested 13 deep measures 13, which is the
+ * number the bound is written about.
+ */
+function maxWritePayloadDepth(input: unknown): number {
+  const topLevel =
+    input !== null && typeof input === "object"
+      ? Object.values(input as Record<string, unknown>)
+      : [input];
+
+  let deepest = 0;
+  const visited = new Set<object>();
+  const stack: Array<{ node: unknown; depth: number }> = [];
+
+  for (const value of topLevel) stack.push({ node: value, depth: 0 });
+
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    if (frame === undefined) break;
+    const { node, depth } = frame;
+    if (node === null || typeof node !== "object") continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
+
+    const next = depth + 1;
+    if (next > deepest) deepest = next;
+
+    const children = Array.isArray(node) ? node : Object.values(node as Record<string, unknown>);
+    for (const child of children) stack.push({ node: child, depth: next });
+  }
+
+  return deepest;
+}
+
+/**
  * Where a metered budget starts warning, as a fraction of the limit.
  *
  * Two thresholds rather than one, so the agent is told while there is still room
@@ -305,6 +358,27 @@ export class ConfiguredPolicy implements PolicyEngine {
       where,
     );
     if (tokenDenial) return tokenDenial;
+
+    if (tool.riskLevel === "WRITE") {
+      // 4b. Nesting depth (D-027). A payload deeper than the bound is refused
+      //     rather than walked, so neither recursive walker below is ever handed
+      //     a payload that can exhaust the stack: `collectScannedStrings` (the
+      //     deny-scan) and `collectBilledStrings` (the byte cap). Without this,
+      //     a sufficiently deep write threw `RangeError: Maximum call stack
+      //     size exceeded` out of the guard instead of returning a decision.
+      //
+      //     The check sits BEFORE `SCAN_EXEMPT_TOOLS` on purpose. `vault_store`
+      //     is exempt from the deny-scan, but its payload still reaches the byte
+      //     cap, whose walker was equally unbounded. Scoping the bound to the
+      //     scanned subset alone would have left the vault reachable.
+      //
+      //     "Too deep to scan safely" is itself the reason, so this does not
+      //     depend on finding a pattern at the bottom.
+      const depth = maxWritePayloadDepth(input);
+      if (depth > MAX_WRITE_PAYLOAD_DEPTH) {
+        return `${where}: write payload nesting depth ${depth} exceeds the limit of ${MAX_WRITE_PAYLOAD_DEPTH}`;
+      }
+    }
 
     if (tool.riskLevel === "WRITE" && !SCAN_EXEMPT_TOOLS.has(tool.name)) {
       const secretDenial = this.matchIn(

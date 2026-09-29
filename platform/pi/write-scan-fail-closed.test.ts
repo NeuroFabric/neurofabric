@@ -11,8 +11,16 @@
  * harness field would be a silent bypass rather than a test failure.
  *
  * The rule these tests pin: for a WRITE-tier tool, every string value in the
- * payload is scanned at any depth, EXCEPT values under an explicit set of
- * path/locator field names. Unknown fields default to scanned.
+ * payload is scanned, EXCEPT values under an explicit set of path/locator field
+ * names. Unknown fields default to scanned.
+ *
+ * "Scanned" is bounded: per D-027 a write payload nested deeper than 12 is
+ * refused outright, because past that depth the guard cannot walk safely. The
+ * bound is `MAX_WRITE_PAYLOAD_DEPTH` in `platform/core/configured-policy.ts`,
+ * set to 12 to match `MAX_DEPTH` in `platform/core/redaction.ts`. This file used
+ * to say the payload "is scanned at any depth", which overstated what the guard
+ * did — before the bound it could be walked at any depth right up until it
+ * crashed, and afterwards it is refused. Test 6 pins the bound.
  *
  * The marker below is assembled from fragments at runtime so this source file
  * is not itself a refused write payload. The production control under test is
@@ -229,4 +237,83 @@ test("5. every declared string field of every write-tier tool is scanned except 
       }
     }
   }
+});
+
+/**
+ * 6. D-027: the deny-scan enforces a hard depth bound of 12.
+ *
+ * Before the bound, `collectScannedStrings` was an unbounded recursion. It
+ * denied correctly at ordinary depths, so the defect was invisible to every
+ * other test in this file, but past roughly 2000-3000 levels it exhausted the
+ * stack and threw `RangeError: Maximum call stack size exceeded` straight out
+ * of `precheckToolCall`. A boundary that crashes on an input has no decision
+ * to give; D-027 makes it refuse instead.
+ *
+ * Two cases, failing for different reasons without the bound, which is what
+ * makes this test discriminating rather than decorative:
+ *
+ *   - 13 levels, just past the bound, carrying the marker. Before the bound
+ *     this is DENIED *with the wrong reason* ("secret write pattern matched"):
+ *     the scan walked all the way down and matched. D-027 says exceeding the
+ *     depth bound is itself the reason, so this asserts the reason, not merely
+ *     the decision.
+ *   - 3000 levels. Before the bound this does not return at all; it throws.
+ *     After the bound it is DENY, like any other too-deep write.
+ *
+ * The third case guards the other direction: a payload inside the bound must
+ * still be scanned normally, so the bound cannot creep down and refuse ordinary
+ * writes.
+ *
+ * The bound is 12 to match `MAX_DEPTH` in `platform/core/redaction.ts`, so the
+ * repository has one depth convention across both recursive boundary walkers.
+ */
+test("6. a write payload nested beyond the depth bound is denied, not thrown", async () => {
+  const root = await sandbox();
+  const adapter = await configuredAdapter(root);
+
+  const nest = (levels: number): unknown => {
+    let payload: unknown = MARK;
+    for (let i = 0; i < levels; i += 1) payload = { level: payload };
+    return payload;
+  };
+
+  // Just past the bound: denied, and denied FOR THE DEPTH.
+  const { decision: justPast } = await adapter.precheckToolCall(
+    "write",
+    "execute",
+    { path: path.join(root, "deep.md"), body: nest(13) },
+    undefined,
+    "depth-13",
+  );
+  assert.equal(justPast.decision, "DENY", "13 levels is past the bound of 12 and must be refused");
+  assert.match(
+    reason(justPast),
+    /nesting depth 13 exceeds the limit of 12/,
+    "exceeding the bound is itself the reason; a pattern match at the bottom is not what is tested",
+  );
+
+  // Far past the bound: the shape that used to crash must now decide.
+  const { decision: farPast } = await adapter.precheckToolCall(
+    "write",
+    "execute",
+    { path: path.join(root, "deeper.md"), body: nest(3000) },
+    undefined,
+    "depth-3000",
+  );
+  assert.equal(farPast.decision, "DENY", "a 3000-level payload must be denied rather than throwing RangeError");
+  assert.match(reason(farPast), /nesting depth 3000 exceeds the limit of 12/);
+
+  // The bound must not fire early: inside the bound, the scan still runs.
+  const { decision: withinBound } = await adapter.precheckToolCall(
+    "write",
+    "execute",
+    { path: path.join(root, "shallow.md"), body: nest(3) },
+    undefined,
+    "depth-3",
+  );
+  assert.match(
+    reason(withinBound),
+    /secret write pattern matched/,
+    "a payload within the bound is scanned normally, not refused for depth",
+  );
 });
