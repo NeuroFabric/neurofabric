@@ -2403,7 +2403,7 @@ concurrency" proposal must name a specific uncovered case rather than a label.
 | Stale test counts in docs | **Fixed** — 320→372, 342→394 | this commit |
 | F-006 | **Split and closed** — see below | this commit |
 | D-017 | **Confirmed closed by design** — see below | this commit |
-| Concurrency/recovery hardening | **Converted to a written spec**, awaiting approval | `docs/CONCURRENCY_RECOVERY_SPEC.md` |
+| Concurrency/recovery hardening | **Converted to a written spec**; **approved as context, all three items deferred to M2** by D-026 | `docs/CONCURRENCY_RECOVERY_SPEC.md` |
 | Descriptor-based credential-field declarations | **Closed decision: deferred by design fence, revisit at M2** | this commit |
 | Transport guard vs refspec policy mismatch | **Closed decision: operator-side publication sanctioned; guard narrowing needs a written spec** | this commit |
 
@@ -2498,7 +2498,9 @@ incident: a blocked control is a STOP condition, not a routing problem.
 The backlog is at zero open items. Two items now await **operator approval**
 rather than agent work — the concurrency/recovery spec §3.1–§3.3, and the
 narrowing of the transport guard. Both are written specifications, not
-deferrals.
+deferrals. *(Update, 2026-09-29: the first of these was ruled on by **D-026** —
+approved as context, all three items deferred to M2. The transport-guard item
+remains operator-side.)*
 
 ### Cross-references
 
@@ -2508,3 +2510,92 @@ deferrals.
 - DEV-003, DEV-004 — the two process deviations of this cycle.
 - `docs/CONCURRENCY_RECOVERY_SPEC.md` — the drafted spec.
 - `verification/live-f006-proof.mjs` — the recovery proof, 21 checks.
+
+## D-026: The concurrency/recovery spec is approved as context — all three items deferred to M2
+
+- **Date:** 2026-09-29
+- **Status:** accepted
+- **Ruling on:** `docs/CONCURRENCY_RECOVERY_SPEC.md` sections 3.1, 3.2, 3.3
+- **Affects:** no code, no tests, no runtime behaviour. No new semantics are
+  introduced by this record.
+
+### Context
+
+D-024 closed the cycle's backlog by converting "concurrency/recovery hardening"
+into a written specification, `docs/CONCURRENCY_RECOVERY_SPEC.md`, so the
+question could be decided on evidence rather than on the M1–M4 label that D-021
+withdrew. That spec separated surface already enforced (section 1: stale-event
+races, 19 cases in `platform/pi/kernel-adapter-reentrancy.test.ts`; section 2:
+recovery, 21 checks in `verification/live-f006-proof.mjs`) from surface that would
+introduce **new semantics** and therefore required an operator ruling (3.1
+parallel tool execution, 3.2 strategy-change recovery, 3.3 retryability
+propagation).
+
+The spec was left at DRAFT status pending that ruling. This record is the ruling.
+
+### Ruling
+
+**APPROVED AS CONTEXT. All three section 3 items are deferred to M2. No
+implementation now, no new semantics.**
+
+| Item | Ruling |
+|---|---|
+| 3.1 true parallel tool execution | **DEFERRED to M2**, out of scope this cycle |
+| 3.2 strategy-change recovery | **NOT A DEFECT** — bounded hard-stop recovery is intentional and tested; strategy-switching noted as an M2 candidate only |
+| 3.3 retryability propagation | **KNOWN LIMITATION acknowledged**, deferred to M2 |
+
+### Rationale
+
+**3.1.** Parallel tool execution does not exist as a feature: `maxParallelTools`
+and `maxParallelTasks` were removed from `CoreLimits` in D-009 because nothing
+schedules tasks concurrently. The open question was whether a *limit* could be
+given real meaning when two tool calls are in flight at once, and that question
+presupposes an executor that does not exist. Answering it would require building
+the concurrency model this record defers. The removed limits therefore stay
+**deliberately removed** — not silently pending, not re-added as a paper
+constraint.
+
+**3.2.** The spec itself flagged that the retry-budget hard stop "is defensible —
+bounded recovery is intentional and tested — and is not obviously a defect." The
+operator adopts that reading. A deterministic exact-match-edit failure that
+consumes its budget and stops is the bounded-recovery contract working as
+specified, not a failure of it. The residual observation from F-006 Phase 2 is
+real, but it is a **product question** about whether recovery should ever replan,
+not a correctness gap. It is carried to M2 as a candidate and nothing more.
+
+**3.3.** The hard-coded `retryable: false` in `recordToolResult` is acknowledged
+as a **known limitation**, not a defect and not hidden. The blocker is unchanged
+and was correctly identified in the spec: the real value from the tool error
+depends on an external tool-error contract that **is not defined in this
+repository**, and guessing that contract would be inventing an interface.
+`classifyFailure` already honours `CoreError.retryable`; what is missing is a
+producer that sets it truthfully. That stays conformance work until the contract
+exists.
+
+### Consequence
+
+- **No code, test, or policy change.** The harness kernel, the Pi extension, and
+  the policy set are untouched.
+- The spec moves from DRAFT to **approved as context**. It is now the reference
+  for why these three items are deferred and on what basis, so a later cycle does
+  not re-derive the analysis.
+- All three items are **carried to M2 as written, decided, deferred items** — the
+  same terminal-state discipline D-024 applied. None is an open agent-work item.
+- **Reactivation requires a new operator order.** Any implementation attempt on
+  sections 3.1 to 3.3 before then is unauthorised by this record, in the same way
+  D-021 withdrew the sign-off to begin M1–M4 from a label.
+- 3.3 additionally requires the tool-error contract to be confirmed before it
+  becomes implementable at all.
+- The spec's own exclusions hold unchanged: no new limits, no new persisted
+  state, no change to `selectContext` (D-020), the vault's jurisdiction
+  (D-022/D-023), or the descriptor contract (M2 fence).
+
+### Cross-references
+
+- D-021 — the de-scope this spec was written to answer.
+- D-024 — closed the backlog and produced this spec; its "awaiting approval" row
+  is closed by this record.
+- D-009 — the removal of the paper concurrency limits that 3.1 leaves removed.
+- F-006 — the origin of the 3.2 and 3.3 observations; the recovery proof (21
+  checks) continues to run unchanged in CI.
+- `docs/CONCURRENCY_RECOVERY_SPEC.md` — the approved-as-context spec.

@@ -1,7 +1,16 @@
-# Concurrency and Recovery Hardening — operator spec (DRAFT)
+# Concurrency and Recovery Hardening — operator spec (APPROVED AS CONTEXT)
 
-- **Status:** DRAFT, awaiting operator approval. Nothing in section 3 is
-  implemented, and nothing in it may be implemented before approval.
+- **Status:** **APPROVED AS CONTEXT by D-026 (2026-09-29).** Nothing in section 3
+  is implemented and nothing in it may be implemented. All three section 3 items
+  are **deferred to M2**: 3.1 parallel tool execution (deferred, out of scope this
+  cycle), 3.2 strategy-change recovery (**not a defect** — bounded hard-stop
+  recovery is intentional and tested; M2 candidate only), 3.3 retryability
+  propagation (**known limitation acknowledged**, deferred).
+- **Reactivation requires a new operator order.** See D-026 for the ruling, its
+  rationale, and the terminal state of each item.
+- Sections 1 and 2 remain the standing statement of what is already enforced and
+  pinned; they are unaffected by the ruling and still foreclose any future
+  "harden concurrency" proposal that cannot name a specific uncovered case.
 - **Origin:** the "Phase M1–M4" label, de-scoped by **D-021** because no written
   specification existed for it. This document is that specification, drafted so
   the decision can be made on evidence rather than on a label.
@@ -56,10 +65,13 @@ a post-terminal precheck is refused as `task_terminal` rather than as a violatio
 and a terminal task reports a specific `reasonCode` rather than a generic
 sentence.
 
-## 3. Genuinely uncovered surface — REQUIRES OPERATOR APPROVAL
+## 3. Genuinely uncovered surface — RULED ON, DEFERRED TO M2 (D-026)
 
 Everything in this section introduces **new semantics**: new limits, new state, or
-new tools. None of it may be implemented on agent initiative.
+new tools. None of it may be implemented on agent initiative. **All three items
+below were ruled on by D-026 on 2026-09-29: approved as context, deferred to M2,
+no implementation now and no new semantics.** The analysis below is preserved
+unchanged as the record of *why* each item is deferred, not as a work order.
 
 ### 3.1 True parallel tool execution — is it in scope?
 
@@ -115,10 +127,15 @@ work with red-first evidence.
   jurisdiction (D-022/D-023), or the descriptor contract (M2 fence).
 - No roadmap. Sequencing after approval is the operator's call.
 
-## 5. Recommendation
+## 5. Recommendation (superseded by D-026 — kept as the record of the proposal)
 
-Approve **3.3 first** — it is a small, testable, conformance-shaped item with the
-largest correctness gain. Decide **3.2** as a product question with a stated
-preference rather than leaving it open. Treat **3.1** as a scope question to be
-answered explicitly either way, so the removed limits stay deliberately removed
-rather than quietly pending.
+The recommendation below was made to the operator on 2026-09-28. **D-026 did not
+adopt it as written**: 3.3 is deferred rather than taken first, 3.2 is ruled not
+a defect, and 3.1 is deferred rather than closed either way. The text is
+preserved so the divergence is visible rather than quietly edited away.
+
+> Approve **3.3 first** — it is a small, testable, conformance-shaped item with
+> the largest correctness gain. Decide **3.2** as a product question with a stated
+> preference rather than leaving it open. Treat **3.1** as a scope question to be
+> answered explicitly either way, so the removed limits stay deliberately removed
+> rather than quietly pending.
