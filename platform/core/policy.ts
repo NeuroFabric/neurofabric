@@ -1,7 +1,9 @@
 import path from "node:path";
 import { CoreError } from "./errors.ts";
-import { extractPathCandidates, WorkspaceBoundary } from "./workspace.ts";
-import { extractCommandText, extractToolPathCandidates } from "./tool-paths.ts";
+import { extractPathCandidates, MAX_SECURITY_SCAN_DEPTH, newScanState, WorkspaceBoundary, type ScanState, type StringScan } from "./workspace.ts";
+import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
+
+export type { StringScan } from "./workspace.ts";
 import type { PolicyDecision, PolicyRequest, ToolBudgetTelemetry } from "./types.ts";
 
 export interface ApprovalProvider {
@@ -132,23 +134,67 @@ export const SECRET_ACCESS_PATTERNS: readonly RegExp[] = [
   /\/etc\/(shadow|gshadow|sudoers)\b/i,
 ];
 
-/** Every string inside an arbitrary tool input, for pattern scanning. */
-export function collectStrings(value: unknown, depth = 0): string[] {
-  if (depth > 6 || value === null || value === undefined) return [];
-  if (typeof value === "string") return [value];
-  if (typeof value !== "object") return [];
-  if (Array.isArray(value)) return value.flatMap((item) => collectStrings(item, depth + 1));
-  return Object.values(value as Record<string, unknown>).flatMap((item) => collectStrings(item, depth + 1));
+/** The outcome of a bounded string scan: what was seen, and whether it finished. */
+
+/**
+ * Every string inside an arbitrary tool input, for pattern scanning, together
+ * with whether the walk was able to finish.
+ *
+ * Secret and destructive pattern matching is a security scan, so truncation is
+ * part of its result: a pattern walk that stopped at the depth bound has NOT
+ * cleared the payload, and a caller that reads an empty list as "no match" is
+ * reading an uninspected payload as a safe one.
+ */
+export function scanStrings(value: unknown, state: ScanState = newScanState(), depth = 0): StringScan {
+  const strings: string[] = [];
+  const visit = (item: unknown, at: number): void => {
+    if (at > MAX_SECURITY_SCAN_DEPTH) {
+      state.truncated = true;
+      return;
+    }
+    if (item === null || item === undefined) return;
+    if (typeof item === "string") {
+      strings.push(item);
+      return;
+    }
+    if (typeof item !== "object") return;
+    for (const nested of Array.isArray(item) ? item : Object.values(item as Record<string, unknown>)) {
+      visit(nested, at + 1);
+    }
+  };
+  visit(value, depth);
+  return { strings, truncated: state.truncated };
 }
 
-function firstMatch(value: unknown, patterns: readonly RegExp[]): RegExp | undefined {
-  for (const text of collectStrings(value)) {
+/** The strings from `scanStrings`, without the truncation flag. */
+export function collectStrings(value: unknown, depth = 0): string[] {
+  return scanStrings(value, newScanState(), depth).strings;
+}
+
+/** First pattern present in an already-scanned set of strings. */
+function matchIn(scan: StringScan, patterns: readonly RegExp[]): RegExp | undefined {
+  for (const text of scan.strings) {
     for (const pattern of patterns) {
       pattern.lastIndex = 0;
       if (pattern.test(text)) return pattern;
     }
   }
   return undefined;
+}
+
+function firstMatch(value: unknown, patterns: readonly RegExp[]): RegExp | undefined {
+  return matchIn(scanStrings(value), patterns);
+}
+
+/**
+ * The fail-closed reason for a security scan that could not complete.
+ *
+ * Deterministic, and it deliberately quotes only the bound and the tool name --
+ * never any part of the payload, which may itself be the secret the scan was
+ * looking for.
+ */
+export function truncatedScanReason(tool: string): string {
+  return `security scan incomplete: '${tool}' input nesting exceeds the safe scan depth of ${MAX_SECURITY_SCAN_DEPTH}; an uninspected payload is refused, not treated as clean`;
 }
 
 /**
@@ -192,19 +238,30 @@ export function classifyTrustedOperation(request: PolicyRequest, boundary: Works
   // A destructive-classified tool is never auto-executed.
   if (tool.riskLevel === "DESTRUCTIVE") return `tool '${tool.name}' is classified DESTRUCTIVE`;
 
-  const candidates = extractToolPathCandidates(tool, input);
-  const commandText = extractCommandText(tool, input);
+  const pathScan = scanToolPathCandidates(tool, input);
+  const commandScan = scanCommandText(tool, input);
+  const textScan = scanStrings(commandScan.text);
+  // Both halves of the command scan: the walk over the text it did reach, and
+  // whether the text it reached was the whole story.
+  const commandTruncated = commandScan.truncated || textScan.truncated;
 
-  const basename = sensitiveBasenameMatch(input, candidates);
+  const basename = sensitiveBasenameMatch(input, pathScan.candidates);
   if (basename) return `operation targets credential file '${basename}'`;
 
-  const secret = firstMatch(commandText, SECRET_ACCESS_PATTERNS);
+  const secret = matchIn(textScan, SECRET_ACCESS_PATTERNS);
   if (secret) return `operation touches credential material (matched ${secret.source})`;
 
-  const destructive = firstMatch(commandText, DESTRUCTIVE_PATTERNS);
+  const destructive = matchIn(textScan, DESTRUCTIVE_PATTERNS);
   if (destructive) return `command is destructive (matched ${destructive.source})`;
 
-  const escape = boundary.checkCandidates(candidates);
+  // Fail closed on an incomplete scan. A pattern that matched is still
+  // evidence, so the specific reasons above are reported first; this catches
+  // the case that actually matters, where the walk stopped before it could see
+  // the payload at all. It is checked before the boundary because an empty
+  // candidate list and a truncated one look identical to the checks below.
+  if (pathScan.truncated || commandTruncated) return truncatedScanReason(tool.name);
+
+  const escape = boundary.checkCandidates(pathScan.candidates);
   if (!escape.allowed) return `path boundary violation: ${escape.reason}`;
 
   return undefined;
