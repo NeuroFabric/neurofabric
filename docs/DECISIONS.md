@@ -2599,3 +2599,66 @@ exists.
 - F-006 — the origin of the 3.2 and 3.3 observations; the recovery proof (21
   checks) continues to run unchanged in CI.
 - `docs/CONCURRENCY_RECOVERY_SPEC.md` — the approved-as-context spec.
+
+## D-025: Wall-clock assertions are removed in favour of structural pins
+
+- **Date:** 2026-09-29
+- **Status:** accepted and executed
+- **Affects:** `platform/core/tool-paths-recursion.test.ts` (test 14). No
+  production code, no runtime behaviour, no new semantics.
+
+### Context
+
+Test 14, *"deep nesting is bounded and terminates"*, asserted wall-clock
+duration inside a unit test:
+
+```ts
+const started = Date.now();
+assert.ok(Date.now() - started < 2000, "extraction must terminate promptly on deep input");
+```
+
+A timing assertion reports on machine load and scheduler contention rather than
+on the behaviour under test, so it is a flake source that can fail a green
+codebase for reasons unrelated to the code. This is the same defect class as the
+D-024 test-comment truth audit: a test asserting something other than what it
+claims to assert.
+
+### Ruling
+
+The wall-clock assertion is **removed**. Termination is pinned **structurally**
+instead: the walk must *return* rather than recurse without bound, which the
+array-shape check (`assert.ok(Array.isArray(candidates))`) establishes, and the
+permitted-depth escape check confirms the bound is a bound rather than a
+silent full walk.
+
+A stronger pin — `assert.deepEqual(candidates, [])` on the deep payload — was
+considered and **deliberately not adopted**. The extractor's depth behaviour on
+that payload was never verified, so strengthening the assertion would risk a red
+test resting on an unverified assumption. It is recorded as an open question
+rather than smuggled in with the removal.
+
+### Evidence
+
+- Executed in **PR #49**, squash `ca9f5de`, merged to `main`.
+- **14 pass / 0 fail, five consecutive identical runs** after the removal.
+- `Date` references remaining in the file: **0**.
+- The five pre-existing tests in the file were left intact.
+
+### Provenance of this record
+
+This entry was written **after** the change shipped. While D-025 was being
+executed no decision record for it existed anywhere in `docs/` or `.pi/` — the
+search returned nothing, and the gap D-024 left between D-024 and D-026 was
+real rather than a numbering artefact. Nothing was reconstructed: the interim
+referent was the **queue snapshot in `docs/handoff.md` §9**, merged in PR #48
+(`d09e7ea`), which is what PR #49 cited at the time. This entry closes that gap
+with the executed evidence attached, not with a guess at what the original
+record would have said.
+
+### Cross-references
+
+- D-024 — the backlog closure whose terminal-state discipline this follows.
+- `docs/handoff.md` §9 and §10 — the interim referent, and the operational notes
+  from the same cycle.
+- `platform/pi/write-byte-fail-closed.test.ts` — the same class of conformance
+  pinning applied to the byte cap (PR #50, `0f30913`; PR #51, `5f00279`).

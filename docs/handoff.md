@@ -340,15 +340,73 @@ squash SHA on `main`; anything else is *not started* or an *open flag*.
 | 5 | Conformance PR A — pin byte-cap edge cases | **done** | PR #50, `0f30913` — UTF-8 byte accounting |
 | 6 | Conformance PR B — pin guard fail-closed at depth | **open flag** | Deny-scan **throws `RangeError`** past ~2000–3000 nesting instead of denying; no depth bound (cf. `redaction.ts` `MAX_DEPTH = 12`). Fix is new semantics, deferred |
 | 7 | Conformance PR C — pin vault billing path | **done** | PR #51, `5f00279` — `setVault` funnel path |
-| 8 | Docs truth pass — README + `docs/` stale facts | in progress | this PR |
-| 9 | PR #45 timeline evidence (blocked → green → merged) | not started | — |
-| 10 | Squash-only merge methods via ruleset | not started | — |
-| 11 | Residue branch cleanup (local squash-residue branches) | not started | — |
-| 12 | Final verification pass | not started | — |
+| 8 | Docs truth pass — README + `docs/` stale facts | **done** | PR #52, `8081c04` — six count/provenance fixes plus this table's previous refresh |
+| 9 | PR #45 timeline evidence (blocked → green → merged) | **done** | Report-only, no PR of its own. PR #45 merged `5c00d8a`: created 18:18:01, blocked on required checks, three jobs `SUCCESS` by 18:18:32, merged 18:19:46. One CI run, never red — the blocked phase was a gate wait, not a failure recovery |
+| 10 | Squash-only merge methods via ruleset | **done** | Ruleset `24072761`: `["merge","squash","rebase"]` → `["squash"]`, confirmed by fresh GET. No PR |
+| 11 | Residue branch cleanup (local squash-residue branches) | **partial — open flag** | 6 of 26 deleted. All 26 mapped to MERGED PRs; none ambiguous. The remaining 20 need `git branch -D`, which the deletion guard denies. **Operator work** — see the note below |
+| 12 | Final verification pass and this refresh | **done** | This PR |
 
-Two open flags (items 4 and 6) are terminal for this cycle and are **not**
-agent work. Item 4 needs operator-supplied content; item 6 needs a semantics
-decision that this cycle is not authorised to make.
+### Terminal states that are not "done"
+
+**Item 4 — open flag, needs operator content.** The held byte note was **not**
+delivered by #44 (`76c91f6`): that PR landed a *secret-scan* note
+(`_secretWritePatternsNote`), not a byte note, and no `_maxBytesPerWriteNote`
+key exists in `.pi/neurofebric-policy.json`. The held text is verifiable
+nowhere in the repo. It was not guessed and not approximated, and D-004 bars
+authoring policy text. **Carried to M2 as an operator-content item.**
+
+**Item 6 — open flag, needs a semantics decision.** The write deny-scan is
+fail-closed only to roughly 2000–3000 levels of nesting; past that
+`collectScannedStrings` throws `RangeError: Maximum call stack size exceeded`
+out of `precheckToolCall` instead of returning a `DENY`. There is no depth
+bound (contrast `platform/core/redaction.ts`, which caps at `MAX_DEPTH = 12`).
+No test was written: pinning the throw would enshrine a crash, and pinning a
+`DENY` would require a fix, which is new semantics. **Carried to M2.**
+
+**Item 11 — open flag, operator action.** The guard that blocks `git branch -D`
+outranks the operator sanction that permitted it. When a hard control blocks
+something a sanction appears to allow, the correct action is to stop, flag and
+escalate — never to work around the control. 20 confirmed-merged residue
+branches remain; the operator one-liner is in the item-11 report.
+
+## 10. Operational notes
+
+Forged during the cycle that closed the §9 queue. These are working practices,
+not policy.
+
+**Guarded verbs run standalone.** The push guard and the commit guard pre-scan
+the whole command, so a guarded verb inside a compound chain is judged against
+the branch current at scan time. `git commit ... && git push ...` was blocked
+while still on `main`, and `git checkout -b ... && git commit ...` was blocked
+for the same reason. **Branch creation, commit, and push are each their own
+call.** Deletion is separately guarded and was not worked around.
+
+**Scratch files go to `$TEMP/` with distinct names.** `.git/` is not storage.
+Two PR bodies were destroyed mid-session by an `mv` that clobbered an
+assembled file under a reused name. Use a fresh name per PR body, and verify a
+body with `grep -c '^diff --git'` before `gh pr create` — never create a PR
+from an unverified body.
+
+**Every PR needs `--auto` and a current base.** Branch from current `main` and
+merge with `--squash --auto`. Branch protection requires three status checks
+(`platform test suites`, `platform test suites on Windows`, `static type gate`),
+so a direct merge is refused until they report; `--auto` merges on green. A
+branch cut before the previous merge lands is refused outright as "not up to
+date".
+
+**Repo-level merge-button settings are separate from the ruleset.** Ruleset
+`24072761` now permits `squash` only, which is what guarantees `main` accepts
+nothing else. The repository-level buttons under *Settings → General → Pull
+Requests* are a distinct setting and were intentionally left untouched.
+
+**Remote residue is noted, not cleaned.** Branches pushed with
+`--delete-branch=false` still have remote heads. Removing them is out of scope
+for local cleanup and was not done.
+
+**Carried to M2 as a documentation defect:** `platform/pi/write-scan-fail-closed.test.ts`
+test 2 is titled *"a string value nested at any depth is denied"* but nests only
+3 levels. The title claims more than the test proves. Not fixed in this
+docs-only cycle; recorded here instead.
 
 Standing constraints for every item above: full gate on every PR
 (3/3 suites, squash merge, SHA recorded), no new semantics, no M2
