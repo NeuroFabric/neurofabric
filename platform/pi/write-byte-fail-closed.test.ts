@@ -165,3 +165,53 @@ test("5. a payload within the cap is admitted", async () => {
   );
   assert.notEqual(decision.decision, "DENY", "a small clean write must still be allowed");
 });
+
+/**
+ * 6. The cap counts UTF-8 BYTES, not string length.
+ *
+ * `docs/POLICY_PORT.md` specifies `maxBytesPerWrite` as "UTF-8 bytes of the write
+ * payload", and `payloadBytes` implements that with `Buffer.byteLength(text,
+ * "utf8")`. Tests 1-5 all use single-byte filler, so for every one of them UTF-8
+ * byte length and `.length` are the same number: a regression that swapped
+ * `Buffer.byteLength(text, "utf8")` for `text.length` would pass all five and
+ * silently under-bill every non-ASCII payload.
+ *
+ * The euro sign is 1 UTF-16 code unit but 3 UTF-8 bytes, so the payload below is
+ * 200 code units and 600 bytes. The assertion that the code-unit length is under
+ * CAP is what makes this test discriminating rather than decorative: it proves
+ * the denial came from byte accounting and could not have come from length
+ * accounting.
+ */
+test("6. the cap counts UTF-8 bytes, not string length", async () => {
+  const root = await sandbox();
+  const adapter = await configuredAdapter(root);
+
+  // U+20AC: one UTF-16 code unit, three UTF-8 bytes.
+  const euro = String.fromCharCode(0x20ac);
+  const text = euro.repeat(200);
+  const utf8Bytes = Buffer.byteLength(text, "utf8");
+  const codeUnits = text.length;
+
+  assert.equal(utf8Bytes, 600, "the fixture must be 600 UTF-8 bytes");
+  assert.ok(codeUnits < CAP, "the fixture must be under the cap in code units, or it would not discriminate");
+
+  // Per D-023 the path is billed too, so the expected total is content + path.
+  // It is computed rather than hardcoded because the sandbox root length varies.
+  const target = path.join(root, "euro.md");
+  const expected = utf8Bytes + Buffer.byteLength(target, "utf8");
+
+  const { decision } = await adapter.precheckToolCall(
+    "write",
+    "execute",
+    { path: target, content: text },
+    undefined,
+    "utf8-bytes",
+  );
+
+  assert.equal(decision.decision, "DENY", "600 UTF-8 bytes of content must exceed the 512-byte cap");
+  assert.match(
+    reason(decision),
+    new RegExp(`maxBytesPerWrite exceeded \\(${expected} > ${CAP}\\)`),
+    "the billed total must be the UTF-8 byte count, path included",
+  );
+});
