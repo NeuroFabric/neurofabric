@@ -2539,6 +2539,55 @@ decision, not code-fixed.
 This is the same lesson as DEV-004, recorded structurally rather than as an
 incident: a blocked control is a STOP condition, not a routing problem.
 
+#### Correction (2026-09-29) — the blocking control is the harness, not this repository
+
+The paragraph above is left in place unedited. This note corrects **which
+control** it was describing, because the record as written attributes the
+over-blocking to a pattern that does not exist in this repository.
+
+**What D-024 quoted.** `/push\s+--force/`, stated as a pattern that also matches
+`--force-with-lease`. That literal pattern appears nowhere in this repository.
+
+**The repository's actual force-push control is correct.**
+`platform/core/policy.ts:86` reads:
+
+```
+/\bgit\s+push\b.*--force(?!-with-lease)/i
+```
+
+The `(?!-with-lease)` negative lookahead excludes the lease form by
+construction. The bare form is DENIED; `--force-with-lease` on a plain refspec is
+ALLOWED. This was already established as **D-011 open item 3**, which reached the
+same conclusion by evaluating the exported `DESTRUCTIVE_PATTERNS` array against
+both forms and found the with-lease allowance "a verification, not an
+amendment" — in effect, correct, and nothing changed.
+
+**The repository's control is also pinned.** `platform/core/refspec-guard.test.ts`
+row 6 asserts the plain-refspec with-lease push is ALLOWED; row 7 asserts a
+with-lease push does **not** license a `+` refspec, which stays DENIED.
+`docs/REFSPEC_GUARD_SPEC.md` rows 6 and 7 record the same. Removing the lookahead
+would turn a passing conformance test red.
+
+**So the over-blocking outlier is the harness-side transport guard**, an
+external control not present in this codebase, which is the control that
+actually fired during DEV-004. D-024's terminal state is **unchanged and still
+correct**: publication of rewritten history is operator-side, the agent rebases
+locally and reports, and a blocked control is a STOP condition rather than a
+routing problem.
+
+**What changes is attribution, and it changes the open item.** The consequence
+paragraph below calls the narrowing of "the transport guard" an operator-side
+item awaiting approval. Narrowed correctly, that item is *not* an amendment to
+this repository's security surface at all: `platform/core/policy.ts` needs no
+change, and no operator spec for a security-control amendment is required here.
+The item is a **harness-configuration question outside this repository**,
+against a control this repository does not own and cannot amend. That is a
+narrower and more accurate ask than the one D-024 left open.
+
+**Ruling reaffirmed, not reopened.** No D-record is rewritten. This is an
+amendment note in the D-024 body: the decision stands, the reasoning is
+corrected, and the full divergence is recorded in `docs/handoff.md`.
+
 ### Consequence
 
 The backlog is at zero open items. Two items now await **operator approval**

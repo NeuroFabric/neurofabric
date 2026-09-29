@@ -439,6 +439,67 @@ of agent discipline. The repository-level merge buttons under *Settings → Gene
 → Pull Requests* are a separate control and were intentionally left untouched;
 the ruleset is what guarantees the constraint.
 
+## 11. Force-push guard divergence — which control actually over-blocks
+
+Recorded 2026-09-29 as the full divergence behind the D-024 correction note.
+D-024 is not rewritten; the correction is appended to its body. The ruling
+stands; only the attribution was wrong.
+
+### The two controls
+
+| Control | Location | Force form | With-lease form | Verdict |
+|---|---|---|---|---|
+| Repository force-push guard | `platform/core/policy.ts:86` | **DENIED** | **ALLOWED** | **Correct.** Pinned by `refspec-guard.test.ts` rows 6–7 |
+| Harness transport guard | external to this repository | DENIED | **DENIED** | **The over-blocking outlier** |
+
+`platform/core/policy.ts:86` is
+`/\bgit\s+push\b.*--force(?!-with-lease)/i`. The negative lookahead is the whole
+point: the lease form is safe by construction, because a lease refuses the push
+when the remote has moved. Dropping the lookahead would make a *safer* command
+subject to the same refusal as a destructive one, and would turn row 6 of
+`platform/core/refspec-guard.test.ts` red.
+
+### Why D-024 said otherwise
+
+D-024 quoted the pattern `/push\s+--force/` and attributed the block to "the
+transport guard". That literal pattern exists **nowhere in this repository**. The
+guard that actually fired during DEV-004 was the harness-side one. D-011 had
+already reached the correct conclusion independently and said so in as many words:
+the with-lease allowance is "a verification, not an amendment" — in effect,
+correct, nothing changed.
+
+So D-024 did not misread a code path. It recorded an external control's refusal
+using an external control's pattern, and left the reader to assume the refusal
+belonged to the code in front of them.
+
+### The standing rules are unaffected
+
+DEV-004's rule — a blocked control is a STOP condition, not a routing problem —
+rests on the *behaviour* of the control, not on which control fired. Nothing
+about "report, do not improvise a refspec" changes. The correction makes the
+rule more precisely applicable, not less: the harness guard is not negotiable
+from inside the harness, exactly as before.
+
+### The corrected ask
+
+D-024 leaves an operator-side item open: "narrowing the transport guard". As
+originally worded that reads as an amendment to this repository's security
+surface, needing a written operator spec. Corrected, it is a smaller and clearer
+question:
+
+> The harness transport guard blocks `--force-with-lease` and this repository's
+> own guard does not. Is that harness guard narrowed, or is operator-side
+> publication of rewritten history confirmed as permanent?
+
+Either answer is a valid resolution. The **first** requires a harness
+configuration change outside this repository — no `.pi/` or `platform/` file
+here needs to move. The **second** ratifies the status quo. Neither requires
+touching `platform/core/policy.ts`, which is the part the original wording got
+backwards.
+
+**Owner:** operator. **Not agent work:** the control is not in this repository.
+**Blocking:** nothing. It is a standing item, not a queue item.
+
 
 ---
 *End of handoff document. Intended for external reviewer consumption.*
