@@ -2899,3 +2899,59 @@ read/write, and it remains an operator task.
 - `.gitlab-ci.yml` — the new canonical gate.
 - `.github/workflows/ci.yml` — retired in place, retained as historical record.
 - `package.json` — the authoritative source of the four script names.
+
+## D-029: The pipeline is the merge gate, and the agent does not certify its own green
+
+- **Date:** 2026-09-29
+- **Status:** accepted
+- **Affects:** delivery mechanism only. No code, no tests, no runtime behaviour,
+  no CI configuration.
+
+### The decision
+
+Every delivery is an MR whose merge is armed with **merge-when-pipeline-succeeds**.
+The agent never observes a green pipeline and then merges; it arms the merge and
+lets the gate decide. Red is therefore not an approval failure — it is the gate
+doing its job, and the MR simply does not merge.
+
+This replaces an oversight model with a mechanical one. Nothing about the change
+under review is trusted, least of all by the party that wrote it.
+
+### What this record deliberately does not contain
+
+An earlier draft of this record restated D-028: the job list, the retired
+workflow, the image, the `npm ci` fix. Reviewer **R2** cut all of it to a
+cross-reference, and that edit stands as written.
+
+The restatement was not harmless. D-028 is the record of *what the gate runs*. A
+second copy of that list is a second thing to keep true, and it would drift the
+moment a job is added. D-029 owns one question — **who is allowed to call a
+change delivered** — and D-028 already answers the adjacent one.
+
+The general rule this instantiates: a record states the decision and points at
+the record that owns the detail. It does not paraphrase the neighbour.
+
+### Consequences of arming rather than watching
+
+- A red pipeline is **silent by default** — nothing alerts, and no merge happens.
+  Detection falls to the next session's `git fetch`, not to a notification.
+  This is a real cost and is the accepted trade: the alternative is a human
+  watching four jobs to approve something the platform can approve itself.
+- The agent cannot merge a red MR at all. There is no "merge anyway" path it
+  holds, which is the point.
+- Status check **names** are enforced by the protected-branch ruleset, not by
+  this record. A required check that is renamed stops blocking, and a green
+  pipeline then means less than it appears to. See D-011 on `main` protection.
+
+### Provenance note
+
+R2's original draft text is not recoverable from the repository — no review
+artifact records it. The record above is written directly in the post-review
+shape rather than being edited into it, and it says so here rather than implying
+a draft-and-reduce cycle that cannot be evidenced.
+
+### Cross-references
+
+- D-028 — owns the gate itself: what runs, where, and what was retired.
+- D-011 — the ruleset that makes the gate binding on `main`.
+- D-024 — the terminal-state discipline this operationalises.
