@@ -338,24 +338,32 @@ M2 opened from `e9c3064`, the last merge of cycle 1.
 
 | # | Item | State | Evidence |
 |---|---|---|---|
-| 0 | M2 standing rules + this snapshot | in progress | this PR |
-| 1 | D-027 depth bound for the write deny-scan | **authorized — not started** | **Operator ruling received: deny beyond depth 12, aligned with `redaction.ts` `MAX_DEPTH`.** Sequence: decision record, red-first proof, fix, conformance pin. Carried from cycle-1 item 6 |
-| 2 | Fix the test-title overclaim in `platform/pi/write-scan-fail-closed.test.ts` | **authorized — not started** | Truth fix, title/comment only, no new semantics. Carried from cycle-1 item 8 |
-| 3 | Held byte note in `.pi/neurofebric-policy.json` | **DROPPED** | **Operator ruling: dropped for this cycle; the held text is retired.** No code change. The cycle-1 open flag is closed by retirement, not by delivery |
+| 0 | M2 standing rules + this snapshot | **done** | PR #54, `2dac3a7` |
+| 1 | D-027 depth bound for the write deny-scan | **done** | PR #56, `2389034`. A write payload nested deeper than 12 is **DENIED**, not walked. `MAX_WRITE_PAYLOAD_DEPTH` matches `MAX_DEPTH` in `redaction.ts`; the depth measure is iterative, so the guard cannot overflow while preventing overflow. Checked before `SCAN_EXEMPT_TOOLS`, which also closes the `vault_store` path to the byte walker |
+| 2 | Test-title overclaim in `platform/pi/write-scan-fail-closed.test.ts` | **done** | PR #55, `6687cec`. Retitled to what it pins; 0 executable lines changed |
+| 3 | Held byte note in `.pi/neurofebric-policy.json` | **DROPPED** | Operator ruling: dropped for this cycle; the held text is retired. No code change. The cycle-1 open flag is closed by retirement, not by delivery |
 | 4 | Gate 2 of D-001 — fallback provider cleanup | **AWAITING OPERATOR GO** | Not yet authorized. The ruling arrives as a separate operator message |
 
-Item 4 is blocked on operator input that has not arrived. It is recorded as
-awaiting, not guessed.
+Item 4 is the only item still open. It is blocked on operator input that has
+not arrived, and is recorded as awaiting rather than guessed.
 
 ### Rulings received at M2 open
 
 **D-027 — deny beyond depth 12.** The write deny-scan must deny, not throw,
 past a nesting depth of **12**, aligned with the existing `MAX_DEPTH = 12` in
 `platform/core/redaction.ts`. Cycle-1 item 6 established the defect without
-proposing a fix: `collectScannedStrings` is fail-closed only to roughly
-2000–3000 levels of nesting, and past that it throws `RangeError: Maximum call
+proposing a fix: `collectScannedStrings` was fail-closed only to roughly
+2000–3000 levels of nesting, and past that it threw `RangeError: Maximum call
 stack size exceeded` out of `precheckToolCall` instead of returning a `DENY`.
 The bound is now decided, so the work is no longer a semantics question.
+
+**Executed** in PR #56, `2389034`: decision record in `docs/DECISIONS.md`, the
+bound in `platform/core/configured-policy.ts`, and conformance test 6 in
+`platform/pi/write-scan-fail-closed.test.ts`. Red-first was demonstrated against
+unmodified code — a 13-level payload was already denied but *for the wrong
+reason* (a pattern match at the bottom), and a 3000-level payload threw. The
+file header that claimed the payload "is scanned at any depth" was reworded in
+the same PR, because the bound makes that sentence false.
 
 **Held byte note — dropped.** The byte note held for `.pi/neurofebric-policy.json`
 is retired for this cycle. Cycle 1 correctly declined to author the text, because
