@@ -14,6 +14,8 @@ Stay inside the repo. Never read outside the repo root; NEVER modify .pi/neurofe
 Stop and report on anything unexpected. Do not improvise.
 If the brief contradicts the code, STOP and report. Do not expand scope on your own authority — the operator resolves scope conflicts.
 Quote code in fenced code blocks in reports — inline backticks have been mangled in transport before.
+Never leave uncommitted changes on `main`. Branch first, commit on the branch. An uncommitted working tree on `main` is a finding, not a WIP state.
+Never use past tense for undelivered work. **Drafted is not recorded, and recorded is not merged.** A change is *drafted* until it is committed, *recorded* once a commit exists, and *merged* once the squash SHA is on `main`. A PR that is open is not merged. If a status cannot be evidenced by a SHA, report the state that can be evidenced.
 
 ## 0. Current finding status
 
@@ -317,6 +319,36 @@ Provider defaults:
 Policy mode (TRUSTED_PROJECT vs APPROVAL):
 - TRUSTED_PROJECT resolves to ALLOW/DENY only (never prompts); dangerous ops are denied outright.
 - APPROVAL (alternative) may return REQUIRE_APPROVAL for write/destructive ops via an ApprovalProvider.
+
+## 9. Queue snapshot (authoritative work list)
+
+This section exists so a future session resumes from the repository, not from
+operator memory. It was added after a session-lost resume message produced an
+inaccurate status report. **When the queue changes, update this table in the same
+commit that changes the queue's state.**
+
+Terminal-state discipline follows D-024: an item is *done* only with a recorded
+squash SHA on `main`; anything else is *not started* or an *open flag*.
+
+| # | Item | State | Evidence |
+|---|---|---|---|
+| 0 | Standing rule + this snapshot recorded in `docs/handoff.md` | in progress | this PR |
+| 1 | D-025 wall-clock assertion removal from `tool-paths-recursion.test.ts` | not started | — |
+| 2 | Order-dependence probe (`platform/core` and `platform/pi` as separate processes) | not started | — |
+| 3 | D-026 operator ruling recorded on the concurrency spec | **done** | PR #47, squash `6758220` |
+| 4 | Held byte note in `.pi/neurofebric-policy.json` | not started | check #44 `76c91f6` first |
+| 5 | Conformance PR A — pin byte-cap edge cases | not started | — |
+| 6 | Conformance PR B — pin guard fail-closed at depth | not started | — |
+| 7 | Conformance PR C — pin vault billing path | not started | — |
+| 8 | Docs truth pass — README + `docs/` stale facts | not started | — |
+| 9 | PR #45 timeline evidence (blocked → green → merged) | not started | — |
+| 10 | Squash-only merge methods via ruleset | not started | — |
+| 11 | Residue branch cleanup (local squash-residue branches) | not started | — |
+| 12 | Final verification pass | not started | — |
+
+Standing constraints for every item above: full gate on every PR
+(3/3 suites, squash merge, SHA recorded), no new semantics, no M2
+implementation, and the delivery-state rule in *Agent operating rules*.
 
 ---
 *End of handoff document. Intended for external reviewer consumption.*
