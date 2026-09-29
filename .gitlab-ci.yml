@@ -1,0 +1,71 @@
+# GitLab CI gate for the Neurofebric harness.
+#
+# This file supersedes .github/workflows/ci.yml, which is RETIRED IN PLACE
+# and kept for historical reference only (see docs/DECISIONS.md). That
+# workflow can no longer execute: the repository has no GitHub remote, and a
+# repo-local insteadOf rule rewrites every github.com URL to killswitch.invalid.
+# The commands below are the same four that workflow ran.
+#
+# Dependencies: the harness has ZERO RUNTIME dependencies -- nothing under
+# platform/ imports anything outside node's own stdlib -- so the three test
+# jobs run on bare node. The root package.json carries exactly one
+# devDependency group (typescript, @types/node) used only by the static type
+# gate, never imported by platform/ code (docs/DECISIONS.md D-018/D-019).
+#
+# Node version: nothing in the repo pins a version (no .nvmrc, no engines
+# field), so the node:22 image is used. 22 is the floor for
+# --experimental-strip-types, which the .ts suites and the proof script need in
+# order to import platform .ts modules from node.
+#
+# All four jobs run in ONE stage and therefore in parallel. They are separate
+# jobs rather than sequential steps on purpose: a type error must not be able to
+# fail the runtime suite's job, nor a runtime failure to hide a type error.
+# Separate contexts also make a red run say which kind of gate is red.
+#
+# EVERY job runs `npm ci`, including the type gate. `npm run typecheck` shells
+# out to `tsc`, which resolves only from node_modules/.bin -- there is no
+# global tsc -- so without the install step this job fails with `tsc: not
+# found` in a fresh container.
+#
+# The Windows half of the old matrix (test-windows) is deliberately NOT
+# reproduced here. GitLab runners are linux by default; a Windows runner
+# requires a project-level runner registration, which is a GitLab project
+# settings action reserved for the operator. The ubuntu-only gate is therefore
+# a known, documented coverage reduction, not an oversight.
+stages:
+  - verify
+
+default:
+  image: node:22
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+test-mjs:
+  stage: verify
+  script:
+    - npm ci
+    - npm run test:mjs
+
+test-ts:
+  stage: verify
+  script:
+    - npm ci
+    - npm run test:ts
+
+test-proof:
+  stage: verify
+  # The F-006 live proof is headless and self-contained: it drives the real
+  # KernelAdapter and the real recovery decision function with stubbed tool
+  # results, uses no model, no gateway and no network, and writes no files.
+  script:
+    - npm ci
+    - npm run test:proof
+
+typecheck:
+  stage: verify
+  script:
+    - npm ci
+    - npm run typecheck

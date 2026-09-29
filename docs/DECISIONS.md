@@ -2729,3 +2729,78 @@ only would have left the vault reachable.
 - D-023 — the byte cap, whose walker this bound also protects.
 - `platform/core/redaction.ts` — `MAX_DEPTH = 12`, the source of the number.
 - `docs/handoff.md` §9 — the queue entry this closes.
+
+---
+
+## D-028: The GitHub Actions gate is retired in place and superseded by `.gitlab-ci.yml`
+
+GitLab is the sole delivery remote:
+`https://gitlab.com/neurofebric-group/neurofebric.git`. `.github/workflows/ci.yml`
+is **retired in place, not deleted**.
+
+### Why keep the file
+
+The workflow can no longer execute. The repository has no GitHub remote, and a
+repo-local insteadOf rule rewrites every `github.com` URL to
+`killswitch.invalid`. There is no path by which `on: pull_request` is ever
+fired by GitHub's Actions service.
+
+It is kept because deleting it would destroy the record of *why* the gate is
+shaped the way it is. Three decisions survive only in that file's comments and
+would otherwise be re-litigated:
+
+- the three test jobs run on bare node with **no install step**, because the
+  harness has zero runtime dependencies;
+- the type gate is a **separate job**, not a step on the test job, so a type
+  error cannot fail the runtime suite and a runtime failure cannot hide a type
+  error;
+- the `test-windows` job exists to prevent a Windows-only boundary regression
+  from merging green against an ubuntu-only gate.
+
+An inert file is a smaller risk than a rewritten memory. It is inert **and**
+legible; deletion would be legible only to whoever already knew the history.
+
+### What `.gitlab-ci.yml` reproduces, and the one change
+
+The same four commands, the same single parallel stage, the same `node:22`
+image. Job names differ only by prefix because GitLab job names must be
+`[A-Za-z0-9_-]`-clean; GitHub rendered them as "platform test suites" and
+"static type gate".
+
+One functional change, and it is a **fix, not a port**: every job runs
+`npm ci`, including the type gate. The GitHub `typecheck` job had an explicit
+`Install dev dependencies` step. Without it, `npm run typecheck` fails in a
+fresh container with `tsc: not found`, because `tsc` resolves only from
+`node_modules/.bin` and there is no global tsc. Verified on this machine: no
+global `tsc` is on PATH.
+
+### Scope reduction, stated plainly
+
+`test-windows` is **not** reproduced. GitLab runners are linux by default, and
+a Windows runner requires a project-level runner registration — a GitLab
+project settings action reserved for the operator, and out of scope for a
+`read_repository + write_repository` token by design.
+
+The consequence is real: the ubuntu-only gate no longer detects a
+Windows-only regression in the workspace boundary (`CASE_INSENSITIVE` in
+`platform/core/workspace.ts`, separator handling, realpath/junction
+resolution). This is a **known, accepted coverage reduction**, not an
+oversight, and it is recorded here so the next reader does not assume the
+matrix coverage survived the migration.
+
+### Triggering
+
+Pipelines run on `merge_request_event` and on pushes to `main` only. A push to a
+feature branch produces no pipeline; the first pipeline appears when the MR is
+opened. That is intentional — the gate exists to gate merges.
+
+Branch protection on `main` is **not** configured by this commit. It is a
+GitLab project settings action requiring permissions beyond repository
+read/write, and it remains an operator task.
+
+### Cross-references
+
+- D-019 — added the static type gate; that job is carried over here.
+- `.gitlab-ci.yml` — the new canonical gate.
+- `.github/workflows/ci.yml` — retired in place, retained as historical record.
+- `package.json` — the authoritative source of the four script names.
