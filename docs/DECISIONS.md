@@ -77,7 +77,7 @@ at that point the move becomes free.
 ## D-003: D-001 migration is gated, not executed
 
 - **Date:** 2025-09-26
-- **Status:** accepted, gates pending
+- **Status:** accepted; **Gates 0 and 1 verified done, Gate 2 open** (corrected 2026-09-29 — see the gate table)
 - **Affects:** the provider-duplication cleanup described in D-001
 
 ### Context
@@ -96,9 +96,55 @@ operator.**
 
 | Gate | Action | Status |
 | --- | --- | --- |
-| **0** | Remove the duplicate `pi-free` install (the git checkout). Reversible, removes double registration, and does not affect the working provider. | **PENDING — run by operator, then recorded here as done** |
-| **1** | One real headless Pi turn pinned to the `omni` provider, completing a small real task. | Pending |
-| **2** | Full removal of the remaining fallbacks and the openai-compat package. | Pending, blocked on Gate 1 |
+| **0** | Remove the duplicate `pi-free` install (the git checkout). Reversible, removes double registration, and does not affect the working provider. | **DONE** — verified 2026-09-29: `~/.pi/agent/settings.json` `packages` contains no `pi-free` entry from either source. Not merely demoted; **both** the `npm:` and `git:` installs are gone |
+| **1** | One real headless Pi turn pinned to the `omni` provider, completing a small real task. | **DONE** — verified 2026-09-29: the live session performing the M2 closeout ran with `PI_PROVIDER=omni`, `PI_MODEL=kg/stealth/space-bunny-alpha`. A real Pi turn, on the canonical provider, completing real work |
+| **2** | Full removal of the remaining fallbacks and the openai-compat package. | **NOT DONE — operator action, and now the only open gate.** `@billjr99/pi-openai-compat` is still in `packages` |
+
+### Gate status verification, 2026-09-29
+
+The gate table above was stale until now: it read "PENDING" for Gates 0 and 1
+while the machine had already moved past both. It is corrected here against
+observed state rather than assumption.
+
+**Evidence.**
+
+- `~/.pi/agent/settings.json` declares `defaultProvider: "omniroute"`,
+  `defaultModel: "auto"`, `router.baseUrl: "http://127.0.0.1:20128/v1"`, and a
+  `packages` array of `omniroute-pi-ext-integration`,
+  `@billjr99/pi-openai-compat`, `pi-claude-bridge`, `@bacnh85/pi-router`,
+  `pi-web-access`, `bigpowers`, `@bacnh85/pi-obsidian`. **No `pi-free` entry of
+  any source.** Gate 0 satisfied.
+- The session that closed M2 ran with `PI_PROVIDER=omni` and
+  `PI_MODEL=kg/stealth/space-bunny-alpha`. This is the strongest available
+  signal for Gate 1, which is what D-003 asked for: not a raw HTTP probe, but a
+  real Pi turn that produced real work on the canonical provider. The
+  pre-migration Context above recorded the opposite — 94 messages on
+  `provider=cline` and zero on `omni` — so the path demonstrably changed.
+
+### What is still open, and why it was not executed
+
+Gate 2 is **not** done. The only remaining fallback is
+`@billjr99/pi-openai-compat`.
+
+It was not executed here, for three reasons that are recorded rather than
+worked around:
+
+1. **D-001 reserves these commands for the operator.** It states plainly: "These
+   commands are for the operator to run. Nothing below was executed by the
+   agent, and nothing was uninstalled or disabled automatically."
+2. **The precondition cannot be inferred from the repository.** D-001 step 5 is
+   conditional — "Remove the openai-compat package **if you are not using it**".
+   Whether this operator uses it for some workflow outside this repository is
+   not answerable from inside it.
+3. **It is global runtime configuration, not repository configuration.** The
+   file is the operator's agent install, shared by every session on the machine,
+   and it contains the package supplying the provider this very work runs on.
+
+The exact remaining operator commands are unchanged from D-001 and are not
+restated here; see step 3 (third-party credentials) and step 5 (openai-compat)
+above. Steps 3 and 4 remain open on the same terms: the unused third-party
+credentials should be inspected before deletion, and the plaintext `omni` key
+should move to Pi's credential store.
 
 ### Flip condition
 
