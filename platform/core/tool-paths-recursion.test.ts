@@ -253,13 +253,38 @@ test("14. deep nesting is bounded and terminates", async () => {
   // The wall-clock assertion that stood here ("extraction must terminate
   // promptly on deep input") was removed under D-025. A timing assertion in a
   // unit test is a flake source that reports on machine load rather than on
-  // extraction behaviour. The D-025 decision record is not present in docs/ or
-  // .pi/; the durable referent for this removal is the queue snapshot in
-  // docs/handoff.md (item 1). Termination is still pinned structurally below:
-  // the walk must RETURN rather than recurse without bound, which the
-  // array-shape check establishes.
+  // extraction behaviour. The decision record for that removal is
+  // docs/DECISIONS.md D-025. Termination is pinned structurally below: the walk
+  // must RETURN rather than recurse without bound.
   const candidates = extractToolPathCandidates(batchTool as never, deep);
-  assert.ok(Array.isArray(candidates));
+
+  // D-025 declined to pin this as `deepEqual(candidates, [])` because the
+  // extractor's behaviour on this payload had never been verified, and a
+  // stronger assertion resting on an unverified assumption is a red test
+  // waiting for a slow machine. That was the right refusal at the time, and it
+  // was resolved rather than left open: the probe landed on main as b340f40 via
+  // a green pipeline, which establishes the result on the linux CI runner. See
+  // D-030.
+  //
+  // This is strictly stronger than the array-shape check it replaces, not a
+  // swap of one assertion for another: a non-array result fails deepEqual
+  // against [] exactly as it failed the old shape check, so nothing is lost.
+  assert.deepEqual(
+    candidates,
+    [],
+    "the deep payload yields no candidates: " + JSON.stringify(candidates),
+  );
+
+  // The empty result is OVER-DETERMINED, and both causes are worth knowing
+  // before anyone edits this line. (1) Depth: `collectFromObject` returns once
+  // `depth > 4`, so the walk never reaches level 200. (2) Name: the string sits
+  // under the key "level", which is not a path-bearing name, so it would not
+  // become a candidate even at depth zero.
+  //
+  // The two checks below are what make the assertion above non-vacuous, and why
+  // it is safe: they show the SAME logical payload IS found when it is shallow
+  // and path-keyed. So an empty result here means the bound did its job, not
+  // that the extractor has stopped finding paths.
 
   // Depth is a hard bound, not a silent full walk: the same payload built
   // shallowly IS found, so the bound is the only difference.
