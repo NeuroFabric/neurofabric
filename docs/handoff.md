@@ -65,18 +65,33 @@ task was already terminal, which are not policy decisions).
 
 ## 0b. Current verification baseline
 
-The commands are unchanged since `d-016-vault` (`8f9f0c2`); the counts are current and re-run in CI on every pull request:
+The commands are unchanged since `d-016-vault` (`8f9f0c2`). The counts below were
+**local measurement @ `a16bd79`** (Windows, node with `--experimental-strip-types`),
+and are identical to the measurement @ `448dada` — the two commits between them
+are documentation only.
 
-| Suite | Command | Result |
-| --- | --- | --- |
-| Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 |
-| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | 374 / 374 |
-| **Unit/integration total** | | **396 / 396** |
-| F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed |
+**The TypeScript count is platform-dependent, and that is the whole point of
+this table.** Two cases in `platform/core/vault.test.ts` assert POSIX permission
+bits and are skipped when `process.platform === "win32"`. They are skipped
+*rather than weakened* into assertions that pass everywhere and mean nowhere.
+So the honest figure is two figures:
 
-The 21 live-proof checks are **counted separately** from the 396. They are
+| Suite | Command | Linux (CI) | Windows (local) |
+| --- | --- | --- | --- |
+| Platform .mjs | `node --test platform/*.test.mjs` | 22 / 22 | 22 / 22 |
+| Core and Pi TypeScript | `node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts` | **377 / 377**, 0 skipped | **375 pass, 2 skipped** of 377 |
+| **Unit/integration total** | | **399 / 399** | **397 passing of 399** |
+| F-006 live recovery proof | `node --experimental-strip-types verification/live-f006-proof.mjs` | 21 checks, 0 failed | 21 checks, 0 failed |
+| Static type gate | `npm run typecheck` | exit 0 | exit 0 |
+
+`.gitlab-ci.yml` runs on `node:22` linux runners, so **the CI figure is 399/399
+plus 21 proof checks plus a clean `tsc`**. A local Windows run showing 2 skips
+is a platform artefact, not a gap in the gate — and it is not a new skip: both
+cases have been conditional since the vault tests were written.
+
+The 21 live-proof checks are **counted separately** from the 399. They are
 assertions driven by a standalone script rather than `node:test` cases, so
-396 + 21 is not a suite total of 417. The proof is headless and self-contained —
+399 + 21 is not a suite total of 420. The proof is headless and self-contained —
 it drives the real `KernelAdapter` and the real recovery decision function with
 stubbed tool results, uses no model and no network, and runs unchanged on a CI
 runner.
