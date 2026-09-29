@@ -312,9 +312,9 @@ task-wide. The KernelAdapter derives its recovery limits from `DEFAULT_LIMITS`
 rather than duplicating the literals (PR #4), so the two cannot drift.
 
 Provider defaults:
-- Canonical: OmniRoute via omni provider at http://localhost:20128 (omniroute-pi-ext-integration extension).
-- Fallbacks (INSTALLED but DISABLED by default): pi-free, its git duplicate, @billjr99/pi-openai-compat.
-- Gate 1 of D-001 is verified: OmniRoute is connected and carrying pinned auto/gemini traffic. Fallback removal is pending as Gate 2.
+- Canonical: OmniRoute via omni provider at http://localhost:20128 (omniroute-pi-ext-integration extension). Verified live: sessions run with `PI_PROVIDER=omni`.
+- Fallbacks: `@billjr99/pi-openai-compat` remains INSTALLED but off by default. The `pi-free` family (npm and its git duplicate) has been UNINSTALLED and is no longer present — the third-party egress path D-001 found in active use is closed.
+- D-001 gates: Gate 0 and Gate 1 are DONE and verified (D-003). Gate 2 — removing openai-compat and the unused third-party credentials — is the only open gate, and is operator action, not agent action. See the D-003 gate table in docs/DECISIONS.md.
 
 Policy mode (TRUSTED_PROJECT vs APPROVAL):
 - TRUSTED_PROJECT resolves to ALLOW/DENY only (never prompts); dangerous ops are denied outright.

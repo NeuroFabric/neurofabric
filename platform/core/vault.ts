@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { CoreError } from "./errors.ts";
 import { createRedactingSink, redactPreview } from "./redaction.ts";
@@ -381,10 +381,28 @@ export class CredentialVault {
    *
    * No temporary name, no append: either of those would leave a second
    * unredacted copy of the material on disk.
+   *
+   * The mode is the point. This is a credential store writing plaintext, and
+   * `writeFile` without a mode creates the file 0644 masked by the umask —
+   * readable by every account on the host. That contradicts the redaction
+   * discipline the rest of the vault keeps: the value is withheld from the
+   * retrieve path, from the event log, and from the preview, and then handed
+   * to every local user by the file mode. `mode` only applies when the file is
+   * CREATED, so a vault written by an earlier version keeps its old
+   * permissions unless the mode is also enforced after the write.
+   *
+   * 0600/0700 are the conventional owner-only bits. They are not encryption —
+   * the material is still plaintext on disk — but they are the baseline the
+   * rest of this file already assumes. Windows has no POSIX mode, and Node
+   * accepts the option there without effect, so this is a no-op on that
+   * platform rather than a failure.
    */
   private async persist(file: VaultFile): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true });
-    await writeFile(this.file, `${JSON.stringify(file, null, 2)}\n`, "utf8");
+    await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    await writeFile(this.file, `${JSON.stringify(file, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    // Enforced rather than merely requested, so a file created before this
+    // change is tightened on its next write instead of keeping 0644 forever.
+    await chmod(this.file, 0o600);
   }
 
   private event(partial: Omit<VaultEvent, "at">): void {

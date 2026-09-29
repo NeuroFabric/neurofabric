@@ -70,13 +70,19 @@ supported Pi provider APIs cannot represent. The orchestrator must not depend on
 a particular model ID, must not call a provider directly, and must not register
 one.
 
-**Non-default fallback.** `pi-free` (installed twice: `npm:pi-free` and
-`git:github.com/apmantza/pi-free`) and `@billjr99/pi-openai-compat` also
-register providers, at their own third-party endpoints. They are a documented
-escape hatch for a gateway-down run and are **off by default**; they are not a
+**Non-default fallback.** `@billjr99/pi-openai-compat` is installed and
+registers providers at its own third-party endpoints. It is a documented
+escape hatch for a gateway-down run and is **off by default**; it is not a
 supported path and not part of this architecture. Enabling one is an explicit
 operator choice with an egress consequence, and it does not require any change
 to platform code. See [DECISIONS.md](DECISIONS.md) (D-001).
+
+The `pi-free` provider family, which D-001 found installed twice
+(`npm:pi-free` and `git:github.com/apmantza/pi-free`) and which registered ~25
+further third-party providers, **has been uninstalled and is no longer
+present**. It was the path recent sessions were actually taking when D-001 was
+written, so closing it is what makes "one canonical provider path" a statement
+about the running system rather than only about the configuration file.
 
 Provider choice is therefore a *configuration* concern, held entirely outside
 the platform layer. Nothing in `platform/` or `.pi/extensions/` may read, set,

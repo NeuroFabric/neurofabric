@@ -106,15 +106,21 @@ The platform orchestrator never makes a model call. Pi owns the agent loop and t
 model call; the orchestrator observes lifecycle events and gates tools. See
 [docs/PI_INTEGRATION.md](docs/PI_INTEGRATION.md).
 
-> **Non-default fallback (not canonical).** `pi-free` and `@billjr99/pi-openai-compat`
-> are installed and register ~25 further third-party providers of their own
-> (`cline`, `llm7`, `zenmux`, `groq`, `kilo`, …). They exist only as an escape hatch
-> for a gateway-down run. They are **off by default** and are not the supported path:
-> using them sends model traffic to third-party endpoints rather than through the local
-> gateway. An audit found recent sessions taking the `cline` path while the docs
-> claimed OmniRoute, which is why the fallback is now explicitly demoted. See
-> [docs/DECISIONS.md](docs/DECISIONS.md) (D-001) for the evidence, the decision, the
-> exact migration commands, and how to verify a call went through OmniRoute.
+> **Non-default fallback (not canonical).** `@billjr99/pi-openai-compat` is
+> **installed** and registers further OpenAI-compatible providers of its own. It
+> exists only as an escape hatch for a gateway-down run. It is **off by default**
+> and is not the supported path: using it sends model traffic to third-party
+> endpoints rather than through the local gateway.
+>
+> The `pi-free` provider family — `npm:pi-free` and its duplicate
+> `git:github.com/apmantza/pi-free`, which between them registered ~25 further
+> third-party providers (`cline`, `llm7`, `zenmux`, `groq`, `kilo`, …) — **has
+> since been uninstalled and is no longer present**. An audit had found recent
+> sessions taking the `cline` path while the docs claimed OmniRoute, which is
+> what made the fallback explicit in the first place; that path is now closed.
+> See [docs/DECISIONS.md](docs/DECISIONS.md) (D-001) for the evidence, the
+> decision, the exact migration commands, and how to verify a call went through
+> OmniRoute.
 
 Credentials belong in Pi's credential store or an environment variable, never in
 `.pi/`, never in `~/.pi/agent/models.json`, and never in a skill, source file, or
