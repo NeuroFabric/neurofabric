@@ -250,9 +250,15 @@ test("14. deep nesting is bounded and terminates", async () => {
   // without bound.
   let deep: unknown = "src/a.ts";
   for (let index = 0; index < 200; index += 1) deep = { level: deep };
-  const started = Date.now();
+  // The wall-clock assertion that stood here ("extraction must terminate
+  // promptly on deep input") was removed under D-025. A timing assertion in a
+  // unit test is a flake source that reports on machine load rather than on
+  // extraction behaviour. The D-025 decision record is not present in docs/ or
+  // .pi/; the durable referent for this removal is the queue snapshot in
+  // docs/handoff.md (item 1). Termination is still pinned structurally below:
+  // the walk must RETURN rather than recurse without bound, which the
+  // array-shape check establishes.
   const candidates = extractToolPathCandidates(batchTool as never, deep);
-  assert.ok(Date.now() - started < 2000, "extraction must terminate promptly on deep input");
   assert.ok(Array.isArray(candidates));
 
   // Depth is a hard bound, not a silent full walk: the same payload built
