@@ -100,8 +100,21 @@ test("1. a write-tier payload carrying the marker in a camelCase edit field is d
   }
 });
 
-/** 2. Depth does not hide a payload. */
-test("2. a string value nested at any depth is denied", async () => {
+/**
+ * 2. Depth does not hide a payload — up to the depth this test actually pins.
+ *
+ * The title this test used to carry, "a string value nested at any depth is
+ * denied", claimed more than the test proved: the three cases below are an
+ * object, an element inside an array, and an object three levels deep. "Any
+ * depth" is not what that establishes, and a title that overclaims is the same
+ * defect class as the D-024 test-comment truth audit — it invites the next
+ * reader to believe the guard is unbounded when no test here establishes that.
+ *
+ * What IS left unproven, deliberately: the collector has no depth bound, and at
+ * extreme nesting it throws rather than denying. That is the subject of D-027
+ * and is not pinned here, so this test does not claim it.
+ */
+test("2. a marker nested in an object, in an array element, and three levels deep is denied", async () => {
   const root = await sandbox();
   const adapter = await configuredAdapter(root);
 
