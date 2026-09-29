@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, mkdir, chmod } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CoreError } from "./errors.ts";
@@ -151,6 +151,72 @@ test("a first store creates the vault directory, so the file is never orphaned",
     await vault.store("first", "opaque-string", "fixture-value-0002");
     const onDisk = JSON.parse(await readFile(config.path, "utf8"));
     assert.equal(Object.keys(onDisk.entries).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Permission bits exist only on POSIX. Windows has no equivalent, and Node
+ * accepts `mode` there without effect, so these assertions are skipped rather
+ * than weakened into something that passes everywhere and means nowhere.
+ */
+const POSIX_MODES = process.platform !== "win32";
+const SKIP_WINDOWS = POSIX_MODES ? false : "POSIX permission bits are not meaningful on Windows";
+
+test("a stored vault is not readable by group or other", { skip: SKIP_WINDOWS }, async () => {
+  const root = await sandbox();
+  try {
+    const config = vaultAt(root);
+    const vault = new CredentialVault(config, { persist: () => {} });
+    await vault.store("secret-entry", "opaque-string", "fixture-value-perms-0001");
+
+    const file = await stat(config.path);
+    assert.equal(
+      file.mode & 0o077,
+      0,
+      `vault file must not be group/other readable, got ${(file.mode & 0o777).toString(8)}`,
+    );
+
+    const dir = await stat(path.dirname(config.path));
+    assert.equal(
+      dir.mode & 0o077,
+      0,
+      `vault directory must not be group/other accessible, got ${(dir.mode & 0o777).toString(8)}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * `writeFile`'s `mode` applies only when the file is CREATED, so requesting
+ * 0600 is not enough on its own: a vault written by an earlier version keeps
+ * whatever mode it already had. This drives that case directly, because a fix
+ * that only sets the mode at creation would pass the test above and leave every
+ * existing deployment world-readable.
+ */
+test("a vault file left world-readable by an earlier version is tightened on its next write", { skip: SKIP_WINDOWS }, async () => {
+  const root = await sandbox();
+  try {
+    const config = vaultAt(root);
+    await mkdir(path.dirname(config.path), { recursive: true });
+    await writeFile(config.path, `${JSON.stringify({ version: 1, entries: {} })}\n`, { encoding: "utf8", mode: 0o644 });
+    // Set explicitly so the fixture is world-readable whatever the umask is.
+    await chmod(config.path, 0o644);
+    const before = await stat(config.path);
+    assert.equal(before.mode & 0o004, 0o004, "the fixture must start world-readable or this test proves nothing");
+
+    const vault = new CredentialVault(config, { persist: () => {} });
+    await vault.store("later-entry", "opaque-string", "fixture-value-perms-0002");
+
+    const after = await stat(config.path);
+    assert.equal(
+      after.mode & 0o077,
+      0,
+      `the write must tighten a pre-existing vault file, still ${(after.mode & 0o777).toString(8)}`,
+    );
+    assert.equal(after.mode & 0o777, 0o600, "and it must land on exactly owner-only");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
