@@ -500,6 +500,43 @@ backwards.
 **Owner:** operator. **Not agent work:** the control is not in this repository.
 **Blocking:** nothing. It is a standing item, not a queue item.
 
+### Live reproduction, 2026-09-29
+
+The divergence is not only documentary. It was reproduced by accident while
+pushing MR !3, the MR carrying the D-024 correction itself.
+
+The push was refused:
+
+```
+Neurofebric policy: command is destructive
+(matched \bgit\s+push\b.*--force(?!-with-lease))
+```
+
+**The refusal was correct and the agent was the cause.** The push command carried
+its own MR description as a push option, and that description quoted the
+force-push pattern verbatim. The harness guard scans the whole command string,
+so it matched the *documentation* of the pattern, not any attempt to force-push.
+The push carried no force flag and no `+` refspec.
+
+Three things follow, and all three are the system working:
+
+1. **The guard was not weakened by anything this record describes.** It caught a
+   bare force pattern in prose. That is the behaviour D-011 verified by
+   evaluation and D-015 pinned by row count.
+2. **The repository's own guard is not what refused this.** The refusal names a
+   policy pattern in the harness's terms, on a repository whose `policy.ts:86`
+   pattern is a different string with a lookahead. Two controls, two behaviours,
+   one divergence — observed rather than inferred.
+3. **The fix is to reword, not to route around.** The push was retried with the
+   literal pattern removed from the description text and succeeded on the second
+   attempt. No flag was dropped, no refspec improvised, no alternate branch name
+   invented. That is DEV-004's rule applied to itself: the blocked thing was
+   reported, the *cause* was identified, and the change made was to the offending
+   text.
+
+The refusal cost one turn. That is the whole value proposition of a guard that
+cannot be argued with.
+
 
 ---
 *End of handoff document. Intended for external reviewer consumption.*
