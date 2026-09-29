@@ -30,6 +30,7 @@ import path from "node:path";
 import { KernelAdapter } from "./kernel-adapter.ts";
 import { toolDescriptorFromPi } from "./tool-adapter.ts";
 import { vaultToolDescriptors } from "./vault-tools.ts";
+import type { VaultWiring } from "./vault-tools.ts";
 import { buildPolicy } from "./project-config.ts";
 import { parsePolicyConfig, type PolicyConfig } from "../core/policy-config.ts";
 import type { NeurofebricProjectConfig } from "./project-config.ts";
@@ -214,4 +215,59 @@ test("6. the cap counts UTF-8 bytes, not string length", async () => {
     new RegExp(`maxBytesPerWrite exceeded \\(${expected} > ${CAP}\\)`),
     "the billed total must be the UTF-8 byte count, path included",
   );
+});
+
+/**
+ * 7. The budget still binds a vault attached through the PRODUCTION FUNNEL.
+ *
+ * Test 4 proves the budget binds the vault, but it hand-registers the descriptor
+ * (`adapter.registerTools([vault])`). Production does not do that. The real path
+ * is `KernelAdapter.registerTools`, which appends `this.vaultDescriptors()`, and
+ * `setVault`, which does the same; the funnel yields the descriptor only when
+ * `vaultToolsEnabled` sees `config.enabled === true`. That is a separate code
+ * path with its own gate, and this test is the only thing covering it.
+ *
+ * The failure this guards against is specific: if a future change to the funnel
+ * or to `descriptor()` in vault-tools.ts produced a descriptor that was not
+ * WRITE-tier — CONTROLLED, say — then a CONTROLLED tool never reaches the size
+ * check, the vault would stop being billed in production, and test 4 would still
+ * pass because it never goes through the funnel. The same descriptor going
+ * through two different registration paths is exactly the kind of thing that
+ * drifts apart silently.
+ *
+ * The wiring below is the shape `vault-boundary.test.ts` already uses: enabled,
+ * with a path resolved inside the sandbox so the suite stays hermetic.
+ */
+test("7. a vault attached through the setVault funnel is still billed", async () => {
+  const root = await sandbox();
+  await mkdir(path.join(root, "vault"), { recursive: true });
+
+  const policyConfig: PolicyConfig = parsePolicyConfig({ ...TEST_RULES }, "test-policy.json");
+  const adapter = new KernelAdapter();
+  adapter.setPolicy(buildPolicy(CONFIG, root, policyConfig));
+  for (const name of TOOL_NAMES) {
+    adapter.registerTools([toolDescriptorFromPi({ name, description: name })]);
+  }
+
+  // Production entry point: the funnel, not a hand-picked descriptor.
+  const wiring: VaultWiring = {
+    config: { enabled: true, path: path.join(root, "vault", "vault-data.json"), retrieveMode: "redacted" },
+  };
+  adapter.setVault(wiring);
+  await adapter.beginTask("do the work", "do the work");
+
+  const { decision } = await adapter.precheckToolCall(
+    "vault_store",
+    "execute",
+    { name: "entry", shape: "opaque", value: "x".repeat(CAP + 1) },
+    undefined,
+    "vault-funnel-big",
+  );
+
+  assert.equal(
+    decision.decision,
+    "DENY",
+    "a funnel-attached vault_store is still WRITE-tier, so the budget still binds it",
+  );
+  assert.match(reason(decision), /maxBytesPerWrite exceeded/);
 });
