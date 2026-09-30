@@ -466,7 +466,9 @@ test("F2. a blocked tool call ending the turn is still not a dead stream", async
     evaluateWithApproval: undefined,
   } as never);
   await kernel.beginTask("blocked only");
-  const { decision } = await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  // Structural: the stub policy denies `bash` by name, so the payload is never
+  // inspected. The construct is not this test's subject, so the test names none.
+  const { decision } = await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   assert.equal(decision.decision, "DENY");
   const done = await kernel.finishTask({ role: "assistant", content: [{ type: "toolCall", toolCallId: "b1", toolName: "bash" }] });
   assert.equal(done.status, "COMPLETED", "F-003 behaviour must be unchanged");
