@@ -466,6 +466,67 @@ are replan exhaustions whose cause is not established to be a benign exit, and
 §2.5 records that a certificate naming `TOOL_FAILURE` does not by itself
 identify which mechanism produced it.
 
+#### Second witnessed death — IN-SESSION, and it is this class exactly
+
+Recorded before any fix work, because it happened to the session that was about
+to write the fix. A death summarised only afterwards is the failure this ledger
+exists to prevent. Certificate, quoted exactly as the harness reported it:
+
+```
+Recovery TERMINATE [REPLAN_BUDGET_EXHAUSTED]: failure=TOOL_FAILURE, replanCount=2/2, strategyCount=0/2, retryCount=0/2, recoveryDepth=1/3, elapsedMs=160097/1800000
+```
+
+The two attempts that spent the budget, both ordinary measurement, in order:
+
+| # | Command | Exit | Why it was run |
+|---|---|---|---|
+| 1 | `ls node_modules/@earendil-works/` | 2 | Look for Pi's own type declarations. The directory does not exist. |
+| 2 | `node -e "process.exit(1)"` | 1 | Run **deliberately**, to read how Pi surfaces an exit status. |
+
+Neither is a fault in the task. The first found nothing because the thing looked
+for is not installed; the second was *designed* to exit non-zero. Two benign
+outcomes, two replans, and the certificate matches the operator-transcribed
+exhibit above field for field, `retryCount=0/2` beside `replanCount=2/2`
+included, because `TOOL_FAILURE` is not in `RETRY_ELIGIBLE` and so never reaches
+the retry budget at all.
+
+**Provenance, stated to the same standard as the exhibit above.** This death was
+**not** operator-supplied and **not** transcribed. It was read off a live harness
+refusal in the session that hit it, which quoted the task's original failure
+verbatim. It is first-party measurement. The distinction is kept because the
+counter's credibility rests on it.
+
+**The refusal that followed is not a second defect.** The next tool call was
+refused with the task already dead, and the refusal text says so in its own
+words — the call "was NOT evaluated and no policy rule refused it". That is the
+dead-task refusal behaving correctly: it names the call that triggered it and
+carries the original cause. Recorded so a later reader does not misread a
+refusal raised against a corpse as a policy false positive.
+
+**Four facts measured while diagnosing it, recorded so the fix is not designed
+blind:**
+
+| # | Fact | Measured where |
+|---|---|---|
+| 1 | Pi's `tool_execution_end` carries `result: unknown` and `isError: boolean`. There is **no declared exit-code field** on the event. | `platform/pi/pi-coding-agent.d.ts`, `PiEventMap.tool_execution_end` |
+| 2 | The exit status is nonetheless observable, but only as a **trailing annotation on the result text** — a non-zero command returns its body followed by `Command exited with code 1`. | first-party, from inside the consuming process |
+| 3 | The **command text is not forwarded** at the record site: the result and the `isError` boolean are passed, the call's `input` is not. So at classification time the code cannot tell `grep` from `node`. | `.pi/extensions/platform-orchestrator.ts`, `tool_execution_end` handler |
+| 4 | Exit 1 is **both** "found nothing" and an ordinary failure code. `node -e "process.exit(1)"` is a genuine failure and exits 1; so does a `cp` of a missing file. | first-party, same command |
+
+**Consequence for the fix, stated before implementing it.** Facts 3 and 4 rule
+out the obvious rule and one obvious-looking refinement. A classification keyed
+on the exit code alone marks *every* exit-1 failure benign, and fact 4 is a live
+genuine failure it would swallow — the exact weakening the standing rules forbid.
+Nor does "non-zero exit with empty output" work: the `node` measurement produced
+**no output at all** and still exited 1, so emptiness does not discriminate
+either. A correct rule has to key on **which command** ran, as an enumerated
+(command, exit-code) table, and fact 3 says the command is not threaded to the
+classification site yet. Threading it is part of this defect, not a follow-on.
+**"Examine exit status before classification" is necessary but not sufficient.**
+
+**What the counter is now.** 2, and the second is first-party. The 82/94 census
+remains excluded, on the same reasoning as before: cause unestablished.
+
 ---
 
 ## 3. WATCH — armed
@@ -544,13 +605,20 @@ defined in this section does not exist as work.**
 | 0 | D5 / `onViolation` divergence | **CLOSED — merged** | `f6c6bad` is in `origin/main`. Red-first gate `B4` is green in the corpus. |
 | 1 | Extractor precision | **PARTIALLY OPEN** | Shell-syntax half `7e5aeb9` is in `origin/main`. The argument-position hypothesis remains unpinned. |
 | 2 | Token guard scoping | **OPEN** | No branch carries it; not in `origin/main`. |
-| 3 | §2.3 benign non-zero exits | **OPEN** | Exhibit and code-backed mechanism in §2.3. Counter 1. |
+| 3 | §2.3 benign non-zero exits | **OPEN — NEXT** | Exhibit and code-backed mechanism in §2.3, plus a **second, first-party death** and four measured design facts. Counter **2**. |
 | 4 | C3b rebase | **CLOSED as a rebase** | `320937f` is in `origin/main`. Only a content assessment of C3b is owed, which is a review, not queued implementation. |
-| 5 | §2.4 / D4 path boundary | **(b) CLOSED — merged.** (a) **DONE, UNMERGED** | (b) via `f6c6bad`. (a) is `b0ba4aa` on `fix/d4a-boundary-unescape`, pushed, merge gated on the operator restart. |
-| 6 | Glob prefix scope-check | **DONE, UNMERGED** | `af7dc24` on `fix/d4b-glob-prefix-scope`, pushed. Gates `G1`/`G2`. Merge gated on the operator restart. |
+| 5 | §2.4 / D4 path boundary | **CLOSED — both merged** | (b) via `f6c6bad`. (a) `b0ba4aa` on `fix/d4a-boundary-unescape`, **merged** — measured by `git merge-base --is-ancestor`, not read from prose. |
+| 6 | Glob prefix scope-check | **DONE, MERGED** | `af7dc24` on `fix/d4b-glob-prefix-scope`, **merged** as `bee71e0`. Gates `G1`/`G2`. The disclosed widening is on the operator's merge checklist by name (ruling 4); a merge in the tree is not evidence that the checklist item was ratified deliberately, and that question is the operator's to answer, not the tree's. |
 
-**Work order, as ruled:** item 1's remaining half, then item 2, then item 3. Items
-6 and the 2.4(a) half of item 5 are recorded and waiting on the same merge.
+**Work order — RE-CUT on measurement, 2026-09-30.** Originally: item 1's
+remaining half, then item 2, then item 3. Now: **item 3 first.** The class
+behind it is the only one that has moved on live evidence — 1 to 2, the second
+death first-party — while items 1 and 2 sit at 0 live deaths and unpinned. The
+original order was correct on the evidence available when it was ruled; it is
+superseded by evidence, not by preference. Items 1 and 2 follow, unchanged.
+
+**Items 5 and 6 are no longer waiting on anything.** Both merged; the rows above
+are measured from the tree.
 
 **Operator-ordered work not numbered here:** the glob prefix scope-check, ordered
 directly. It is authorised, and its boundary statement lives in the `N6` gate
@@ -570,10 +638,19 @@ rather than defended.
 |---|---|---|
 | Path-boundary false DENY / out-of-root scratch (§2.4) | **2** | Sessions 1 and 2 of this log; both died on a `path boundary violation` |
 | `onViolation` dropped on the result path (§2.5) | **2** | The **same two sessions** — the counter is per class, not per session, and the overlap is the finding |
-| Benign non-zero exit (§2.3) | **1** | Witnessed death, certificate transcribed above. Was 0 pending the exhibit. |
+| Benign non-zero exit (§2.3) | **2** | Death 1: witnessed, certificate **operator-transcribed**. Death 2: **first-party**, read off a live harness refusal — two ordinary measurement commands, `replanCount=2/2`. Was 0 before the exhibit, 1 between the two. |
 | Token guard over-breadth (§2.2) | 0 | Not measured live |
 
-**Session proof, 2026-09-30.** This session added **zero deaths and zero rows** to
+**Session record — the session that measured the §2.3 fix site died to §2.3.**
+It is entered here rather than left in a transcript, because the whole purpose
+of this table is that a counter cannot be quietly wrong. The four measured
+facts recorded with the certificate above are that session's first real progress
+on the fix, and they outlive it. A practical consequence is recorded with the
+work order: the class moved from 1 to 2 on live evidence, so §2.3 is pulled
+ahead of items 1 and 2, which sit at 0 live deaths.
+
+**Prior session proof, 2026-09-30.** That session added **zero deaths and zero
+rows** to
 the table above, and is the first live evidence that the standing rules are
 load-bearing rather than advisory. A WIP rescue that had previously drawn four
 rephrasings completed in **one attempt with zero retries**, after reading the
