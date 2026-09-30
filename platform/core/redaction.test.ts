@@ -7,6 +7,7 @@ import {
   redactPayload,
   redactPreview,
   redactString,
+  redactToolCallId,
   redactValue,
   createRedactingSink,
 } from "./redaction.ts";
@@ -43,9 +44,12 @@ function serialized(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
-// ---------------------------------------------------------------------------
-// 1, 2, 8, 11 — secrets in free text (tool error messages)
-// ---------------------------------------------------------------------------
+test("redactToolCallId ensures uniform redaction for all uuid-like call IDs", () => {
+  const uuid = "call-550e8400-e29b-41d4-a716-446655440000";
+  const legacy = "call_123456";
+  assert.equal(redactToolCallId(uuid), REDACTED);
+  assert.equal(redactToolCallId(legacy), REDACTED);
+});
 
 test("1. a tool failure containing an API key is redacted", () => {
   for (const [label, secret] of Object.entries({ openai: SECRETS.openai, anthropic: SECRETS.anthropic, github: SECRETS.github, aws: SECRETS.aws, slack: SECRETS.slack, google: SECRETS.google })) {
@@ -325,4 +329,11 @@ test("redactPreview bounds length without reintroducing unredacted text", () => 
   const preview = redactPreview(`key=${SECRETS.openai} ${"x".repeat(500)}`);
   assert.ok(preview.length <= 161, "preview must be bounded");
   assert.ok(!preview.includes(SECRETS.openai));
+});
+
+test("redactToolCallId ensures uniform redaction for all uuid-like call IDs", () => {
+  const uuid = "call-550e8400-e29b-41d4-a716-446655440000";
+  const legacy = "call_123456";
+  assert.equal(redactToolCallId(uuid), REDACTED);
+  assert.equal(redactToolCallId(legacy), REDACTED);
 });

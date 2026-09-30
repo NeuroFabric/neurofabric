@@ -91,8 +91,25 @@ const PROVIDER_KEY_PREFIXES = [
 const GENERIC_SECRET_VALUE =
   /(^|[\s"'`=:,;(\[{&?])([A-Za-z0-9+/_-]{40,}={0,2})(?=$|[\s"'`)\]};,&?])/g;
 
-const HEX_ONLY = /^[0-9a-f]+$/i;
-const DECIMAL_ONLY = /^[0-9]+$/;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a string looks like a toolCallId (internal identifier, not a secret).
+ * toolCallIds come in two shapes: call-<uuid> or call_<digits>.
+ */
+function looksLikeToolCallId(token: string): boolean {
+  return /^call-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token) ||
+         /^call_[0-9]+$/.test(token);
+}
+
+/**
+ * Uniformly redact toolCallIds.
+ */
+export function redactToolCallId(value: string): string {
+  return looksLikeToolCallId(value) ? REDACTED : value;
+}
 
 /**
  * Longest hex run treated as a digest rather than a secret.
@@ -109,8 +126,12 @@ const MAX_DIGEST_LENGTH = 128;
  * Deliberately excludes hex digests (our SHA-256 artifact hashes), decimal
  * numbers, and anything without mixed character classes. A bare 40-character
  * lowercase word is not a secret.
+ * Also excludes toolCallIds, which are internal identifiers.
  */
 export function looksLikeGenericSecret(token: string): boolean {
+  // toolCallIds are internal identifiers, not secrets
+  if (looksLikeToolCallId(token)) return false;
+  
   // No upper bound: a secret padded past a size limit must not become a
   // bypass. The surrounding pattern already bounds how much text is examined.
   if (token.length < 40) return false;
