@@ -105,12 +105,7 @@ function looksLikeToolCallId(token: string): boolean {
          /^call_[0-9]+$/.test(token);
 }
 
-/**
- * Uniformly redact toolCallIds.
- */
-export function redactToolCallId(value: string): string {
-  return looksLikeToolCallId(value) ? REDACTED : value;
-}
+
 
 /**
  * Longest hex run treated as a digest rather than a secret.
