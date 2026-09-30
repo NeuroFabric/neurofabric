@@ -49,7 +49,12 @@ test("a malformed policy file fails loudly rather than degrading to no rules", a
 
   await assert.rejects(
     () => loadPolicyConfig(root),
-    (error) => error.message.includes("not valid JSON") && error.message.includes(POLICY_CONFIG_FILE),
+    // Narrowed with `instanceof` rather than an unannotated parameter: the
+    // assertion itself is unchanged, but a non-Error rejection now fails the
+    // test instead of throwing a TypeError from inside the validator.
+    (error: unknown) => error instanceof Error
+      && error.message.includes("not valid JSON")
+      && error.message.includes(POLICY_CONFIG_FILE),
   );
 });
 
