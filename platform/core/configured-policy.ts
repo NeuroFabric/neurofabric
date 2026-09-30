@@ -3,6 +3,7 @@ import { scanStrings, truncatedScanReason } from "./policy.ts";
 import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
 import { globToRegExp, normalizeForMatch, type PolicyConfig, type RuleVerdict } from "./policy-config.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
+import { callSignature } from "./call-signature.ts";
 import type {
   BudgetLevel,
   PolicyDecision,
@@ -172,27 +173,6 @@ function budgetLevel(used: number, limit: number): BudgetLevel {
   if (used >= Math.ceil(limit * CRITICAL_BUDGET_FRACTION)) return "critical";
   if (used >= Math.ceil(limit * LOW_BUDGET_FRACTION)) return "low";
   return "ok";
-}
-
-/**
- * A stable identity for one call, used only to count repeats.
- *
- * Object keys are sorted so two structurally identical calls compare equal
- * regardless of construction order, and the result is never returned, logged or
- * traced — only the count derived from it is. The separator is a control
- * character that cannot appear in a tool name, so distinct calls cannot collide.
- */
-function callSignature(request: PolicyRequest): string {
-  return `${request.tool?.name ?? ""}\u0000${request.operation}\u0000${stableStringify(request.input)}`;
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
-  return `{${entries.join(",")}}`;
 }
 
 /**
