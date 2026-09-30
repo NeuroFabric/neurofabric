@@ -26,7 +26,7 @@ import { CoreError } from "../core/errors.ts";
  * next occurrence explainable from the trace alone.
  */
 
-const LIMITS: RecoveryLimits = { maxToolRetries: 2, maxReplans: 2, maxRecoveryDepth: 3, maxExecutionTimeMs: 1000 };
+const LIMITS: RecoveryLimits = { maxToolRetries: 2, maxReplans: 2, maxStrategyChanges: 2, maxRecoveryDepth: 3, maxExecutionTimeMs: 1000 };
 
 async function newAdapter() {
   const adapter = new KernelAdapter();

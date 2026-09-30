@@ -78,6 +78,32 @@ async function succeedWith(k: KernelAdapter, callId: string, input: Record<strin
 
 const strategyCount = (k: KernelAdapter) => k.currentTask!.strategyCount ?? 0;
 
+/**
+ * Park a handler inside the first `type` event, run `interleave` while it is
+ * suspended, then let it resume. Deterministic, never a timer race.
+ */
+async function interleaveAt(
+  k: KernelAdapter,
+  type: string,
+  trigger: () => Promise<unknown>,
+  interleave: () => Promise<unknown>,
+): Promise<unknown> {
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  let parked = false;
+  const off = k.events.subscribe((e) => {
+    if (e.type !== type || parked) return;
+    parked = true;
+    return gate; // the sink yields control until released
+  });
+  const run = trigger();
+  await new Promise((res) => setImmediate(res)); // let the handler reach its emit
+  await interleave();
+  release();
+  off();
+  return run;
+}
+
 // --- a3.1 a novel failure spends the strategy fund -------------------------
 
 test("C4.1 a novel failure takes the strategy path and books to strategyCount", async () => {
@@ -236,4 +262,58 @@ test("C4.8 a failure whose attempt was never prechecked books to the replan budg
   }
   assert.equal(k.currentTask!.replanCount, 2, "both charged the replan budget, exactly as before C4");
   assert.equal(strategyCount(k), 0, "and none to the strategy fund");
+});
+
+// --- a3.6 the ANCHOR's staleness (C3.4's template, for C4's own state) ----
+
+test("C4.9 a stale failure classification must not write the anchor onto the newer task", async () => {
+  // The audit found this cell empty: C3.4 covers the ATTEMPT side
+  // (lastAttemptSignature) and the H2-H6 series covers other counters, but
+  // nothing pinned the ANCHOR C4 introduced. A stale handler writing it would
+  // give the newer task a history it never had, and the very next failure would
+  // be compared against a failure from a task that no longer exists.
+  const k = newKernel();
+  await k.beginTask("one");
+  // Give the first task a real anchor, so "no anchor" is a meaningful state.
+  await failWith(k, "a1", { path: "a.md" });
+  assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
+    "precondition: the first task has an anchor");
+
+  // Bind a second call, then park its failure classification mid-emit.
+  const { decision } = await k.precheckToolCall("read", "execute", { path: "b.md" }, undefined, "stale1");
+  assert.equal(decision.decision, "ALLOW");
+  assert.ok(await k.beginToolExecution("stale1", "read"));
+
+  await interleaveAt(
+    k,
+    "TOOL_FAILED",
+    () => k.recordToolResult("stale1", "read", undefined, true),
+    () => k.beginTask("two"), // the newer turn now owns the lifecycle
+  );
+
+  assert.equal(k.currentTask!.status, "PLANNING", "the stale classification must not fail the newer task");
+  assert.equal(k.currentTask!.failureReason, undefined, "and must leave it no failure reason");
+  assert.equal(k.currentTask!.replanCount, 0, "and spend no replan budget on it");
+  assert.equal(strategyCount(k), 0, "and none of the strategy fund");
+
+  // The observable consequence: the newer task's own first failure must read
+  // as a REPEAT, because no anchor of its own exists. If the stale handler had
+  // written one, this would be novel and would book to the strategy fund.
+  await failWith(k, "b1", { path: "b.md" });
+  assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
+    "a stale anchor must not make the newer task's first failure look novel");
+  assert.equal(k.currentTask!.replanCount, 1, "so it books to the replan budget");
+  assert.equal(strategyCount(k), 0, "and never to the strategy fund");
+});
+
+test("C4.10 the staleness pin is live, not inert", async () => {
+  // C3.4b's shape, for the anchor. Without it C4.9 could pass merely because
+  // the anchor is never written by anyone.
+  const k = newKernel();
+  await k.beginTask("one");
+  await failWith(k, "a1", { path: "a.md" });
+  await failWith(k, "a2", { path: "different.md" });
+  assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, false,
+    "a current-task classification really does move the anchor");
+  assert.equal(strategyCount(k), 1, "and really does open the fork");
 });

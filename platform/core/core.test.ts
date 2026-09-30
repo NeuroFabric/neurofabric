@@ -116,7 +116,7 @@ test("execution preserves structured failures and successful metadata", async ()
 });
 
 test("recovery is bounded and does not retry non-idempotent tools", () => {
-  const limits = { maxToolRetries: 1, maxReplans: 1, maxRecoveryDepth: 2, maxExecutionTimeMs: 1000 };
+  const limits = { maxToolRetries: 1, maxReplans: 1, maxStrategyChanges: 1, maxRecoveryDepth: 2, maxExecutionTimeMs: 1000 };
   assert.equal(chooseRecovery({ failure: "TRANSIENT", limits, retryCount: 0, replanCount: 0, depth: 0, idempotency: "IDEMPOTENT" }), "RETRY");
   assert.equal(chooseRecovery({ failure: "TRANSIENT", limits, retryCount: 0, replanCount: 0, depth: 0, idempotency: "NON_IDEMPOTENT" }), "ESCALATE");
   assert.equal(chooseRecovery({ failure: "TRANSIENT", limits, retryCount: 0, replanCount: 0, depth: 2, idempotency: "IDEMPOTENT" }), "TERMINATE");

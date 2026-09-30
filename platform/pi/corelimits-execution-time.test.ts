@@ -22,6 +22,7 @@ import type { Idempotency } from "../core/types.ts";
 const LIMITS: RecoveryLimits = {
   maxToolRetries: 2,
   maxReplans: 2,
+  maxStrategyChanges: 2,
   maxRecoveryDepth: 3,
   maxExecutionTimeMs: 1_000,
 };
