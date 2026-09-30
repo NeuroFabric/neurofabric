@@ -8,68 +8,39 @@ import { toolDescriptorFromPi } from "./tool-adapter.ts";
 import { buildPolicy } from "./project-config.ts";
 
 /**
- * F-006 denial certificate: the shape, and the precondition that delivers it.
+ * F-006 denial certificate: the shape, and the EVENT ORDER that delivers it.
  *
- * Two sequences, two pins, one reason field. They are kept apart because they
- * are genuinely different paths and a change to either must not be able to
- * quietly satisfy the other:
+ * The order is the whole finding. Pi emits, for one toolCallId:
  *
- *   PROD.* — the PRODUCTION sequence. The one the live bridge runs and the one
- *            the 94 deaths came from: the call is refused at `tool_call`, the
- *            reason is stashed by toolCallId, and the refusal is re-delivered on
- *            the result at `tool_execution_end`.
- *   CERT.* — the MID-EXECUTION sequence. The call is admitted, binds an
- *            execution, and fails carrying a policy reason. This is the
- *            forwarding regression guard; `f006-policy-denied.test.ts` already
- *            pins it behaviourally, and this file pins the certificate's
- *            literal TEXT, which nothing else does.
+ *   tool_execution_start   -> beginToolExecution BINDS (id not yet denied)
+ *   tool_call (preflight)  -> precheckToolCall DENIES (reason stashed by id)
+ *   tool_execution_end    -> recordToolResult DELIVERS the reason
+ *
+ * so the binding exists by the time the refusal arrives, the task is EXECUTING,
+ * and the settling execution is the last one. That is why a policy denial
+ * terminates on the denial instead of being recorded as a generic tool error
+ * and replanned until the budget died.
+ *
+ * The guard at kernel-adapter.ts:964 — "never fabricate an execution plan for a
+ * call policy refused" — does NOT fire in production, because binding happens
+ * BEFORE the id is ever recorded as denied. It fires only when a caller
+ * prechecks first, which Pi does not do. BRIDGE.C pins that the guard stays
+ * silent; BRIDGE.B pins the precheck-first order so its behaviour is recorded
+ * rather than left as folklore.
+ *
+ * Both orders were measured and both are real. An earlier revision of this file
+ * pinned only the precheck-first order and reported the bridge as inert. That
+ * conclusion was correct for the order it exercised and wrong about production.
+ * The error was assuming Pi's order rather than measuring it; these pins now
+ * name the order in every test so the mistake cannot recur silently.
  *
  * WHY THE SHORTHAND IS WORTHLESS AS AN ASSERTION
  *
  * The spec shorthand is `POLICY_DENIED`. The real label is
- * `POLICY_DENIED_TERMINATED`, of which the shorthand is a strict PREFIX. So
- * `assert.match(reason, /POLICY_DENIED/)` — what D1.6 asserts — passes whether
- * the reason was forwarded, whether the terminal reason is the refusal or
- * something else, and whether a certificate exists at all. Every label
- * assertion below is therefore an equality against the long form.
- *
- * THE PRECONDITION, and why it is not obvious
- *
- * `recordToolResult` rebuilds a refused result as its own error category and
- * hands it to `observeToolResult`, which consumes it in two places: the
- * validation message (`error.message`, :1161) and `classifyFailure(error)`
- * (:1212), whose POLICY_DENIED row drives TERMINATE and whose message becomes
- * the certificate's `denied=` field.
- *
- * Getting there requires THREE things to hold at once, and only the third was
- * obvious:
- *
- *   1. `resolveBoundExecution` (:1492) must resolve — either a real binding, or
- *      the fallback when `activeExecutions.size === 0` AND status is EXECUTING
- *      AND `currentStep` is set.
- *   2. `status === "EXECUTING"` (:1109).
- *   3. The settling execution must be the LAST one. `observeToolResult` deletes
- *      the binding at :1130 and then returns early at :1192 while any sibling
- *      is still in flight — recovery does not run on that path. This is why a
- *      refused call paired with a still-bound call never reaches recovery, and
- *      it is easy to mistake that for "unbound results are discarded".
- *
- * A refused call does NOT bind, and that is deliberate. `beginToolExecution`
- * refuses any id in `deniedToolCallIds` (kernel-adapter.ts:964), with the
- * comment "Pi emits execution_start around a blocked preflight. Never fabricate
- * an execution plan for a call policy refused." So condition 1 above can only be
- * met by the FALLBACK, which no reachable task state satisfies.
- *
- * THE MEASURED CONSEQUENCE, pinned as BRIDGE below: a preflight refusal never
- * reaches recovery, the stashed reason is never consumed, and the task is not
- * marked. The reason stashed at the deny site and the reason read at the record
- * site cannot meet for the same call.
- *
- * That is a finding, not a pin against production behaviour: the bridge as landed
- * is INERT on the preflight path it was built for. See the report. The CERT pins
- * therefore cover the mid-execution sequence, which is real and reachable, and
- * BRIDGE pins the inertness so that it is enforced and visible rather than
- * assumed absent.
+ * `POLICY_DENIED_TERMINATED`, of which the shorthand is a strict PREFIX, so
+ * `assert.match(reason, /POLICY_DENIED/)` passes whether the reason was
+ * forwarded, whether the label is right, and whether a certificate exists at
+ * all. Every label assertion below is an equality against the long form.
  */
 
 /** Escape a literal for embedding in a RegExp, so a reason cannot weaken its own pin. */
@@ -92,123 +63,135 @@ const REAL_REASON = "Neurofebric policy: operation targets credential file '.env
 const lastPayload = (k: KernelAdapter, type: string) =>
   k.recentEvents(500).filter((e) => e.type === type).at(-1)?.payload as Record<string, unknown> | undefined;
 
+const payloadsOf = (k: KernelAdapter, type: string) =>
+  k.recentEvents(500).filter((e) => e.type === type).map((e) => e.payload as Record<string, unknown>);
+
+/** The real policy must produce REAL_REASON, so every pin below is driven by live policy output. */
+async function denyRealRead(adapter: KernelAdapter, callId: string): Promise<string> {
+  const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, callId);
+  assert.equal(decision.decision, "DENY", "the real policy must actually deny this call");
+  assert.equal(decision.reason, REAL_REASON, "and refuse it in its own words");
+  return decision.reason;
+}
+
 /**
- * The extension's three handlers, transcribed call for call from
- * `.pi/extensions/platform-orchestrator.ts`, so this driver cannot drift from
- * production into a shape that behaves differently:
+ * The PRODUCTION order, transcribed from `.pi/extensions/platform-orchestrator.ts`
+ * and from Pi's measured emission order:
  *
- *   tool_call           precheckToolCall(name, "execute", input, approval, id)
- *                       declareToolOutputs(id, name, input)
- *                       DENY -> stash reason, return { block: true }
- *   tool_execution_start beginToolExecution(id, name, { toolCallId: id })
- *   tool_execution_end  reason = stash.get(id); stash.delete(id)
- *                       recordToolResult(id, name, result, isError, undefined, reason)
- *
- * The metadata object and the `declareToolOutputs` call are both included
- * because omitting them is exactly the kind of drift that produces a green test
- * for a shape production never runs.
+ *   start  -> beginToolExecution(id, name, { toolCallId: id })
+ *   preflight -> precheckToolCall(name, "execute", input, approval, id)
+ *              -> declareToolOutputs(id, name, input)
+ *              -> DENY stashes the reason under the id
+ *   end    -> reason = stash.get(id); stash.delete(id)
+ *          -> recordToolResult(id, name, result, isError, undefined, reason)
  */
-async function runProductionHandlers(
-  adapter: KernelAdapter,
-  callId: string,
-  input: unknown,
-  stashedReason: string | undefined,
-): Promise<void> {
+async function productionOrder(adapter: KernelAdapter, callId: string, input: unknown): Promise<string | undefined> {
+  // tool_execution_start — FIRST, before the preflight.
+  const bound = await adapter.beginToolExecution(callId, "read", { toolCallId: callId });
+  assert.ok(bound, "the start event binds before the preflight ever runs");
+
   // tool_call
   const { decision } = await adapter.precheckToolCall("read", "execute", input, undefined, callId);
   await adapter.declareToolOutputs(callId, "read", input);
-  let stash: string | undefined;
-  if (decision.decision !== "ALLOW") {
-    stash = decision.reason;
-    // `decision.reason` is present on both DENY and REQUIRE_APPROVAL.
-  }
-  // The bridge forwards what the deny site stashed, not what this helper knows.
-  if (stash === undefined) stash = stashedReason;
-
-  // tool_execution_start
-  await adapter.beginToolExecution(callId, "read", { toolCallId: callId });
+  const stash: Map<string, string> = new Map();
+  if (decision.decision !== "ALLOW") stash.set(callId, decision.reason);   // deny site
 
   // tool_execution_end
-  await adapter.recordToolResult(callId, "read", undefined, true, undefined, stash);
+  const forwarded = stash.get(callId);                                     // record site
+  stash.delete(callId);
+  await adapter.recordToolResult(callId, "read", undefined, true, undefined, forwarded);
+  return forwarded;
 }
 
 // ===========================================================================
-// PROD — the production preflight-refusal sequence
+// BRIDGE.A — the production order
 // ===========================================================================
 
-test("BRIDGE.1 a preflight-refused call does NOT bind an execution", async () => {
+test("BRIDGE.A1 a refusal in production order produces the POLICY_DENIED certificate", async () => {
   const adapter = await trustedAdapter();
-  const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, "refused-1");
-  assert.equal(decision.decision, "DENY", "the real policy must actually deny this call");
-  assert.equal(decision.reason, REAL_REASON, "and refuse it in its own words");
-  assert.equal(adapter.diagnostics.denialCount, 1, "the refusal is counted as one");
-  assert.equal(adapter.diagnostics.deniedToolCallIdCount, 1, "and the id is recorded as refused");
+  const forwarded = await productionOrder(adapter, "call-a1", { path: ".env" });
+  assert.equal(forwarded, REAL_REASON, "the stashed reason is what gets delivered");
 
-  const bound = await adapter.beginToolExecution("refused-1", "read", { toolCallId: "refused-1" });
-  assert.equal(bound, undefined, "a refused id never binds: Pi emits execution_start around a blocked preflight");
-  const ignored = adapter.recentEvents(50).filter((e) => e.type === "TOOL_EXECUTION_IGNORED").at(-1)?.payload as Record<string, unknown> | undefined;
-  assert.equal(ignored?.reason, "policy_denied", "and the refusal is recorded as such");
-  assert.equal(adapter.currentTask!.status, "PLANNING", "the task never enters EXECUTING for a refused call");
+  const task = adapter.currentTask!;
+  assert.equal(task.status, "FAILED", "a refusal terminates the task");
+  assert.match(task.failureReason!, /POLICY_DENIED_TERMINATED/, "naming the refusal");
+  assert.ok(task.failureReason!.includes(REAL_REASON), "carrying the policy's own words, verbatim");
 });
 
-test("BRIDGE.2 the stashed reason is never consumed on the preflight path", async () => {
-  // The bridge's whole mechanism, end to end: a reason is stashed at the deny
-  // site and read back at the record site. Because the refused id never binds,
-  // the result is discarded before the reason can be read, and the task is not
-  // marked. This is the finding, pinned so it cannot be quietly assumed fixed.
+test("BRIDGE.A2 a refusal in production order spends no replan budget", async () => {
+  // Counters are task-cumulative and the label names the final trigger, so this
+  // is measured from a fresh task with no prior failure: the zero is the
+  // denial's own doing, not a carryover.
   const adapter = await trustedAdapter();
-  const stash = new Map<string, string>();
-  const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, "refused-2");
-  stash.set("refused-2", decision.reason);                      // deny site
-  await adapter.declareToolOutputs("refused-2", "read", { path: ".env" });
-  await adapter.beginToolExecution("refused-2", "read", { toolCallId: "refused-2" });  // refused
-  const forwarded = stash.get("refused-2");                    // record site
-  stash.delete("refused-2");
-  assert.equal(forwarded, REAL_REASON, "the stash does hand the reason over");
+  await productionOrder(adapter, "call-a2", { path: ".env" });
 
-  const result = await adapter.recordToolResult("refused-2", "read", undefined, true, undefined, forwarded);
-  assert.equal(result.validator, "pi-result-order", "but the result is discarded as out-of-order");
-  assert.equal(adapter.currentTask!.failureReason, undefined, "so no certificate is produced");
-  assert.equal(adapter.currentTask!.status, "PLANNING", "and the task is left alive");
-  const reasons = adapter.recentEvents(200).filter((e) => e.type === "TOOL_RESULT_IGNORED")
-    .map((e) => (e.payload as Record<string, unknown>).reason as string);
-  assert.ok(reasons.includes("no_active_execution"), "discarded for an absent execution, not on any policy verdict");
+  const task = adapter.currentTask!;
+  assert.equal(task.replanCount, 0, "a refusal is not replanned");
+  assert.equal(task.retryCount, 0, "and not retried");
+  assert.match(task.failureReason!, /replanCount=0\//, "the certificate reports the untouched replan budget");
+  assert.match(task.failureReason!, /strategyCount=0\//, "and the untouched strategy budget");
+  assert.doesNotMatch(task.failureReason!, /REPLAN_BUDGET_EXHAUSTED|STRATEGY_BUDGET_EXHAUSTED|RETRY_BUDGET_EXHAUSTED/,
+    "a refusal must not die of a budget it never spent");
+  assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "TERMINATE", "and one recovery move was enough");
 });
 
-test("BRIDGE.3 a refusal paired with a still-bound call also fails to certify", async () => {
-  // The other half of the precondition: `observeToolResult` returns early at
-  // :1192 while any sibling is in flight, so recovery does not run even when a
-  // binding does resolve. Recorded separately so the two independent
-  // preconditions cannot be conflated.
-  const adapter = await trustedAdapter();
-  await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "ok-1");
-  await adapter.beginToolExecution("ok-1", "read", { toolCallId: "ok-1" });
-  assert.equal(adapter.currentTask!.status, "EXECUTING", "a bound execution puts the task in EXECUTING");
+// ===========================================================================
+// BRIDGE.B / BRIDGE.C — the order Pi does NOT emit, and the guard that stays silent
+// ===========================================================================
 
-  const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, "refused-3");
-  const result = await adapter.recordToolResult("refused-3", "read", undefined, true, undefined, decision.reason);
-  assert.equal(result.validator, "pi-result-order", "the refused result is discarded");
-  assert.equal(adapter.currentTask!.failureReason, undefined, "and certifies nothing");
+test("BRIDGE.B precheck-FIRST order discards the result — an order Pi never emits", async () => {
+  // Recorded, not endorsed. Pi emits start before preflight, so this sequence
+  // has no production counterpart; it is pinned because it is reachable through
+  // the public API and because it is the order in which :964 fires. Its
+  // behaviour is "discarded, task unmarked" and that is stated here so nobody
+  // later mistakes it for a live path.
+  const adapter = await trustedAdapter();
+  const reason = await denyRealRead(adapter, "call-b1");
+  const bound = await adapter.beginToolExecution("call-b1", "read", { toolCallId: "call-b1" });
+  assert.equal(bound, undefined, "the guard refuses to bind an already-denied id");
+
+  const result = await adapter.recordToolResult("call-b1", "read", undefined, true, undefined, reason);
+  assert.equal(result.validator, "pi-result-order", "so the result is discarded as out-of-order");
+  assert.equal(adapter.currentTask!.failureReason, undefined, "and the task is left unmarked");
+  assert.equal(adapter.currentTask!.status, "PLANNING", "and alive");
 });
 
-test("BRIDGE.4 the MID-EXECUTION sequence is the one that certifies", async () => {
-  // The contrast case, and the reason CERT below is pinned at all: an ADMITTED
-  // call that binds and then fails carrying a policy reason does reach the
-  // certificate. So the certificate machinery works — the gap is specifically
-  // that a preflight refusal never reaches it.
+test("BRIDGE.C the :964 guard stays SILENT in production order", async () => {
+  // The tripwire. If Pi's emission order ever changes to preflight-before-start,
+  // the guard fires, binding stops, and every policy denial silently reverts to
+  // a generic tool error that replans to death — with no certificate and no
+  // alarm. This asserts the guard is dormant on the live path.
   const adapter = await trustedAdapter();
-  await deniedMidExecution(adapter, REAL_REASON);
-  assert.equal(adapter.currentTask!.status, "FAILED", "a bound call that fails on a policy reason terminates the task");
-  assert.match(adapter.currentTask!.failureReason!, /POLICY_DENIED_TERMINATED/, "and certifies the refusal");
+  await productionOrder(adapter, "call-c1", { path: ".env" });
+
+  const ignored = payloadsOf(adapter, "TOOL_EXECUTION_IGNORED");
+  assert.equal(ignored.length, 0, "no execution_start was ignored: the guard never fired");
+  assert.ok(
+    !ignored.some((p) => p.reason === "policy_denied"),
+    "specifically, no binding was refused as policy_denied",
+  );
+  // And the id was recorded as denied only AFTER it had already bound.
+  assert.equal(adapter.diagnostics.denialCount, 1, "the refusal is still counted");
+  assert.equal(adapter.diagnostics.deniedToolCallIdCount, 1, "and the id is still recorded as refused");
 });
 
-/** The mid-execution sequence: admitted, bound, then failed carrying a reason. */
-async function deniedMidExecution(adapter: KernelAdapter, reason: string | undefined): Promise<void> {
-  await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "admitted-1");
-  const bound = await adapter.beginToolExecution("admitted-1", "read", { toolCallId: "admitted-1" });
-  assert.ok(bound, "an admitted call binds, so its result is not discarded");
-  await adapter.recordToolResult("admitted-1", "read", undefined, true, undefined, reason);
-}
+test("BRIDGE.C2 a refusal while a sibling is still bound does not certify", async () => {
+  // The third precondition, independent of order: `observeToolResult` returns
+  // early at :1192 while any execution remains in flight, so recovery does not
+  // run. Pinned separately so it cannot be conflated with the ordering findings.
+  const adapter = await trustedAdapter();
+  await adapter.beginToolExecution("sibling", "read", { toolCallId: "sibling" });
+  await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "sibling");
+  assert.equal(adapter.currentTask!.status, "EXECUTING", "the sibling put the task in EXECUTING");
+
+  await adapter.beginToolExecution("call-c2", "read", { toolCallId: "call-c2" });
+  const reason = await denyRealRead(adapter, "call-c2");
+  const result = await adapter.recordToolResult("call-c2", "read", undefined, true, undefined, reason);
+
+  assert.notEqual(result.validator, "pi-result-order", "the refusal was not discarded as unordered");
+  assert.notEqual(adapter.currentTask!.status, "FAILED",
+    "but recovery did not run while the sibling was in flight, so no certificate exists yet");
+});
 
 // ===========================================================================
 // CERT — the certificate's literal text, and its negative
@@ -216,7 +199,7 @@ async function deniedMidExecution(adapter: KernelAdapter, reason: string | undef
 
 test("CERT.1 the certificate matches the real shape end to end", async () => {
   const adapter = await trustedAdapter();
-  await deniedMidExecution(adapter, REAL_REASON);
+  await productionOrder(adapter, "call-1", { path: ".env" });
   const certificate = adapter.currentTask!.failureReason!;
 
   // Anchored `^...$`: a prefix, a dropped field or two swapped fields all fail.
@@ -238,7 +221,7 @@ test("CERT.1 the certificate matches the real shape end to end", async () => {
 
 test("CERT.2 the bracket label is the long form, never the shorthand", async () => {
   const adapter = await trustedAdapter();
-  await deniedMidExecution(adapter, REAL_REASON);
+  await productionOrder(adapter, "call-2", { path: ".env" });
   const certificate = adapter.currentTask!.failureReason!;
 
   const label = certificate.match(/^Recovery TERMINATE \[([^\]]+)\]/)?.[1];
@@ -249,7 +232,7 @@ test("CERT.2 the bracket label is the long form, never the shorthand", async () 
 
 test("CERT.3 `denied=` is positioned in the contract, and appears once", async () => {
   const adapter = await trustedAdapter();
-  await deniedMidExecution(adapter, REAL_REASON);
+  await productionOrder(adapter, "call-3", { path: ".env" });
   const certificate = adapter.currentTask!.failureReason!;
 
   assert.ok(certificate.includes(`failure=POLICY_DENIED, denied=${REAL_REASON}, `),
@@ -257,16 +240,34 @@ test("CERT.3 `denied=` is positioned in the contract, and appears once", async (
   assert.equal(certificate.split("denied=").length - 1, 1, "exactly one `denied=` field");
 });
 
-test("CERT.4 without a forwarded reason there is no such certificate", async () => {
-  // The negative that makes the positives mean something: the same refusal, with
-  // the reason withheld. Without this, CERT.1 could pass because the reason is
-  // synthesised downstream, and the bridge could be deleted with every pin green.
+test("CERT.4 without a delivered reason there is no such certificate", async () => {
+  // The negative that makes the positives mean something: production order,
+  // with the reason withheld — exactly the pre-bridge behaviour. Without this,
+  // CERT.1 could pass because the reason is synthesised downstream, and the
+  // bridge could be deleted with every pin still green.
   const adapter = await trustedAdapter();
-  await deniedMidExecution(adapter, undefined);
+  await adapter.beginToolExecution("call-4", "read", { toolCallId: "call-4" });
+  const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, "call-4");
+  assert.equal(decision.decision, "DENY");
+  await adapter.recordToolResult("call-4", "read", undefined, true, undefined, undefined);
   const certificate = adapter.currentTask?.failureReason ?? "";
 
-  assert.doesNotMatch(certificate, /POLICY_DENIED/, "no refusal is reported when no reason was forwarded");
+  assert.doesNotMatch(certificate, /POLICY_DENIED/, "no refusal is reported when no reason was delivered");
   assert.doesNotMatch(certificate, /denied=/, "and there is no `denied=` field to fill");
   assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "REPLAN",
     "an unmarked tool error still replans: the death shape the bridge closes");
+});
+
+test("CERT.5 an admitted call that fails also certifies — the forwarding guard", async () => {
+  // The mid-execution sequence `f006-policy-denied.test.ts` pins behaviourally.
+  // Kept here so the reason field has two independent paths under test: one
+  // that arrives with a refusal and one that arrives on an admitted call.
+  const adapter = await trustedAdapter();
+  await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "call-5");
+  const bound = await adapter.beginToolExecution("call-5", "read", { toolCallId: "call-5" });
+  assert.ok(bound);
+  await adapter.recordToolResult("call-5", "read", undefined, true, undefined, REAL_REASON);
+
+  assert.equal(adapter.currentTask!.status, "FAILED", "a bound call failing on a policy reason terminates the task");
+  assert.ok(adapter.currentTask!.failureReason!.includes(REAL_REASON), "with the policy's own words");
 });
