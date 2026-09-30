@@ -106,9 +106,17 @@ async function deniedMidExecution(adapter: KernelAdapter, callId: string): Promi
   await adapter.recordToolResult(callId, "read", undefined, true, undefined, DENIAL_REASON);
 }
 
-/** Drive one preflight-denied call, which must leave the task ALIVE (F-008's contract). */
+/**
+ * Drive one preflight-denied call, which must leave the task ALIVE (F-008's contract).
+ *
+ * The payload is inert by design: `RULES` denies `bash` by name, so the
+ * decision is reached on the tool name alone and the input is never inspected.
+ * The test is about denial accounting, not about any construct, so it names
+ * none. D1.13 asserts the reason names `deniedTools`, which is what makes that
+ * independence observable rather than assumed.
+ */
 async function denyAtPrecheck(adapter: KernelAdapter, callId: string): Promise<void> {
-  const { decision } = await adapter.precheckToolCall("bash", "execute", { cmd: "rm -rf x" }, undefined, callId);
+  const { decision } = await adapter.precheckToolCall("bash", "execute", { cmd: "noop" }, undefined, callId);
   assert.equal(decision.decision, "DENY", "the policy must actually deny this call");
 }
 

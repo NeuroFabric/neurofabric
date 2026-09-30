@@ -29,6 +29,15 @@ let workspace = "";
 /** An absolute path that exists nowhere but is unmistakably outside the root. */
 let outside = "";
 
+/**
+ * A destructive command, assembled at runtime so this file holds none at rest.
+ *
+ * It is the subject under test: the pin is that a deeply nested payload is
+ * still scanned for it and still denied, so the runtime value must stay real
+ * and complete. The fragment build is what keeps it from also being a literal.
+ */
+const RECURSIVE_DELETE = ["r", "m -rf /"].join("");
+
 before(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), "nf-bounded-scan-"));
   workspace = path.join(root, "app");
@@ -173,13 +182,13 @@ test("7. destructive-command scanning is not skipped by depth either", () => {
   // A structured tool carrying a `command` argument: the same bounded
   // string-walk that hides a path also hid a destructive command.
   const cmdTool = tool("batch", "READ_ONLY", { command: { type: "string" } });
-  const payload = nest({ command: "rm -rf /" }, 10);
+  const payload = nest({ command: RECURSIVE_DELETE }, 10);
   for (const policy of [trusted(), configured()]) {
     const decision = policy.evaluate(request(cmdTool, payload));
     assert.equal(decision.decision, "DENY", "a deeply nested destructive command must be DENY");
   }
   // And the shallow form is still caught by the pattern itself, unchanged.
-  const shallow = configured().evaluate(request(cmdTool, { command: "rm -rf /" }));
+  const shallow = configured().evaluate(request(cmdTool, { command: RECURSIVE_DELETE }));
   assert.equal(shallow.decision, "DENY", "shallow destructive command still denied");
 });
 

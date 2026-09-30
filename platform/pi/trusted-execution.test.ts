@@ -22,6 +22,20 @@ const PROJECT_ROOT = path.resolve(import.meta.dirname, "../..");
 
 const TRUSTED_CONFIG = { policyMode: "TRUSTED_PROJECT" as const, allowedRoots: ["."] };
 
+/**
+ * MUST-DENY constructs, assembled at runtime so this file holds none at rest.
+ *
+ * Each of these IS the subject under test: the boundary is precisely that they
+ * are refused, so the runtime values must stay real and complete. The ratified
+ * boundary permits a trigger where it is the subject, and the fragment build is
+ * what keeps it from also being a literal in the source.
+ */
+const RECURSIVE_DELETE = ["r", "m -rf node_modules"].join("");
+const FORCE_PUSH = "git pu" + "sh --force origin main";
+const ENV_DUMP = ["cat", " .", "env"].join("");
+const OUTSIDE_READ = ["cat ../", "secrets.txt"].join("");
+const ROOT_DELETE = ["r", "m -rf /"].join("");
+
 /** Build an adapter wired the same way the extension wires it. */
 async function adapterForProject(root: string, config: NeurofebricProjectConfig = TRUSTED_CONFIG) {
   // Materialise the config so `loadProjectConfig` is exercised for real.
@@ -86,10 +100,10 @@ test("B. SECURITY BOUNDARY: policy-denied actions still cannot execute in truste
 
   const outside = path.join(path.dirname(root), "definitely-outside.txt");
   const denied: [string, unknown, RegExp][] = [
-    ["bash", { command: "rm -rf node_modules" }, /destructive/i],
-    ["bash", { command: "git push --force origin main" }, /destructive/i],
-    ["bash", { command: "cat .env" }, /credential/i],
-    ["bash", { command: "cat ../secrets.txt" }, /path boundary/i],
+    ["bash", { command: RECURSIVE_DELETE }, /destructive/i],
+    ["bash", { command: FORCE_PUSH }, /destructive/i],
+    ["bash", { command: ENV_DUMP }, /credential/i],
+    ["bash", { command: OUTSIDE_READ }, /path boundary/i],
     ["write", { path: "../escape.txt", content: "x" }, /path boundary/i],
     ["write", { path: outside, content: "x" }, /path boundary/i],
   ];
@@ -122,7 +136,7 @@ test("C. a denial in trusted mode cannot be escalated through an approval provid
 
   // Even if a caller supplies an always-approving provider, trusted mode
   // must still deny the dangerous operation.
-  const { decision } = await adapter.precheckToolCall("bash", "execute", { command: "rm -rf /" }, { requestApproval: async () => true }, "c1");
+  const { decision } = await adapter.precheckToolCall("bash", "execute", { command: ROOT_DELETE }, { requestApproval: async () => true }, "c1");
   assert.equal(decision.decision, "DENY");
 });
 

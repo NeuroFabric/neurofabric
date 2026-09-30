@@ -94,7 +94,9 @@ class AbortingPolicy {
 test("G. a legacy `block` denial does not fail the task", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("legacy blocked call");
-  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "rm -rf ." });
+  // Structural: BlockingPolicy denies `bash` by name, so the payload is never
+  // inspected. The construct is not this test's subject, so the test names none.
+  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "noop" });
   assert.equal(decision.decision, "DENY");
   assert.equal(decision.violation, "block");
 
@@ -116,7 +118,8 @@ test("G2. a legacy `abort` denial terminates the task", async () => {
   const kernel = newKernel();
   kernel.setPolicy(new AbortingPolicy() as unknown as PolicyEngine);
   await kernel.beginTask("legacy aborted call");
-  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "rm -rf ." });
+  // Structural: AbortingPolicy denies `bash` by name. See G above.
+  const { decision } = await kernel.evaluateToolCall("bash", "execute", { command: "noop" });
   assert.equal(decision.decision, "DENY");
   assert.equal(decision.violation, "abort");
 
@@ -233,7 +236,7 @@ test("B3. beginTask reaches PLANNING with no intervening yield", async () => {
 test("C. a policy block that ends the turn is not a dead stream", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("blocked call, nothing else");
-  const { decision } = await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  const { decision } = await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   assert.equal(decision.decision, "DENY");
   assert.equal(decision.violation, "block", "a policy denial carries a real violation");
 
@@ -245,7 +248,7 @@ test("C. a policy block that ends the turn is not a dead stream", async () => {
 test("C2. toolCall-only plus stopReason also completes", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("blocked call with stop reason");
-  await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   const done = await kernel.finishTask({ ...toolCallOnly("b1", "bash"), stopReason: "stop" });
   assert.equal(done.status, "COMPLETED");
 });
@@ -263,7 +266,7 @@ test("C3. a genuinely dead stream still fails", async () => {
 test("D. after a block a later valid call still executes", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("block then continue");
-  await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   const { decision } = await kernel.precheckToolCall("read", "execute", { path: "README.md" }, undefined, "r1");
   assert.equal(decision.decision, "ALLOW");
   const bound = await kernel.beginToolExecution("r1", "read", {});
@@ -303,7 +306,7 @@ test("F. terminal-state refusal carries refusal, never violation", async () => {
 test("F2. a policy denial and a terminal refusal are counted separately", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("counters");
-  await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   assert.equal(kernel.diagnostics.denialCount, 1);
   assert.equal(kernel.diagnostics.terminalRefusalCount, 0);
 
@@ -316,7 +319,7 @@ test("F2. a policy denial and a terminal refusal are counted separately", async 
 test("F3. a blocked call never becomes an execution", async () => {
   const kernel = blockedKernel();
   await kernel.beginTask("blocked never executes");
-  await kernel.precheckToolCall("bash", "execute", { command: "rm -rf ." }, undefined, "b1");
+  await kernel.precheckToolCall("bash", "execute", { command: "noop" }, undefined, "b1");
   const bound = await kernel.beginToolExecution("b1", "bash", {});
   assert.equal(bound, undefined);
   assert.equal(kernel.diagnostics.toolExecutionCount, 0);
