@@ -3,7 +3,7 @@
 Consolidated state of the F-006 denial-delivery work: what is fixed and on what
 evidence, what is found but gated, what stays under watch, and what debt remains.
 
-Last updated: 2026-09-30 (ledger fold A1.1). Author: Pi (agent). Operator-measured
+Last updated: 2026-09-30 (D5 filing, §2.5). Author: Pi (agent). Operator-measured
 figures are attributed as such; everything else was measured in-repo or pinned by
 a test.
 
@@ -40,6 +40,7 @@ take it on trust. The binding is the claim; the anchor is the evidence.
 | **D4** | §2.4, the path-boundary finding | `platform/core/configured-policy.ts:evaluatePaths`, `platform/core/workspace.ts:WorkspaceBoundary.check` |
 | **D2** | §2.1, the path-candidate extractor | commit `7e5aeb9` "fix(extractor): shell-syntax tokens are never path candidates" |
 | **G1** | §3, the typecheck-coverage finding, narrowed | commit `6ef26e9`; §1.4 below |
+| **D5** | §2.5, the `onViolation` divergence | `.pi/neurofebric-policy.json:81`, `platform/core/recovery.ts:130`, `platform/pi/kernel-adapter.ts:1524` |
 
 ### Inventory scope — prior-measured, NOT re-verified in this pass
 
@@ -276,6 +277,66 @@ labels; implemented on branch `fix/d4-path-boundary` with its corpus in
 `platform/pi/path-boundary-corpus.test.ts`. The MUST-DENY entries of §2.1's
 corpus remain the standing gate and are not weakened by this work.
 
+### 2.5 D5 — the committed `onViolation` is honoured on one path and dropped on the other, so every denial terminates the task
+
+**Status: CONFIRMED by measurement, 2026-09-30. Not yet fixed.** Filed before any
+fix attempt, per directive. This is the highest-priority open item: it is a
+sufficient cause for every `POLICY_DENIED` death in this log, and two consecutive
+sessions have died to it while queued to fix other things.
+
+**The divergence.** The committed policy says denials are survivable. The live
+code terminates them anyway, on the path that actually carries denials.
+
+| # | Site | What it does |
+|---|---|---|
+| a | `.pi/neurofebric-policy.json:81` | `"onViolation": "block"` — the committed setting |
+| b | `platform/core/configured-policy.ts:252` | `{ decision: "DENY", reason: denial, violation: this.config.onViolation }` — the setting is read and carried on the decision correctly |
+| c | `platform/pi/kernel-adapter.ts:912` | `if (decision.violation === "abort") await this.abortTask(...)` — the precheck path **does** consult it, so under `block` it does not abort |
+| d | `platform/pi/kernel-adapter.ts:1524` | `new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })` — the result path rebuilds the refusal and **discards `decision.violation`** |
+| e | `platform/pi/kernel-adapter.ts:1271` | `classifyFailure(error)` yields `"POLICY_DENIED"`; `recoveryOptions` at 1293–1308 carries `failure` and `denialReason` and **no violation field** |
+| f | `platform/core/recovery.ts:130` | `if (failure === "POLICY_DENIED") return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };` — unconditional, and the options interface at `recovery.ts:78`–`116` has no violation parameter to consult |
+
+So there are two routes for one denial. The precheck route (c) honours
+`onViolation`. The result route (d→e→f) throws the setting away one layer before
+recovery, and recovery then terminates unconditionally.
+
+**Live witness.** Two consecutive sessions, both on `fix/d4-path-boundary`,
+both died with:
+
+```
+Recovery TERMINATE [POLICY_DENIED_TERMINATED]: failure=POLICY_DENIED,
+denied=policy neurofebric-policy.json: path boundary violation: ...
+```
+
+against a committed policy whose `onViolation` is `block`. Session 2's own
+conclusion — recorded here so the evidence outlives the session — was that this
+was "not concluded" pending tools. It is now concluded: the setting is dropped at
+`kernel-adapter.ts:1524`.
+
+**Judgement (agent, under the granted authority).** The committed file is **not**
+stale. Site (b) proves the loader reads it and site (c) proves one path honours
+it, so `block` is live configuration that is being ignored on a second path.
+The fix is therefore to bring live behaviour in line with committed behaviour:
+thread the violation through `recordToolResult` → `observeToolResult` →
+`chooseRecoveryDetailed`, and have `recovery.ts:130` terminate only when the
+violation is `abort`. Failing closed on an absent violation is the correct
+direction and must be the default.
+
+**Scope of the claim, stated honestly.** D5 explains deaths whose terminal
+certificate names a policy refusal. It does **not** explain every death in this
+log: a death whose certificate names `TOOL_FAILURE`, a budget, or a timeout is
+outside it. The operator's hypothesis that this is "the root cause of every
+death" is supported for the `POLICY_DENIED` class and is **not established** for
+the others. Counting both is the death counter in §5.
+
+**Tension with an earlier observation, unresolved.** F-007 and F-003 record a
+denial survived by 20+ subsequent calls. Under this code path that should be
+impossible, since (f) terminates unconditionally. The historical observation is
+carried forward as **prior-measured, not re-verified**; either the
+configuration differed at the time, or the survivals took a path not exercised
+now. A test that asserts `block` survives a denial received as a tool result is
+the thing that settles it, and it is the first gate of the fix.
+
 ### 2.3 Benign non-zero exits spend recovery budget
 
 A command that exits non-zero for an ordinary, successful reason — `grep` with
@@ -355,6 +416,25 @@ misreading of a stale local ref; the lesson is in §6.
 Each item is corpus-first, on its own branch, full suite green before push.
 **No merges without operator sanction.**
 
+0. **D5 / onViolation divergence.** See §2.5. Highest priority: a sufficient
+   cause for every `POLICY_DENIED` death, and the reason two consecutive
+   sessions died while queued to fix other defects. Red-first gate: a test
+   asserting a `block` violation received as a **tool result** leaves the task
+   running, which today terminates. Corpus-first, then the thread-through.
+
+### Death counter — sessions lost per defect class
+
+Standing record. The purpose is falsifiable: after items 0–2 land, a class that
+does not fall has falsified the plan, and the plan is re-cut on that evidence
+rather than defended.
+
+| Defect class | Sessions lost | Note |
+|---|---|---|
+| Path-boundary false DENY / out-of-root scratch (§2.4) | **2** | Sessions 1 and 2 of this log; both died on a `path boundary violation` |
+| `onViolation` dropped on the result path (§2.5) | **2** | The **same two sessions** — the counter is per class, not per session, and the overlap is the finding |
+| Benign non-zero exit (§2.3) | 0 | No session has died to it yet |
+| Token guard over-breadth (§2.2) | 0 | Not measured live |
+
 1. **Extractor precision.** Corpus in both directions. MUST-DENY (hard gate):
    `rm -rf`, `.env` credential read, paths escaping the workspace root.
    MUST-PASS: `find -exec … \;`, `mkdir -p x && echo "h" > x/t.txt`,
@@ -402,3 +482,15 @@ Read first, then pin, and name the event order in every test so an
 order-assumption cannot hide in a test body.
 
 **One command one purpose. No stash.**
+
+**No out-of-root scratch, ever.** Inline pipes (`git show X | sed -n 'a,bp'`) or
+in-repo scratch paths only. Written after session 2 died to `/tmp` scratch under
+a root the boundary guard correctly refuses; the guard was right and the agent
+was the cause.
+
+**Commit on measure is enforced.** Every measurement batch and every ledger
+write commits immediately; push on green. Two sessions in a row held evidence
+only in a report that died with them.
+
+**Report per item.** Each queue item gets its own report, with its measurement,
+so a death costs one item rather than the session's whole output.
