@@ -12,6 +12,7 @@ import type {
   PolicyMode,
   PolicyRequest,
   ToolBudgetTelemetry,
+  ToolDescriptor,
 } from "./types.ts";
 
 /**
@@ -237,6 +238,19 @@ export class ConfiguredPolicy implements PolicyEngine {
   private readonly callRepeats = new Map<string, Map<string, number>>();
   private readonly matchers: RegExp[];
 
+  /**
+   * The refusal class decided by the LAST evaluation, or undefined.
+   *
+   * Scoped to exactly one call: `evaluate` clears it before it starts and reads
+   * it once, and neither `evaluate` nor `evaluateRules` awaits anything between
+   * the two, so no second evaluation can observe or overwrite it in between. It
+   * exists so that `evaluateRules` and `evaluatePaths` keep returning plain
+   * denial strings -- which is what preserves the precedence of the rule checks
+   * exactly as it was -- while the one caller that needs the classification gets
+   * it without the other eleven return sites having to learn a new shape.
+   */
+  private scopeRefusal: DenialRefusal | undefined;
+
   constructor(config: PolicyConfig, options: { mode: PolicyMode; base: PolicyEngine; allowedRoots: string[] }) {
     this.config = config;
     this.mode = options.mode;
@@ -276,15 +290,18 @@ export class ConfiguredPolicy implements PolicyEngine {
   }
 
   evaluate(request: PolicyRequest): PolicyDecision {
+    // Cleared before anything can set it, so a stale class can never leak into
+    // this call's decision. See the field's own note for why it is safe.
+    this.scopeRefusal = undefined;
     const denial = this.evaluateRules(request);
     if (denial) {
       // D5 / §2.4(b): a scope refusal is still a DENY -- nothing is read and
       // nothing executes -- but it is marked, and the mark is what lets the
       // adapter carry "refused, not violated" to the result instead of
       // terminating the task on it.
-      return denial.refusal === undefined
-        ? { decision: "DENY", reason: denial.denial, violation: this.config.onViolation }
-        : { decision: "DENY", reason: denial.denial, violation: this.config.onViolation, refusal: denial.refusal };
+      return this.scopeRefusal === undefined
+        ? { decision: "DENY", reason: denial, violation: this.config.onViolation }
+        : { decision: "DENY", reason: denial, violation: this.config.onViolation, refusal: this.scopeRefusal };
     }
 
     const counts = this.countsFor(request.taskId);
@@ -330,7 +347,7 @@ export class ConfiguredPolicy implements PolicyEngine {
   }
 
   /** The declarative rules alone, without the tier policy underneath. */
-  private evaluateRules(request: PolicyRequest): { denial: string; refusal?: DenialRefusal } | undefined {
+  private evaluateRules(request: PolicyRequest): string | undefined {
     const { tool, input, taskId } = request;
     const where = `policy ${path.basename(this.config.source)}`;
 
@@ -432,7 +449,7 @@ export class ConfiguredPolicy implements PolicyEngine {
     return undefined;
   }
 
-  private evaluatePaths(request: PolicyRequest, where: string): { denial: string; refusal?: DenialRefusal } | undefined {
+  private evaluatePaths(request: PolicyRequest, where: string): string | undefined {
     const scan = scanToolPathCandidates(request.tool, request.input);
     // Checked before the empty-list shortcut below. "No candidates" and "the
     // walk stopped before it could find any" both present as an empty list, and
@@ -458,9 +475,9 @@ export class ConfiguredPolicy implements PolicyEngine {
         //      outside the roots, and the call is still refused.
         // A read or a write of an out-of-root span stays a hard violation.
         if (!writing && isEnumeration(request.tool) && isPattern(candidate)) {
-          return { denial, refusal: "out_of_scope_discovery" };
+          this.scopeRefusal = "out_of_scope_discovery";
         }
-        return { denial };
+        return denial;
       }
 
       const resolved = verdict.resolvedPath ?? candidate;
@@ -470,10 +487,10 @@ export class ConfiguredPolicy implements PolicyEngine {
       const matched = this.matchRule(normalizeForMatch(relative), writing);
       if (matched === undefined) {
         // Default deny, exactly as the legacy engine's unmatched branch did.
-        return { denial: `${where}: no matching file rule for '${relative}' (default deny)` };
+        return `${where}: no matching file rule for '${relative}' (default deny)`;
       }
       if (matched.verdict === "deny") {
-        return { denial: `${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'` };
+        return `${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'`;
       }
     }
     return undefined;

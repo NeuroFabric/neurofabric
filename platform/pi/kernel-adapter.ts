@@ -920,7 +920,7 @@ export class KernelAdapter {
       // D5 / §2.4(b): a refusal that is not a violation is recorded per call so
       // the distinction survives to the result, where the decision object no
       // longer exists. Cleared with `deniedToolCallIds`.
-      if (decision.refusal !== undefined) this.pendingRefusals.set(toolCallId, decision.refusal);
+      if (decision.refusal !== undefined && toolCallId !== undefined) this.pendingRefusals.set(toolCallId, decision.refusal);
       await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, {
         tool: toolName,
         toolCallId,
@@ -1327,7 +1327,7 @@ export class KernelAdapter {
         // D5: the violation the policy put on the decision that produced this
         // result. Without it recovery cannot tell a survivable refusal from a
         // terminating one and terminates on both.
-        violation: options.violation,
+        violation: options?.violation,
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
@@ -1578,7 +1578,7 @@ export class KernelAdapter {
           ? new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })
           : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
         : undefined,
-      violation,
+      { violation },
     );
   }
 

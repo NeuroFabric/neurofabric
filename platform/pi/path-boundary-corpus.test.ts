@@ -60,6 +60,9 @@ function tool(
 const readTool = tool("read", { path: { type: "string" } });
 const bashTool = tool("bash", { command: { type: "string" } }, "SIDE_EFFECTING");
 const lsTool = tool("ls", { path: { type: "string" } });
+/** An out-of-root WRITE, so B2c can prove the soft class never reaches a write. */
+const writeTool = tool("write", { path: { type: "string" } }, "SIDE_EFFECTING");
+writeTool.riskLevel = "WRITE";
 
 let workspace: string;
 function root(): string {
@@ -227,9 +230,29 @@ for (const entry of MUST_DENY) {
 test("B2: an out-of-root discovery call is refused as a soft refusal, not a violation", () => {
   const decision = configured().evaluate(request(lsTool, { path: "../../*" }));
   assert.equal(decision.decision, "DENY", "an out-of-root span was permitted");
-  const refusal = (decision as { refusal?: { kind?: string } }).refusal;
-  assert.equal(refusal?.kind, "out_of_scope_discovery", "the refusal was not classified as scope discovery");
+  // `DenialRefusal` is a string union, not an object: the class IS the value.
+  assert.equal(decision.refusal, "out_of_scope_discovery", "the refusal was not classified as scope discovery");
   assert.match(String(decision.reason), /allowed root|outside|escape/i);
+});
+
+/**
+ * B2b (MUST-DENY). The soft class must NOT widen.
+ *
+ * The same out-of-root span, requested by a READ, stays a hard violation with no
+ * refusal class at all. This is the gate that proves the three conditions in
+ * `evaluatePaths` are conjunctive rather than decorative -- if the enumeration
+ * check were ever dropped, or widened to any tool, this entry fails.
+ */
+test("B2b MUST-DENY: an out-of-root READ is a hard violation, not a soft refusal", () => {
+  const decision = configured().evaluate(request(readTool, { path: "../../*" }));
+  assert.equal(decision.decision, "DENY", "an out-of-root read was permitted");
+  assert.equal(decision.refusal, undefined, "a read inherited the enumeration class");
+});
+
+test("B2c MUST-DENY: an out-of-root WRITE is a hard violation, not a soft refusal", () => {
+  const decision = configured().evaluate(request(writeTool, { path: "../../*" }));
+  assert.equal(decision.decision, "DENY", "an out-of-root write was permitted");
+  assert.equal(decision.refusal, undefined, "a write inherited the enumeration class");
 });
 
 /**

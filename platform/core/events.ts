@@ -8,6 +8,11 @@ export type PlatformEvent =
   | "APPROVAL_GRANTED" | "APPROVAL_DENIED" | "TASK_COMPLETED" | "TASK_FAILED" | "TASK_CANCELLED"
   | "TOOL_EXECUTION_STARTED" | "TOOL_EXECUTION_IGNORED" | "TOOL_RESULT_IGNORED" | "RESPONSE_OBSERVED"
   | "ARTIFACT_VERIFIED" | "ARTIFACT_INVALID" | "POLICY_VIOLATION" | "POLICY_ABORTED"
+  // D5 / §2.4(b): a refusal of scope was continued. Purely observational -- it
+  // records that the task lived and got to try something else, which is the
+  // observable difference between `onViolation: block` being honoured and
+  // being dropped on the floor.
+  | "SOFT_REFUSED" | "SOFT_REFUSAL_CONTINUED"
   // Budget telemetry. Neither can deny anything or move a task: they exist so a
   // task that is running low, or repeating the same call, is visible in the
   // trace BEFORE the terminal limit denial (F-008).
