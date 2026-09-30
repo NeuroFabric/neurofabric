@@ -35,6 +35,6 @@
 
     "types": ["node"]
   },
-  "include": ["platform/**/*.ts"],
+  "include": ["platform/**/*.ts", ".pi/extensions/*.ts"],
   "exclude": ["node_modules", "platform/**/*.test.ts"]
 }
