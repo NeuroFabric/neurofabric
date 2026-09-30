@@ -188,7 +188,17 @@ export interface PolicyRequest {
  * already replaced (`stale_task`). Keeping them out of `violation` is what stops
  * a lifecycle refusal from being read as "policy blocked this call".
  */
-export type DenialRefusal = "task_terminal" | "stale_task";
+/**
+ * Why a call was refused, when the refusal is not a rule breach.
+ *
+ * `task_terminal` and `stale_task` are refusals to act on an already-finished
+ * generation of work. `out_of_scope_discovery` (D5 / §2.4(b)) is a refusal of
+ * SCOPE: the call named a span outside the allowed roots to enumerate. It is
+ * still refused and nothing is read, but it is not a violation -- looking around
+ * the project is not a security event, so it must not carry `violation: abort`
+ * semantics and must not kill a task that could simply try somewhere in-root.
+ */
+export type DenialRefusal = "task_terminal" | "stale_task" | "out_of_scope_discovery";
 
 export type PolicyDecision =
   | { decision: "ALLOW" }

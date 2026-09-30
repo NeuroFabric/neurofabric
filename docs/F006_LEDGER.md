@@ -3,8 +3,53 @@
 Consolidated state of the F-006 denial-delivery work: what is fixed and on what
 evidence, what is found but gated, what stays under watch, and what debt remains.
 
-Last updated: 2026-09-30. Author: Pi (agent). Operator-measured figures are
-attributed as such; everything else was measured in-repo or pinned by a test.
+Last updated: 2026-09-30 (D5 filing, §2.5). Author: Pi (agent). Operator-measured
+figures are attributed as such; everything else was measured in-repo or pinned by
+a test.
+
+### Provenance — environment claims, measured not asserted
+
+Measured in this pass, on the host that ran it:
+
+| Claim | State | How it was measured |
+|---|---|---|
+| OmniRoute version | **3.8.51** | `OmniRoute/package.json` `"version"`; the checkout is on `release/v3.8.51` at `a1baae7b0a` |
+| `glab` (GitLab CLI) | **NOT INSTALLED** | `command -v glab` returns nothing |
+| `gh` (GitHub CLI) | installed, **not the mechanism** | `command -v gh` resolves; the `origin` remote is `gitlab.com/neurofebric-group/neurofebric`, which `gh` cannot open an MR against |
+| `main` | `625e59f`, in sync with `origin/main` | `git fetch origin` then `git status -sb` reports no ahead/behind |
+| Suite on `main` | **green** — 480 tests, 478 pass, 0 fail, 2 skipped | `npm test` (typecheck + `platform/*.test.mjs` + `platform/{core,pi}/*.test.ts`) |
+
+An earlier operator directive asserted `glab` was installed and asked for the
+provenance line to be written on that basis. It was not written, because the
+claim was not true on this host, and the directive has since been corrected:
+**operator directives do not assert environment state.** Environment claims are
+verified before they are recorded, and an unverified claim is recorded as
+unmeasured rather than repeated. `glab` is dropped from the queue; branch, SHA,
+suite status and a pre-built MR URL are the merge mechanism, recorded in
+`docs/MANIFEST.md`.
+
+### Label map — operator finding labels bound to repo anchors
+
+The operator's running labels (D2, D4, G1) are not recorded anywhere in this
+repository; they originate in conversation. Each is bound below to the artifact
+it can be checked against, so a reader can challenge the binding rather than
+take it on trust. The binding is the claim; the anchor is the evidence.
+
+| Label | Bound to | Anchor |
+|---|---|---|
+| **D4** | §2.4, the path-boundary finding | `platform/core/configured-policy.ts:evaluatePaths`, `platform/core/workspace.ts:WorkspaceBoundary.check` |
+| **D2** | §2.1, the path-candidate extractor | commit `7e5aeb9` "fix(extractor): shell-syntax tokens are never path candidates" |
+| **G1** | §3, the typecheck-coverage finding, narrowed | commit `6ef26e9`; §1.4 below |
+| **D5** | §2.5, the `onViolation` divergence | `.pi/neurofebric-policy.json:81`, `platform/core/recovery.ts:130`, `platform/pi/kernel-adapter.ts:1524` |
+
+### Inventory scope — prior-measured, NOT re-verified in this pass
+
+The declared-versus-implemented limits inventory (the probe artifacts
+`.pi-tools/claimed-before.txt`, `.pi-tools/claimed.txt`, `.pi-tools/actual.txt`)
+was measured in an **earlier** pass and is **not re-verified here**. It is
+carried forward as prior-measured, with the artifacts named so the claim is
+checkable rather than merely asserted. Re-verification is queued; until it runs,
+no statement in this ledger depends on that inventory being current.
 
 ---
 
@@ -110,6 +155,32 @@ cause of the task deaths observed during the F-006 work itself.
 **Next step.** Corpus-first, both directions, with MUST-DENY as a hard gate
 (see §5, item 1).
 
+#### D2 refinement — landed, and what it left behind
+
+`7e5aeb9` "fix(extractor): shell-syntax tokens are never path candidates" is the
+refinement. It added `SHELL_SYNTAX_TOKEN` / `CONTAINS_LINE_BREAK` in
+`tool-paths.ts`, so a token made **entirely** of shell meaning (`\;`, `&&`, `{}`,
+`|`) and any token containing a line break are no longer path candidates. Both
+live false positives above are closed by it, and `platform/pi/path-extraction-corpus.test.ts`
+is the gate that keeps them closed.
+
+The rule is deliberately subtractive — it can only *remove* candidates, never add
+one, so it cannot introduce a permission. That is also its limit, and it is where
+the residual lives:
+
+- It only recognises tokens that are *wholly* syntax. A token that mixes syntax
+  with a real location — an escaped path — is still extracted in its **raw,
+  escaped form**, and §2.4(a) is what happens next.
+- It removes the candidate; it does not teach the extractor the difference
+  between a command's own name, an argument, and a pattern position. That
+  remains §5 item 1's hypothesis, unpinned.
+
+**Residual, stated rather than left implicit:** the extractor still judges
+candidates on the text the *shell* would resolve away, so the boundary is asked
+about a path that does not exist. Filed as §2.4(a) and not folded into the
+extractor work, per the no-silent-fold rule: they are different modules with
+different owners and one fix would have hidden the other.
+
 ### 2.2 Destructive-command token guard is over-broad
 
 `destructiveCommandTokens` (`rm`, `rmdir`, `del`, `erase`, `unlink`, `shred`,
@@ -128,6 +199,143 @@ destructive command is still caught by the pattern rules and by the token rule
 itself.
 
 **Next step.** Corpus-first, separate branch, same MUST-DENY gate (§5, item 2).
+
+### 2.4 D4 — the path boundary judges text the shell never resolves (TWO defects)
+
+Found by Pi during the F-006 work and filed here as **D4**. It is not folded
+into §2.1: the extractor fix and the boundary fix are separate defects in
+separate modules, and folding one into the other would have made the second
+invisible in the diff and in the corpus.
+
+**Both corrections below are authorised for implementation.** The corpus gates
+named with each are hard: a fix that cannot turn its gate green does not land.
+
+#### (a) The boundary check evaluates shell-escaped text
+
+`tokenizeShell` **preserves** backslashes rather than consuming them, so that a
+Windows path such as `C:\Users\dev` survives tokenisation intact
+(`tool-paths.ts`, the function's own doc). That preservation is correct for
+extraction and wrong for containment: a candidate that came from
+`cat notes/my\ file.md` reaches `WorkspaceBoundary.check` as the literal string
+`notes/my\ file.md`, which is **not** the path the shell resolves. The guard is
+therefore evaluating a path that does not exist and the file rules are matching
+against its mangled form.
+
+It fails in both directions, which is why one corpus gate is not enough:
+
+- **False deny.** The relative form the file rules match is
+  `notes/my\ file.md`, not `notes/my file.md`. A rule shaped
+  `**/*.md` does not match the escaped spelling, so an ordinary in-root command
+  falls through to the default-deny branch — a dead task for a file the policy
+  would have allowed.
+- **False allow.** `cat ..\outside.txt` is the escape written in the spelling the
+  guard understands least. Resolved as a *literal* filename, `..\outside.txt` is
+  a file **inside** the root, so the boundary permits it. The traversal is
+  invisible. This direction is the dangerous one and it is why the fix must add
+  candidates, never drop them.
+
+**Correction authorised:** unescape the candidate before the boundary check, so
+the guard evaluates the path the shell would resolve. The correction must fail
+closed — the resolved form is checked **in addition to** the raw one, so it can
+only ever deny more.
+
+**Corpus gate.** A command naming an in-root path with an escaped space MUST
+PASS; the same path outside the root MUST DENY, on the **resolved** path.
+
+#### (b) Out-of-root discovery globs are terminal, and each one is a dead task
+
+A glob is not a location. `ls ../../*` names no file; it asks the shell to
+enumerate a span. It is refused today, correctly — the span is outside the root —
+but the refusal inherits the full weight of a policy denial: the denial is
+delivered as a failed result, `classifyFailure` returns `POLICY_DENIED`, and
+`chooseRecoveryDetailed` returns `TERMINATE` / `POLICY_DENIED_TERMINATED`
+(`recovery.ts:124-131`). The task dies. A second, independent witness to the
+§2.1 turn-death path, and it is reached by ordinary work: looking around the
+project is not a security event.
+
+**Correction authorised:** an out-of-root **discovery** call becomes a
+**non-terminal soft refusal**. The call is still refused and still carries **its
+own** reason; what changes is that the task lives, so a follow-up in-root call
+in the same task proceeds. Nothing is read, nothing is executed, and the refusal
+is not a violation — it is a refusal of scope, so it must not carry
+`violation: abort` semantics or be recoverable by retrying the same call.
+
+**Corpus gate.** An out-of-root `ls` glob is refused with its own reason, and a
+follow-up in-root call **in the same task** succeeds.
+
+**Risk of the correction, stated before implementing.** A soft refusal is
+strictly weaker than a terminal denial: it survives, so an agent that keeps
+re-issuing the same out-of-root discovery spends its budget on refusals instead
+of dying once. The refusal must therefore be counted and reported as a refusal,
+never as a success, and the boundary check itself is untouched — the call is not
+allowed, it is only allowed to end less permanently.
+
+#### §2.4 filing reference
+
+Filed as **§2.4** in this ledger; tracked as **D4** in the operator's running
+labels; implemented on branch `fix/d4-path-boundary` with its corpus in
+`platform/pi/path-boundary-corpus.test.ts`. The MUST-DENY entries of §2.1's
+corpus remain the standing gate and are not weakened by this work.
+
+### 2.5 D5 — the committed `onViolation` is honoured on one path and dropped on the other, so every denial terminates the task
+
+**Status: CONFIRMED by measurement, 2026-09-30. Not yet fixed.** Filed before any
+fix attempt, per directive. This is the highest-priority open item: it is a
+sufficient cause for every `POLICY_DENIED` death in this log, and two consecutive
+sessions have died to it while queued to fix other things.
+
+**The divergence.** The committed policy says denials are survivable. The live
+code terminates them anyway, on the path that actually carries denials.
+
+| # | Site | What it does |
+|---|---|---|
+| a | `.pi/neurofebric-policy.json:81` | `"onViolation": "block"` — the committed setting |
+| b | `platform/core/configured-policy.ts:252` | `{ decision: "DENY", reason: denial, violation: this.config.onViolation }` — the setting is read and carried on the decision correctly |
+| c | `platform/pi/kernel-adapter.ts:912` | `if (decision.violation === "abort") await this.abortTask(...)` — the precheck path **does** consult it, so under `block` it does not abort |
+| d | `platform/pi/kernel-adapter.ts:1524` | `new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })` — the result path rebuilds the refusal and **discards `decision.violation`** |
+| e | `platform/pi/kernel-adapter.ts:1271` | `classifyFailure(error)` yields `"POLICY_DENIED"`; `recoveryOptions` at 1293–1308 carries `failure` and `denialReason` and **no violation field** |
+| f | `platform/core/recovery.ts:130` | `if (failure === "POLICY_DENIED") return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };` — unconditional, and the options interface at `recovery.ts:78`–`116` has no violation parameter to consult |
+
+So there are two routes for one denial. The precheck route (c) honours
+`onViolation`. The result route (d→e→f) throws the setting away one layer before
+recovery, and recovery then terminates unconditionally.
+
+**Live witness.** Two consecutive sessions, both on `fix/d4-path-boundary`,
+both died with:
+
+```
+Recovery TERMINATE [POLICY_DENIED_TERMINATED]: failure=POLICY_DENIED,
+denied=policy neurofebric-policy.json: path boundary violation: ...
+```
+
+against a committed policy whose `onViolation` is `block`. Session 2's own
+conclusion — recorded here so the evidence outlives the session — was that this
+was "not concluded" pending tools. It is now concluded: the setting is dropped at
+`kernel-adapter.ts:1524`.
+
+**Judgement (agent, under the granted authority).** The committed file is **not**
+stale. Site (b) proves the loader reads it and site (c) proves one path honours
+it, so `block` is live configuration that is being ignored on a second path.
+The fix is therefore to bring live behaviour in line with committed behaviour:
+thread the violation through `recordToolResult` → `observeToolResult` →
+`chooseRecoveryDetailed`, and have `recovery.ts:130` terminate only when the
+violation is `abort`. Failing closed on an absent violation is the correct
+direction and must be the default.
+
+**Scope of the claim, stated honestly.** D5 explains deaths whose terminal
+certificate names a policy refusal. It does **not** explain every death in this
+log: a death whose certificate names `TOOL_FAILURE`, a budget, or a timeout is
+outside it. The operator's hypothesis that this is "the root cause of every
+death" is supported for the `POLICY_DENIED` class and is **not established** for
+the others. Counting both is the death counter in §5.
+
+**Tension with an earlier observation, unresolved.** F-007 and F-003 record a
+denial survived by 20+ subsequent calls. Under this code path that should be
+impossible, since (f) terminates unconditionally. The historical observation is
+carried forward as **prior-measured, not re-verified**; either the
+configuration differed at the time, or the survivals took a path not exercised
+now. A test that asserts `block` survives a denial received as a tool result is
+the thing that settles it, and it is the first gate of the fix.
 
 ### 2.3 Benign non-zero exits spend recovery budget
 
@@ -161,6 +369,28 @@ external interceptor on the project surface. `.pi/extensions/` contains only
 `POLICY_DENIED` certificate *nor* a reason-bearing `TOOL_RESULT_IGNORED` trace
 entry means delivery is broken. File it with the trace.
 
+### 3.1 G1 — the guard worked loudly; the finding is re-filed, NARROWED
+
+**G1 was the typecheck-coverage gap of §1.4**: `.pi/extensions/*.ts` was outside
+`tsconfig.json`'s `include`, so the file that refuses a denial and captures its
+reason was never typechecked, and a duplicate `const denialReason` (TS2451)
+reached runtime as a hard SyntaxError.
+
+**Operator ruling, accepted:** that was the guard **working loudly**. A hard
+SyntaxError is the best available outcome — the extension refuses to load, the
+failure is immediate, and nothing silently proceeds without enforcement. It is
+not the failure class G1 was filed against, and treating it as one would have
+dented a control that did its job.
+
+**G1 stays filed on silent resets only.** The narrowed finding: a reset, reload,
+or state change in the enforcement path that produces **no** loud signal — no
+throw, no non-zero exit, no missing module, no event — and leaves the process
+running with enforcement silently absent or reverted. That class is real, is not
+covered by §1.4, and remains open.
+
+**What this ruling does not do.** It does not close §1.4, does not revert the
+`include` change, and does not license the shadow declaration to grow (see §6).
+
 ---
 
 ## 4. BRANCH MAP
@@ -186,6 +416,25 @@ misreading of a stale local ref; the lesson is in §6.
 Each item is corpus-first, on its own branch, full suite green before push.
 **No merges without operator sanction.**
 
+0. **D5 / onViolation divergence.** See §2.5. Highest priority: a sufficient
+   cause for every `POLICY_DENIED` death, and the reason two consecutive
+   sessions died while queued to fix other defects. Red-first gate: a test
+   asserting a `block` violation received as a **tool result** leaves the task
+   running, which today terminates. Corpus-first, then the thread-through.
+
+### Death counter — sessions lost per defect class
+
+Standing record. The purpose is falsifiable: after items 0–2 land, a class that
+does not fall has falsified the plan, and the plan is re-cut on that evidence
+rather than defended.
+
+| Defect class | Sessions lost | Note |
+|---|---|---|
+| Path-boundary false DENY / out-of-root scratch (§2.4) | **2** | Sessions 1 and 2 of this log; both died on a `path boundary violation` |
+| `onViolation` dropped on the result path (§2.5) | **2** | The **same two sessions** — the counter is per class, not per session, and the overlap is the finding |
+| Benign non-zero exit (§2.3) | 0 | No session has died to it yet |
+| Token guard over-breadth (§2.2) | 0 | Not measured live |
+
 1. **Extractor precision.** Corpus in both directions. MUST-DENY (hard gate):
    `rm -rf`, `.env` credential read, paths escaping the workspace root.
    MUST-PASS: `find -exec … \;`, `mkdir -p x && echo "h" > x/t.txt`,
@@ -194,6 +443,8 @@ Each item is corpus-first, on its own branch, full suite green before push.
    Hypothesis to verify against the corpus: a token is a path candidate only if
    in argument position, not shell syntax, and not consumed by a flag that takes
    a pattern; `-exec` introduces a nested command whose body is command text.
+   *Status: the shell-syntax half landed as `7e5aeb9` (see the D2 refinement
+   note in §2.1). The argument-position hypothesis is unpinned and remains open.*
 2. **Token guard scoping.** Enumerate the policy's token rules first, corpus
    second. Bare tokens must match at word boundaries in **command position**, not
    anywhere in any string. Same MUST-DENY gate.
@@ -203,6 +454,8 @@ Each item is corpus-first, on its own branch, full suite green before push.
    `34cd9ee` with no conflicts; C3b's commit was already in `main`, so the
    predicted `kernel-adapter.ts` comment conflicts did not arise. A content
    assessment of C3b is still owed.
+5. **§2.4 / D4 path-boundary fix.** Authorised and in progress; see §2.4 for
+   both defects, both corpus gates, and the branch.
 
 ---
 
@@ -214,6 +467,9 @@ Each item is corpus-first, on its own branch, full suite green before push.
   unverified surface that looks verified is worse than a missing one.
 - **Local `main` is stale** (`975d167` vs `origin/main` `34cd9ee`). Fast-forward
   before starting local work from `main`.
+  *Resolved 2026-09-30, measured: `git fetch origin` then `git status -sb`
+  reports local `main` at `625e59f` with no ahead/behind divergence. Kept as a
+  standing obligation, not as an open defect — the fetch is what closed it.*
 - **Fetch before concluding anything about merge state.** A confident wrong
   claim — "the MR did not carry the work" — came from reading a stale
   `origin/main`. One fetch first would have prevented it.
@@ -226,3 +482,15 @@ Read first, then pin, and name the event order in every test so an
 order-assumption cannot hide in a test body.
 
 **One command one purpose. No stash.**
+
+**No out-of-root scratch, ever.** Inline pipes (`git show X | sed -n 'a,bp'`) or
+in-repo scratch paths only. Written after session 2 died to `/tmp` scratch under
+a root the boundary guard correctly refuses; the guard was right and the agent
+was the cause.
+
+**Commit on measure is enforced.** Every measurement batch and every ledger
+write commits immediately; push on green. Two sessions in a row held evidence
+only in a report that died with them.
+
+**Report per item.** Each queue item gets its own report, with its measurement,
+so a death costs one item rather than the session's whole output.
