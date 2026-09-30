@@ -32,6 +32,7 @@ import {
   type ValidationResult,
 } from "../core/index.ts";
 import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type RecoveryLimits } from "../core/index.ts";
+import { callSignature } from "../core/call-signature.ts";
 import { vaultToolDescriptors, vaultToolsEnabled, type VaultWiring } from "./vault-tools.ts";
 
 export interface KernelAdapterOptions {
@@ -152,6 +153,14 @@ export interface KernelDiagnostics {
   /** The current attempt has an unresolved failure. */
   attemptBlocked: boolean;
   recoveryDepth: number;
+  /**
+   * Whether the current task holds a recorded attempt signature.
+   *
+   * The signature VALUE is deliberately not exposed: the policy that owns the
+   * hashing never emits it, and a recovery identity derived from call input must
+   * not start leaking into traces through a diagnostics bag.
+   */
+  attemptSignatureRecorded: boolean;
   /** Real executions bound to this task. A denied call never increments it. */
   toolExecutionCount: number;
   lastValidation?: ValidationResult;
@@ -265,6 +274,27 @@ export class KernelAdapter {
   private plan?: Plan;
   private lastValidation?: ValidationResult;
   private recoveryDepth = 0;
+  /**
+   * The call signature of the most recent attempt this task actually ran.
+   *
+   * Recorded at the moment the attempt's identity is in hand — the precheck,
+   * AFTER the stale guard — and never re-derived at classification time, because
+   * by then the adapter holds no `PolicyRequest` to hash: `BoundExecution` keeps
+   * only caller-supplied `inputMetadata`, not the policy input the signature is
+   * computed over.
+   *
+   * Hashed by the SAME `callSignature` the policy's repeat accounting uses, so
+   * the two cannot disagree about whether two calls are the same call.
+   *
+   * Per-task recovery state, with the same lifecycle as `recoveryDepth`: reset on
+   * the VALID boundary, cleared when a newer task supersedes this one. A stale
+   * signature must never fork a newer task's decisions, which is what the H2-H6
+   * pins exist to prevent for every other counter.
+   *
+   * The VALUE is never emitted to a trace, a log, or `diagnostics`. Only whether
+   * one was recorded is observable.
+   */
+  private lastAttemptSignature: string | undefined;
 
   /** Real executions currently in flight, keyed by Pi toolCallId. */
   private readonly activeExecutions = new Map<string, BoundExecution>();
@@ -474,6 +504,7 @@ export class KernelAdapter {
       failureReason: this.task?.failureReason,
       attemptBlocked: this.attemptBlocked,
       recoveryDepth: this.recoveryDepth,
+      attemptSignatureRecorded: this.lastAttemptSignature !== undefined,
       toolExecutionCount: this.toolExecutionCount,
       lastValidation: this.lastValidation,
       denialCount: this.denialCount,
@@ -626,6 +657,7 @@ export class KernelAdapter {
     this.plan = undefined;
     this.lastValidation = undefined;
     this.recoveryDepth = 0;
+    this.lastAttemptSignature = undefined;
     this.executionStartedAtNs = process.hrtime.bigint();
     this.activeExecutions.clear();
     this.knownToolCallIds.clear();
@@ -823,6 +855,15 @@ export class KernelAdapter {
     // always the engine that evaluated the call, so this telemetry is wired on
     // the approval path as well as the no-provider one.
     if (decision.decision === "ALLOW") {
+      // The attempt's identity, recorded here because this is the only point
+      // where the tool, operation and input that define it are all in hand.
+      //
+      // It runs AFTER the stale guard above, for the same reason the budget
+      // telemetry below does: a handler superseded mid-decision must not write
+      // the newer task's recovery state. An EXECUTION binds only on ALLOW, so
+      // this is recorded on the same condition — a refused call never ran, and
+      // a call that never ran has no identity to repeat.
+      this.lastAttemptSignature = callSignature(request);
       const budget = this.policy.toolBudget?.(request);
       if (budget) {
         this.lastBudget = budget;
@@ -1212,6 +1253,7 @@ export class KernelAdapter {
       }
     } else {
       this.recoveryDepth = 0;
+      this.lastAttemptSignature = undefined;
     }
 
     return validation;
