@@ -27,7 +27,10 @@ test("failed task refusal includes failureReason", async () => {
   (adapter as any).task = { ...(adapter as any).task, status: "FAILED", failureReason: "Boom" };
   
   const refusal = await adapter.precheckToolCall("read", "read", {});
-  assert.match(refusal.decision.reason, /failureReason: Boom/);
+  // CHANGED BY THE ECHO MR. The stored reason is no longer appended as a bare
+  // `failureReason:` tail, because that presented the task's ORIGINAL failure as
+  // if it described the call being refused. It is now labelled and attributed.
+  assert.match(refusal.decision.reason, /ORIGINAL failure, recorded when the task terminated and unchanged since, is: Boom/);
 });
 
 test("completed task refusal includes completion instructions", async () => {
@@ -88,12 +91,23 @@ test("tools remain available in RECOVERING; locked in COMPLETED and FAILED", asy
   // reads. It was pinned at exactly 46 characters and told the model only THAT
   // the task was dead. The refusal now appends the task's failureReason when
   // the task carries one; with none, the string must be unchanged.
+  //
+  // CHANGED BY THE ECHO MR. The old pin asserted the 46-character string
+  // VERBATIM, which pinned the echo: a refusal that named the dead task and
+  // nothing about the call that triggered it. The property that pin was
+  // actually protecting — no dangling separator when there is no failureReason
+  // to append — is still asserted below, and is now joined by the two facts
+  // the echo MR requires: the triggering call is named, and its absence of any
+  // stored reason is stated rather than left as an empty tail.
   assert.equal(
     failedPrecheck.decision.reason,
-    "Task is FAILED; no further tool calls are accepted",
-    "a task with no failureReason must produce the original refusal verbatim, with no dangling separator",
+    "Task is FAILED; no further tool calls are accepted; "
+    + "the call that triggered this refusal is tool=read operation=read toolCallId=<none>; "
+    + "it was NOT evaluated and no policy rule refused it; "
+    + "the task terminated WITHOUT recording a failureReason, so there is no original failure to replay",
+    "a task with no failureReason must say so outright, with no dangling separator",
   );
-  assert.match(failedPrecheck.decision.reason ?? "", /^Task is FAILED; no further tool calls are accepted$/);
+  assert.match(failedPrecheck.decision.reason ?? "", /^Task is FAILED; no further tool calls are accepted;/);
 
   // Now transition to COMPLETED
   (adapter as any).task = { ...(adapter as any).task, status: "COMPLETED" };
@@ -115,9 +129,16 @@ test("a FAILED task's refusal carries its failureReason (death certificate)", as
   const precheck = await adapter.precheckToolCall("read", "read", { path: "test.txt" });
   assert.equal(precheck.decision.decision, "DENY");
   assert.equal(precheck.decision.refusal, "task_terminal", "a lifecycle refusal is never a policy violation");
+  // CHANGED BY THE ECHO MR: the certificate is now labelled as the task's
+  // ORIGINAL failure, so a reader (and an agent) cannot mistake it for a reason
+  // attributable to the call in front of them.
   assert.equal(
     precheck.decision.reason,
-    "Task is FAILED; no further tool calls are accepted; failureReason: Policy abort: workspace boundary violation",
+    "Task is FAILED; no further tool calls are accepted; "
+    + "the call that triggered this refusal is tool=read operation=read toolCallId=<none>; "
+    + "it was NOT evaluated and no policy rule refused it; "
+    + "the task's ORIGINAL failure, recorded when the task terminated and unchanged since, is: "
+    + "Policy abort: workspace boundary violation",
     "the agent must be able to read WHY the task is dead, not only that it is",
   );
 
@@ -128,7 +149,11 @@ test("a FAILED task's refusal carries its failureReason (death certificate)", as
   const denied = adapter.recentEvents(500).filter((e) => e.type === "LIFECYCLE_REFUSED").at(-1);
  assert.equal(
     (denied?.payload as Record<string, unknown> | undefined)?.reason,
-    "Task is FAILED; no further tool calls are accepted; failureReason: Policy abort: workspace boundary violation",
+    "Task is FAILED; no further tool calls are accepted; "
+    + "the call that triggered this refusal is tool=read operation=read toolCallId=<none>; "
+    + "it was NOT evaluated and no policy rule refused it; "
+    + "the task's ORIGINAL failure, recorded when the task terminated and unchanged since, is: "
+    + "Policy abort: workspace boundary violation",
   );
 });
 
@@ -147,7 +172,10 @@ test("a recovery-terminated task's refusal carries the recovery certificate", as
   assert.equal(precheck.decision.decision, "DENY");
   assert.equal(
     precheck.decision.reason,
-    `Task is FAILED; no further tool calls are accepted; failureReason: ${certificate}`,
+    `Task is FAILED; no further tool calls are accepted; `
+    + `the call that triggered this refusal is tool=edit operation=edit toolCallId=<none>; `
+    + `it was NOT evaluated and no policy rule refused it; `
+    + `the task's ORIGINAL failure, recorded when the task terminated and unchanged since, is: ${certificate}`,
     "the whole certificate, counters included, must be legible to the agent",
   );
   assert.match(precheck.decision.reason ?? "", /retryCount=0\/2/, "the unused retry budget must be visible in the refusal");
