@@ -49,12 +49,16 @@ const write = (name: string, riskLevel: ToolDescriptor["riskLevel"] = "WRITE"): 
 
 // --- 1. the interface is exactly the enforced set ---------------------------
 
-test("D009.1 CoreLimits declares exactly the five enforced limits", () => {
+test("D009.1 CoreLimits declares exactly the six enforced limits", () => {
+  // `maxStrategyChanges` joins the set with the C1 strategy fund. The assertion
+  // is still exact equality, so a limit declared without being enforced — the
+  // defect D-009 exists to prevent — still trips this pin.
   assert.deepEqual(Object.keys(DEFAULT_LIMITS).sort(), [
     "maxArtifactBytes",
     "maxExecutionTimeMs",
     "maxRecoveryDepth",
     "maxReplans",
+    "maxStrategyChanges",
     "maxToolRetries",
   ]);
 });
