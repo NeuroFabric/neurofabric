@@ -149,6 +149,14 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     if (!kernel.currentTask) return;
     // Pi owns the actual result shape; the kernel normalizes it against the
     // bound execution identity so task/step correlation cannot drift.
+    //
+    // F-006 Phase 2a: `recordToolResult` takes a fifth `errorRetryable`
+    // argument and defaults it to false. It is NOT passed here because Pi's
+    // `tool_execution_end` event carries a boolean `isError` and nothing that
+    // says whether a repeat could succeed — so there is no real value to
+    // forward yet, and inventing one would be guessing at an external
+    // contract. When Pi (or a tool) surfaces that, this is the one line that
+    // has to change, and the flag is already honoured end to end.
     await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError);
     record("tool_execution_end", { toolCallId: event.toolCallId, tool: event.toolName, isError: event.isError, artifacts: kernel.artifacts.length, taskStatus: kernel.currentTask.status });
   });
