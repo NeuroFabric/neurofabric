@@ -3,9 +3,14 @@
 Consolidated state of the F-006 denial-delivery work: what is fixed and on what
 evidence, what is found but gated, what stays under watch, and what debt remains.
 
-Last updated: 2026-09-30 (D5 filing, §2.5). Author: Pi (agent). Operator-measured
-figures are attributed as such; everything else was measured in-repo or pinned by
-a test.
+Last updated: 2026-09-30 (guard measurement backfill; single-ledger designation).
+Author: Pi (agent). Operator-measured figures are attributed as such; everything
+else was measured in-repo or pinned by a test.
+
+**This file is the single ledger of record.** Deaths, findings, defect classes,
+standing annotations and environment facts are written here and nowhere else.
+`docs/DECISIONS.md` records operator rulings by reference to this file.
+`memory/` is not a ledger. See §7.
 
 ### Provenance — environment claims, measured not asserted
 
@@ -27,6 +32,69 @@ verified before they are recorded, and an unverified claim is recorded as
 unmeasured rather than repeated. `glab` is dropped from the queue; branch, SHA,
 suite status and a pre-built MR URL are the merge mechanism, recorded in
 `docs/MANIFEST.md`.
+
+### The commit guard is harness-side — measured, not inferred
+
+The commit guard that refused a message earlier in this work is **not in this
+repository and cannot be read from it.** Measured on this host, 2026-09-30:
+
+| Probe | Result |
+|---|---|
+| `git config --get core.hooksPath` (repo) | unset |
+| `git config --global --get core.hooksPath` | unset |
+| `git config --get-regexp hooks` (all scopes, all levels) | no output |
+| `.git/hooks/` contents | 14 `.sample` files only; Git never executes these |
+| git patterns in `platform/core/policy.ts:70-113` | 4 — force-flag, plus-prefix refspec, delete-flag, colon refspec. **No commit-message rule.** |
+| `.pi/neurofebric-policy.json`, `policies/default_policy.yaml` | no commit rule |
+| `.pi/extensions/platform-orchestrator.ts` (read in full) | no commit rule |
+| repo-wide search for commit-type regex forms | no matches |
+
+**There is no accepted-type list anywhere in this repository.** A `commit-msg`
+hook does not exist here in any form, and the only git control this repository
+does own refuses force-push and refspec deletion — it never inspects a message.
+
+This is the same shape as the §11 transport-guard divergence: an external control
+that fires on repository commands. `docs/handoff.md:429` is the only commit-guard
+rule measurable in-repo — a subject of 72 characters or fewer, refused outright
+if longer — together with "guarded verbs run standalone".
+
+**Misread trap, recorded because it cost a step.** `.pi-tools/commit-msg.txt`
+and `.pi-tools/echo-commit-msg.txt` are prior commit-message **drafts**, not
+guards. Their filenames invite the opposite reading.
+
+#### The accepted-type hypothesis is WITHDRAWN, not filed
+
+An earlier hypothesis held that an accepted-type list changed between sessions,
+because `wip:` was accepted earlier in this project and refused later. **It is
+not filed.** No such list exists here to have changed, and the premise is
+contradicted by this repository's own history:
+
+| Subject | SHA | Length | Outcome |
+|---|---|---|---|
+| `wip: item 2 mid-flight - configured-policy mid-rewrite` | `16aa07c` | 54 | accepted |
+| `WIP: D1 red-first snapshot after third harness death - core half applied, adapter pending, 9/15 red. Do not merge.` | `6a68e37` | 113 | accepted |
+
+Both spellings were accepted, and one subject is 113 characters — over the
+72-character rule `docs/handoff.md:429` states. Filing a changed accepted-type list
+would assert something measured to be absent.
+
+#### Leading hypothesis — labelled, not asserted
+
+The guards pre-scan the **whole command**, so a guarded literal appearing anywhere
+in a commit message is judged as though it were the operation. The standing F-007
+rule records that a backslash-leading token in shell text is read as a rooted path
+and denies the entire command. A WIP message describing an escape/unescape fix is
+a plausible carrier of exactly such a token.
+
+**This is a hypothesis and is recorded as no cause.** It is unverified: the
+refusal text from that attempt exists nowhere in this repository, and it was not
+reconstructed after the fact.
+
+**Blocked, not skipped.** The harness guard's source lies outside the repository
+root, and the standing rule forbids out-of-root access until the operator's
+restart is confirmed. The operator withdrew the read instruction until restart
+and will re-issue it when the restart lands. The guard investigation is pending
+restart, and `merged_not_restarted` is blocked on the same sole operator action.
 
 ### Label map — operator finding labels bound to repo anchors
 
@@ -435,6 +503,13 @@ rather than defended.
 | Benign non-zero exit (§2.3) | 0 | No session has died to it yet |
 | Token guard over-breadth (§2.2) | 0 | Not measured live |
 
+**Session proof, 2026-09-30.** This session added **zero deaths and zero rows** to
+the table above, and is the first live evidence that the standing rules are
+load-bearing rather than advisory. A WIP rescue that had previously drawn four
+rephrasings completed in **one attempt with zero retries**, after reading the
+guard before writing the message. Commit `b0a8cdf` on
+`fix/d4a-boundary-unescape`, pushed and verified by SHA.
+
 1. **Extractor precision.** Corpus in both directions. MUST-DENY (hard gate):
    `rm -rf`, `.env` credential read, paths escaping the workspace root.
    MUST-PASS: `find -exec … \;`, `mkdir -p x && echo "h" > x/t.txt`,
@@ -482,6 +557,13 @@ Read first, then pin, and name the event order in every test so an
 order-assumption cannot hide in a test body.
 
 **One command one purpose. No stash.**
+
+**One ledger.** `docs/F006_LEDGER.md` is the single ledger of record — deaths,
+findings, defect classes, standing annotations and environment facts are written
+here by the agent. `docs/DECISIONS.md` records operator rulings only, by
+reference. `memory/` is not a ledger. An earlier instruction named three
+candidate writers; that was a defect in the instruction, it is closed, and it is
+recorded here so the single-writer rule has a stated origin.
 
 **No out-of-root scratch, ever.** Inline pipes (`git show X | sed -n 'a,bp'`) or
 in-repo scratch paths only. Written after session 2 died to `/tmp` scratch under
