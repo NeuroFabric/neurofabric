@@ -14,18 +14,23 @@ type TraceEntry = {
   details?: Record<string, unknown>;
 };
 
-const trace: TraceEntry[] = [];
 let persistTrace: ((entry: TraceEntry) => void) | undefined;
 
 /**
- * Redact on the way IN, before the entry is buffered, and again on the way OUT
- * through the persistence sink. The sink is wrapped once here so that no caller
- * — including a future one — can write an unredacted entry to session history.
+ * Record a trace entry.
+ *
+ * Redaction happens on the way OUT, at the persistence sink installed below,
+ * which is wrapped once so that no caller — including a future one — can write
+ * an unredacted entry to session history.
+ *
+ * There is deliberately no in-memory buffer here. An earlier version kept a
+ * 100-entry ring of raw, unredacted details that nothing ever read, so it was
+ * unredacted state retained with no consumer, and one line wiring it into the
+ * `platform` command would have surfaced whatever the entry carried. Its
+ * comment also claimed redaction on the way in, which this function never did.
  */
 function record(type: string, details?: Record<string, unknown>): void {
   const entry: TraceEntry = { type, timestamp: new Date().toISOString(), details };
-  trace.push(entry);
-  if (trace.length > 100) trace.shift();
   persistTrace?.(entry);
 }
 
