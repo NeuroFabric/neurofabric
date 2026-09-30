@@ -693,9 +693,14 @@ export class KernelAdapter {
       // state that admits no execution. This is a lifecycle refusal, recorded as
       // `refusal`, never as a policy `violation`.
       this.terminalRefusalCount += 1;
+      // The agent reads this string, and nothing else. Without the reason it
+      // was told only THAT the task is dead, never WHY, so a task terminated
+      // by an exhausted recovery budget looked identical to one aborted by
+      // policy. The reason is appended only when the task actually carries one.
       const decision: PolicyDecision = {
         decision: "DENY",
-        reason: `Task is ${this.task.status}; no further tool calls are accepted`,
+        reason: `Task is ${this.task.status}; no further tool calls are accepted`
+          + (this.task.failureReason ? `; failureReason: ${this.task.failureReason}` : ""),
         refusal: "task_terminal",
       };
       if (toolCallId) {
@@ -1207,7 +1212,26 @@ export class KernelAdapter {
    * accepted. A tool that reports success without actually producing its
    * declared artifact is INVALID, not VALID.
    */
-  async recordToolResult(toolCallId: string, toolName: string, payload: unknown, isError: boolean): Promise<ValidationResult> {
+  /**
+   * `errorRetryable` is the caller's real answer to "would running this same
+   * call again plausibly succeed?". It is OPTIONAL and defaults to false, so
+   * every existing caller keeps byte-identical behaviour.
+   *
+   * F-006 Phase 2a: the flag used to be the literal `false`, which made
+   * `classifyFailure` return TOOL_FAILURE for every tool error and left the
+   * TRANSIENT retry path unreachable from a real error. The kernel now
+   * propagates the value it is given instead of asserting one. See
+   * `.pi/extensions/platform-orchestrator.ts` for why the bridge does not yet
+   * supply it: Pi's `tool_execution_end` carries a boolean `isError` and
+   * nothing else, and inventing a contract for it is not this layer's call.
+   */
+  async recordToolResult(
+    toolCallId: string,
+    toolName: string,
+    payload: unknown,
+    isError: boolean,
+    errorRetryable?: boolean,
+  ): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active task");
     const bound = this.activeExecutions.get(toolCallId);
     const now = new Date().toISOString();
@@ -1215,6 +1239,9 @@ export class KernelAdapter {
     const stepId = bound?.stepId ?? this.task.currentStep ?? "unknown";
     const tool = this.tools.get(toolName);
 
+    // `=== true`, never truthiness: an absent, undefined or non-boolean value
+    // must produce the same classification the hard-coded false always did.
+    const retryable = isError && errorRetryable === true;
     const declared = this.declaredOutputs.get(toolCallId) ?? [];
     const candidates: Artifact[] = declared.map((reference) =>
       createArtifact({
@@ -1264,7 +1291,7 @@ export class KernelAdapter {
       metadata: { toolCallId },
       artifacts: report.artifacts,
       warnings: report.unverified.map((artifact) => `Artifact could not be verified: ${artifact.reference} (${artifact.verification?.reason})`),
-      error: isError ? { category: "TOOL_ERROR", message: "Pi reported a tool error", retryable: false } : undefined,
+      error: isError ? { category: "TOOL_ERROR", message: "Pi reported a tool error", retryable } : undefined,
       provenance: this.provenanceFor(toolName, toolCallId, stepId, declared),
       execution: {
         executionId: toolCallId,
@@ -1281,10 +1308,11 @@ export class KernelAdapter {
     this.task = { ...this.task, artifacts: [...this.task.artifacts, ...report.artifacts] };
     // F-006: pass the real CoreError so recovery sees the tool error's category
     // and retryable flag. A plain Error collapsed to UNKNOWN and discarded both.
+    // F-006 Phase 2a: the flag is the caller's, not a hard-coded `false`.
     return this.observeToolResult(
       result,
       isError
-        ? new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable: false, taskId, stepId, executionId: toolCallId })
+        ? new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
         : undefined,
     );
   }
