@@ -22,6 +22,7 @@ import {
   type Plan,
   type PlanStep,
   type PolicyDecision,
+  type DenialRefusal,
   type PolicyEngine,
   type SkillDescriptor,
   type Task,
@@ -319,6 +320,19 @@ export class KernelAdapter {
   private readonly knownToolCallIds = new Set<string>();
   /** Preflight-denied toolCallIds; Pi may still emit an execution_start for them. */
   private readonly deniedToolCallIds = new Set<string>();
+  /**
+   * D5 / §2.4(b): the second pending map, keyed the same way as the set above.
+   *
+   * `deniedToolCallIds` records THAT a call was refused. This one records WHY,
+   * for the refusal classes that are not violations: an out-of-root discovery
+   * span is a refusal of scope, not a rule breach, and the distinction has to
+   * survive from the decision to the result, because by the time the result
+   * arrives the decision object is gone.
+   *
+   * Held per toolCallId and cleared with the set above, so it cannot outlive the
+   * call it describes.
+   */
+  private readonly pendingRefusals = new Map<string, DenialRefusal>();
   /** Execution ids whose result has already been observed. */
   private readonly observedExecutionIds = new Set<string>();
   /** Output references declared at preflight, keyed by Pi toolCallId. */
@@ -903,11 +917,18 @@ export class KernelAdapter {
       // A real policy denial. Counted separately from terminal refusals, which
       // never reach this branch because no policy is evaluated for them.
       this.denialCount += 1;
+      // D5 / §2.4(b): a refusal that is not a violation is recorded per call so
+      // the distinction survives to the result, where the decision object no
+      // longer exists. Cleared with `deniedToolCallIds`.
+      if (decision.refusal !== undefined) this.pendingRefusals.set(toolCallId, decision.refusal);
       await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, {
         tool: toolName,
         toolCallId,
         reason: decision.reason,
         violation: decision.violation,
+        // Carried explicitly: a scope refusal is auditable as itself rather
+        // than only as a string that happens to contain the word "refused".
+        refusal: decision.refusal,
       }));
       if (decision.violation === "abort") await this.abortTask(decision.reason, toolName, toolCallId);
     }
@@ -1147,7 +1168,7 @@ export class KernelAdapter {
   // EXECUTION END  (Pi `tool_execution_end` — observation and validation)
   // ---------------------------------------------------------------------------
 
-  async observeToolResult(result: ToolResult, error?: unknown): Promise<ValidationResult> {
+  async observeToolResult(result: ToolResult, error?: unknown, options?: { violation?: "block" | "abort" }): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active tool step");
     const taskId = this.task.taskId;
     const executionId = result.execution.executionId;
@@ -1303,6 +1324,10 @@ export class KernelAdapter {
         attemptMatchesLastFailure,
         elapsedMs: this.elapsedMs(),
         denialReason,
+        // D5: the violation the policy put on the decision that produced this
+        // result. Without it recovery cannot tell a survivable refusal from a
+        // terminating one and terminates on both.
+        violation: options.violation,
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
@@ -1341,6 +1366,25 @@ export class KernelAdapter {
           break;
         case "ESCALATE":
           this.advance("ESCALATED", "Recovery strategy ESCALATE", { expectTaskId: taskId });
+          break;
+        case "CONTINUE":
+          // D5: a refusal the operator configured as survivable. The task is
+          // still alive and still able to act, which is the whole point of
+          // `onViolation: block` -- the call was refused, and the agent gets to
+          // try something else instead of the run ending.
+          //
+          // It books NO budget. A refused call that charged retry or replan
+          // could exhaust the budget purely by being refused, which is the
+          // benign-exit failure in ledger §2.3 wearing a different hat. The
+          // recovery depth still resets below, because the task did make
+          // progress: it learned the answer.
+          this.advance("PLANNING", `Recovery strategy CONTINUE (${decision.reason})`, { expectTaskId: taskId });
+          await this.events.emit(event("SOFT_REFUSAL_CONTINUED", this.task.taskId, {
+            strategy,
+            reason: decision.reason,
+            failure,
+            recoveryDepth: this.recoveryDepth,
+          }));
           break;
         case "TERMINATE":
         default: {
@@ -1425,6 +1469,16 @@ export class KernelAdapter {
     isError: boolean,
     errorRetryable?: boolean,
     denialReason?: string,
+    /**
+     * D5, seventh parameter: the `onViolation` the policy carried on the
+     * decision that refused this call. It is threaded to recovery so a refusal
+     * configured as survivable is not turned into a dead task.
+     *
+     * Optional and fail-closed: absent means recovery terminates exactly as it
+     * did before the threading, so every existing call site keeps its current
+     * behaviour until it supplies the field deliberately.
+     */
+    violation?: "block" | "abort",
   ): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active task");
     const bound = this.activeExecutions.get(toolCallId);
@@ -1524,6 +1578,7 @@ export class KernelAdapter {
           ? new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })
           : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
         : undefined,
+      violation,
     );
   }
 

@@ -2,7 +2,7 @@ import { CoreError } from "./errors.ts";
 import type { ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./types.ts";
 
 export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "POLICY_DENIED" | "UNKNOWN";
-export type RecoveryStrategy = "RETRY" | "MODIFY_INPUT" | "ALTERNATE_TOOL" | "ALTERNATE_SKILL" | "REPLAN" | "ESCALATE" | "TERMINATE";
+export type RecoveryStrategy = "RETRY" | "MODIFY_INPUT" | "ALTERNATE_TOOL" | "ALTERNATE_SKILL" | "REPLAN" | "ESCALATE" | "CONTINUE" | "TERMINATE";
 
 /**
  * The failure classes F006.5 treats as transient, and therefore the only ones
@@ -59,7 +59,8 @@ export type RecoveryReason =
   | "REPLAN_BUDGET_EXHAUSTED"
   | "STRATEGY_CHANGE_REPLAN"
   | "STRATEGY_BUDGET_EXHAUSTED"
-  | "POLICY_DENIED_TERMINATED";
+  | "POLICY_DENIED_TERMINATED"
+  | "POLICY_SOFT_REFUSED";
 
 export interface RecoveryDecision {
   strategy: RecoveryStrategy;
@@ -114,6 +115,19 @@ export function chooseRecoveryDetailed(options: {
    * regardless of failure category, because no strategy can buy more time.
    */
   elapsedMs?: number;
+  /**
+   * D5: the `onViolation` the policy carried on the decision that produced this
+   * failure. Threaded from `recordToolResult` so a refusal the operator
+   * configured as survivable is not turned into a dead task one layer before
+   * recovery could know about it.
+   *
+   * FAIL-CLOSED BY CONSTRUCTION: the parameter is optional and `"abort"` is the
+   * only value that changes today's behaviour. An absent field means TERMINATE,
+   * never silently survive. Every existing call site keeps its current
+   * decisions bit for bit, which is what makes the threading safe to land
+   * before the call sites are updated.
+   */
+  violation?: "block" | "abort";
 }): RecoveryDecision {
   const { limits, failure, depth, idempotency } = options;
   const strategyCount = options.strategyCount ?? 0;
@@ -127,7 +141,16 @@ export function chooseRecoveryDetailed(options: {
   // a certificate blaming a budget would send an investigator after the wrong
   // thing. Refusing to retry or replan is also what stops an identically
   // re-proposed block from burning replan budget.
-  if (failure === "POLICY_DENIED") return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
+  //
+  // D5: "final" is a property of the VIOLATION, not of the word denial. The
+  // committed policy sets `onViolation: block`, which means the refusal is
+  // survivable and the task lives; terminating there made live behaviour
+  // contradict the committed file. `abort` and an ABSENT violation both
+  // terminate -- absence fails closed, and is the pre-threading behaviour.
+  if (failure === "POLICY_DENIED") {
+    if (options.violation === "block") return { strategy: "CONTINUE", reason: "POLICY_SOFT_REFUSED" };
+    return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
+  }
   if (depth >= limits.maxRecoveryDepth) return { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" };
   if (failure === "PERMISSION") return { strategy: "ESCALATE", reason: "PERMISSION_FAILURE_ESCALATED" };
   if (failure === "INVALID_INPUT") return { strategy: "ESCALATE", reason: "INVALID_INPUT_ESCALATED" };

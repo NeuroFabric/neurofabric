@@ -6,6 +6,7 @@ import { WorkspaceBoundary } from "./workspace.ts";
 import { callSignature } from "./call-signature.ts";
 import type {
   BudgetLevel,
+  DenialRefusal,
   PolicyDecision,
   PolicyEngine,
   PolicyMode,
@@ -65,6 +66,34 @@ const PATH_PARAM_NAMES: ReadonlySet<string> = new Set([
  * security exemption should be a reviewed code change, not a config flip.
  */
 const SCAN_EXEMPT_TOOLS: ReadonlySet<string> = new Set(["vault_store"]);
+
+/**
+ * Commands that ENUMERATE: they list what exists, they do not read contents and
+ * they do not write.
+ *
+ * This is the only set eligible for a soft refusal (§2.4(b)). It is an
+ * explicit allowlist, never a heuristic on the path or the arguments, because a
+ * command that is merely *named* like a lister must not inherit lister
+ * semantics. Anything not listed -- every read, every write, every unknown tool
+ * -- keeps the full weight of a policy violation.
+ */
+const ENUMERATION_TOOLS: ReadonlySet<string> = new Set(["ls", "dir", "glob", "find", "fd", "tree"]);
+
+function isEnumeration(tool: ToolDescriptor): boolean {
+  return tool.riskLevel !== "WRITE" && ENUMERATION_TOOLS.has(tool.name.toLowerCase());
+}
+
+/**
+ * True when the shell would EXPAND the candidate rather than open it.
+ *
+ * A glob is a pattern, not a location: it names no file. Scoped by its literal
+ * prefix it is an ordinary in-root enumeration; unscoped, or scoped outside the
+ * roots, it is the §2.4(b) case. The three separators are all included because
+ * the shell honours all three.
+ */
+function isPattern(candidate: string): boolean {
+  return /[*?]/.test(candidate);
+}
 
 /**
  * Every string in a write payload, at any depth, except values whose key is a
@@ -249,7 +278,13 @@ export class ConfiguredPolicy implements PolicyEngine {
   evaluate(request: PolicyRequest): PolicyDecision {
     const denial = this.evaluateRules(request);
     if (denial) {
-      return { decision: "DENY", reason: denial, violation: this.config.onViolation };
+      // D5 / §2.4(b): a scope refusal is still a DENY -- nothing is read and
+      // nothing executes -- but it is marked, and the mark is what lets the
+      // adapter carry "refused, not violated" to the result instead of
+      // terminating the task on it.
+      return denial.refusal === undefined
+        ? { decision: "DENY", reason: denial.denial, violation: this.config.onViolation }
+        : { decision: "DENY", reason: denial.denial, violation: this.config.onViolation, refusal: denial.refusal };
     }
 
     const counts = this.countsFor(request.taskId);
@@ -295,7 +330,7 @@ export class ConfiguredPolicy implements PolicyEngine {
   }
 
   /** The declarative rules alone, without the tier policy underneath. */
-  private evaluateRules(request: PolicyRequest): string | undefined {
+  private evaluateRules(request: PolicyRequest): { denial: string; refusal?: DenialRefusal } | undefined {
     const { tool, input, taskId } = request;
     const where = `policy ${path.basename(this.config.source)}`;
 
@@ -397,7 +432,7 @@ export class ConfiguredPolicy implements PolicyEngine {
     return undefined;
   }
 
-  private evaluatePaths(request: PolicyRequest, where: string): string | undefined {
+  private evaluatePaths(request: PolicyRequest, where: string): { denial: string; refusal?: DenialRefusal } | undefined {
     const scan = scanToolPathCandidates(request.tool, request.input);
     // Checked before the empty-list shortcut below. "No candidates" and "the
     // walk stopped before it could find any" both present as an empty list, and
@@ -410,7 +445,22 @@ export class ConfiguredPolicy implements PolicyEngine {
     for (const candidate of candidates) {
       const verdict = this.boundary.check(candidate);
       if (!verdict.allowed) {
-        return `${where}: path boundary violation: ${candidate}: ${verdict.reason}`;
+        const denial = `${where}: path boundary violation: ${candidate}: ${verdict.reason}`;
+        // §2.4(b): a refusal of SCOPE rather than a violation. A glob is not a
+        // location -- it names no file, it asks the shell to enumerate a span --
+        // so an out-of-root one is a refusal of scope and nothing more.
+        //
+        // Three conditions, all required, so this can only ever narrow the
+        // class and never widen it:
+        //   1. the call is an ENUMERATION, never a read and never a write;
+        //   2. the candidate is a PATTERN, so the shell would expand it;
+        //   3. the boundary check itself is untouched -- the span really is
+        //      outside the roots, and the call is still refused.
+        // A read or a write of an out-of-root span stays a hard violation.
+        if (!writing && isEnumeration(request.tool) && isPattern(candidate)) {
+          return { denial, refusal: "out_of_scope_discovery" };
+        }
+        return { denial };
       }
 
       const resolved = verdict.resolvedPath ?? candidate;
@@ -420,10 +470,10 @@ export class ConfiguredPolicy implements PolicyEngine {
       const matched = this.matchRule(normalizeForMatch(relative), writing);
       if (matched === undefined) {
         // Default deny, exactly as the legacy engine's unmatched branch did.
-        return `${where}: no matching file rule for '${relative}' (default deny)`;
+        return { denial: `${where}: no matching file rule for '${relative}' (default deny)` };
       }
       if (matched.verdict === "deny") {
-        return `${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'`;
+        return { denial: `${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'` };
       }
     }
     return undefined;
