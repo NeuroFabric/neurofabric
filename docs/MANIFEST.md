@@ -112,15 +112,58 @@ steps are given so no judgment is required to act on them.
   under this code path. Not deleted; re-labelled in the ledger.
 - **Suite:** `npm test`, 497 tests, 495 pass, 0 fail, 2 skipped, measured.
 
+### 3. §2.4(a) boundary unescape — **DONE**, pushed
+
+- Branch `fix/d4a-boundary-unescape`, based on `main` @ `bfc22e8`. Commits, in
+  order:
+  - `86d948c` red-first section N gates (inherited; was local-only)
+  - `b0a8cdf` WIP rescue — additive unescape, **N1 measured red**
+  - `0e4b6e2` F006 backfill — guard measurement, withdrawn type hypothesis,
+    single-ledger designation
+  - `b0ba4aa` **the fix** — both backslash readings
+- **Red-first, and the red was real.** Before the fix: 25 cases, 24 pass, 1
+  fail, failing by name with `unescaped spelling absent`. After: 25 pass, 0
+  fail. The 25/24/1 figure matches the baseline recorded in `86d948c`, so the
+  WIP was measured-neutral and was never a fix.
+- **The cause was a wrong transformation, not a missing one.** The WIP consumed
+  the backslash as a shell escape, so a dotdot-backslash operand resolved to a
+  bare filename with no separator at all — not path-shaped, so it was dropped
+  before the boundary ever saw it, and the traversal stayed invisible. Reading
+  the same character as a separator is what turns it back into a traversal.
+- **Both readings are added, neither is chosen.** A backslash in a shell operand
+  is ambiguous and the caller is absent to disambiguate it, so escape semantics
+  and separator semantics are both produced.
+- **Additive.** The raw spelling is still in the set and still checked, so
+  containment is evaluated on all three forms. A reading that turns out wrong
+  costs a redundant check, never a denial.
+- **Scope held exactly as ruled.** One function, `addUnescapedSpelling`. Only the
+  shell command path calls it, so a structured field never gains a spelling.
+  Drive-letter and UNC prefixes still return early. `looksLikePath` is **not
+  modified**. `N2`/`N3`/`N4` (exclusions) and `N5` (no new false deny) all
+  still pass.
+- **Suite, measured on this branch:** typecheck exit 0; corpus 25 pass / 0 fail;
+  core and pi TypeScript 505 total, 503 pass, 0 fail, 2 skipped; platform mjs
+  22 pass / 0 fail. The two skips are the pre-existing Windows-only vault
+  permission-bit cases. The +8 over the 497/495/0/2 base is exactly the eight
+  section N cases.
+- **F006 ledger is the single ledger of record.** `DECISIONS.md` holds operator
+  rulings by reference; `memory/` is not a ledger.
+- **MR** (glab NOT installed, so a pre-built URL):
+  <https://gitlab.com/neurofebric-group/neurofebric/-/merge_requests/new?merge_request%5Bsource_branch%5D=fix%2Fd4a-boundary-unescape>
+- **Restart is still pending.** It blocks the merge, the harness commit-guard
+  investigation, and `merged_not_restarted` alike.
+
 ### NOT DONE — carried forward honestly
 
-- **§2.4(a) boundary unescape is NOT built.** §2.4(a) was re-filed this pass
-  (see above) and the design was amended to drop the file-rule change, but the
-  surviving boundary-side unescape is **authorised and not yet implemented**.
-  Corpus gates `A1`/`A1p`/`A2` exist and are green against current behaviour;
-  `A2` is host-conditional. Do not read the green corpus as "§2.4(a) is fixed".
+- **§2.4(a) boundary unescape is DONE** — see section 3 above, commits
+  `b0a8cdf` and `b0ba4aa` on `fix/d4a-boundary-unescape`. Drafted and recorded
+  on the branch; **not merged**, and the merge waits on the operator restart.
 - **Glob prefix scope-check is NOT built.** `A3` passes today because the
   boundary denies only genuinely out-of-root candidates; the prefix scoping
   itself is not implemented.
 - Item 3 (§2.3 benign non-zero exits) has a live witness and stays queued.
+  **Counter discrepancy, unresolved:** the manifest records a live witness and
+  the operator count is 1, but the F006 §5 death-counter table still reads 0
+  for §2.3. Not reconciled here — the table is corrected only when the witness
+  is exhibited, not on the strength of a count.
 - Items 4–7 untouched.
