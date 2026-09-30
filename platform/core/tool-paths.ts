@@ -319,6 +319,39 @@ function decodeOnce(value: string): string {
   }
 }
 
+/**
+ * A token made only of shell meaning can never be a location.
+ *
+ * Two shapes reach here and neither is a path:
+ *
+ *   `\;`  The tokenizer's backslash branch (below) consumes the escape and the
+ *         character after it as ONE token, so an escaped terminator arrives as
+ *         the two characters `\;` and never meets `isOperatorChar`, which is
+ *         what classifies a bare `;`. It then reaches `looksLikePath` and is
+ *         judged as a location.
+ *
+ *   a quoted multi-line blob. Inside quotes the tokenizer accumulates
+ *         everything, newlines included, so an inline script becomes a single
+ *         token — and a single token containing several lines of code is not a
+ *         filesystem path on any platform.
+ *
+ * This rule only ever REMOVES candidates, so it cannot introduce a new
+ * permission; it can only stop denying commands that never named a location.
+ * The MUST-DENY corpus in `platform/pi/path-extraction-corpus.test.ts` is the
+ * net: a token that genuinely escapes the root does not match either pattern,
+ * because a real path contains ordinary path characters.
+ *
+ * A redirection target is not exempted here and does not need to be: `out.txt`
+ * is not made of syntax characters, so it never matches. Only tokens that are
+ * ENTIRELY syntax — `\;`, `&&`, `{}`, `|` — are dropped.
+ */
+const SHELL_SYNTAX_TOKEN = /^[\s\\;|&\/<>(){}[\]]+$/;
+const CONTAINS_LINE_BREAK = /[\n\r]/;
+
+function isShellSyntaxToken(text: string): boolean {
+  return SHELL_SYNTAX_TOKEN.test(text) || CONTAINS_LINE_BREAK.test(text);
+}
+
 function extractFromCommand(command: string, origin: string, into: Map<string, PathOperand>): void {
   /** How the command segment being read is classified. */
   let segment = newSegment();
@@ -328,6 +361,7 @@ function extractFromCommand(command: string, origin: string, into: Map<string, P
     if (text === "") continue;
     if (VARIABLE_ASSIGNMENT.test(text)) continue;
     if (text.includes("://")) continue;
+    if (isShellSyntaxToken(text)) continue;
     if (token.redirectTarget && isDevicePath(text)) continue;
 
     /** The value of `-e`/`--regexp` is a pattern, never a location. */
