@@ -16,6 +16,7 @@ type TraceEntry = {
 
 let persistTrace: ((entry: TraceEntry) => void) | undefined;
 
+
 /**
  * Record a trace entry.
  *
@@ -33,6 +34,16 @@ function record(type: string, details?: Record<string, unknown>): void {
   const entry: TraceEntry = { type, timestamp: new Date().toISOString(), details };
   persistTrace?.(entry);
 }
+
+// F-006 bridge: Pi's `tool_call` preflight is the only place a denial reason
+// exists; Pi's `tool_execution_end` carries only a boolean `isError`. A blocked
+// call still emits tool_execution_end with isError=true, so without this map
+// recordToolResult sees a generic tool failure and the recovery budget burns
+// on a policy denial (the death shape). Written at the deny site, read and
+// deleted at the record site, cleared per task in before_agent_start. Closes
+// the EXTERNAL-WIRING LIMITATION documented at kernel-adapter.ts:1348.
+const pendingDenialReasons = new Map<string, string>();
+
 
 export default function platformOrchestrator(pi: ExtensionAPI): void {
   // The ONLY write path into Pi session history. It is wrapped in the shared
@@ -82,7 +93,10 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     });
   });
 
+
+
   pi.on("before_agent_start", async (event, ctx) => {
+    pendingDenialReasons.clear(); // per-task bound: a leak can span one turn at most
     // A task is created per user turn. Pi still owns the conversation and model call.
     const task = await kernel.beginTask(event.prompt, event.prompt, { cwd: ctx.cwd });
     record("task_received", { taskId: task.taskId, promptPreview: redactPreview(event.prompt) });
@@ -130,6 +144,7 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     });
     if (decision.decision.decision !== "ALLOW") {
       // `decision.reason` is present on both DENY and REQUIRE_APPROVAL.
+       pendingDenialReasons.set(event.toolCallId, decision.decision.reason);
       return { block: true, reason: decision.decision.reason };
     }
     return undefined;
@@ -151,6 +166,8 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
 
   // `tool_execution_end` is observation and validation of a real bound execution.
   pi.on("tool_execution_end", async (event) => {
+    const denialReason = pendingDenialReasons.get(event.toolCallId);
+    pendingDenialReasons.delete(event.toolCallId);
     if (!kernel.currentTask) return;
     // Pi owns the actual result shape; the kernel normalizes it against the
     // bound execution identity so task/step correlation cannot drift.
@@ -162,7 +179,9 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     // forward yet, and inventing one would be guessing at an external
     // contract. When Pi (or a tool) surfaces that, this is the one line that
     // has to change, and the flag is already honoured end to end.
-    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError);
+    // `denialReason` was read and deleted ABOVE the `currentTask` guard, so
+    // delete-on-read is unconditional and no refusal reason can leak a turn.
+    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denialReason);
     record("tool_execution_end", { toolCallId: event.toolCallId, tool: event.toolName, isError: event.isError, artifacts: kernel.artifacts.length, taskStatus: kernel.currentTask.status });
   });
 

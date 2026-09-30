@@ -961,8 +961,17 @@ export class KernelAdapter {
     const taskId = this.task.taskId;
 
     if (this.deniedToolCallIds.has(toolCallId)) {
-      // Pi emits execution_start around a blocked preflight. Never fabricate
-      // an execution plan for a call policy refused.
+      // Tripwire, not a live gate. Pi emits tool_execution_start BEFORE the
+      // tool_call preflight, so at bind time the id is not yet recorded as
+      // denied and this guard stays SILENT on the production path — which is
+      // what lets a policy denial still deliver its reason to recovery and
+      // terminate instead of being replanned to death.
+      //
+      // It fires only when a caller prechecks first (see BRIDGE.B in
+      // f006-denial-certificate-shape.test.ts, the order Pi does not emit). If
+      // Pi's emission order ever changes to preflight-before-start, this fires,
+      // binding stops, and every policy denial silently reverts to a generic
+      // tool error. BRIDGE.C pins that the guard is currently dormant.
       await this.events.emit(event("TOOL_EXECUTION_IGNORED", taskId, { toolCallId, tool: toolName, reason: "policy_denied" }));
       return undefined;
     }
@@ -1345,12 +1354,19 @@ export class KernelAdapter {
    * never read. The refusal that matters reaches this method on a call whose
    * execution Pi had already begun, and the reason has to arrive with it.
    *
-   * EXTERNAL-WIRING LIMITATION, stated rather than papered over: no caller of
-   * `recordToolResult` exists in this repository outside the kernel and its
-   * tests, so which layer supplies `denialReason` cannot be proven here. Pi's
-   * `tool_execution_end` carries only a boolean `isError`; the bridge that
-   * reports a policy denial to this method must forward the reason for the
-   * fix to take effect on that path.
+   * EXTERNAL-WIRING, closed 2026-09-30 by measurement. A caller now exists:
+   * `.pi/extensions/platform-orchestrator.ts` forwards `reason` as this
+   * method's sixth positional argument, read back out of a per-taskId map at
+   * `tool_execution_end`. The delivery works: Pi emits tool_execution_start
+   * before the preflight, so the refused id has already bound by the time the
+   * result is reported, and a policy denial terminates on the denial rather
+   * than being replanned until the budget dies.
+   *
+   * `denialReason` reaches this method only when a binding exists, the task is
+   * EXECUTING, and the settling execution is the last one (`observeToolResult`
+   * returns early at :1192 while a sibling is in flight). Pinned, with the
+   * emission order each precondition needs, in
+   * `platform/pi/f006-denial-certificate-shape.test.ts`.
    */
   async recordToolResult(
     toolCallId: string,
@@ -1371,11 +1387,13 @@ export class KernelAdapter {
     // must produce the same classification the hard-coded false always did.
     const retryable = isError && errorRetryable === true;
     // D1: a policy refusal arrives with the reason the policy actually gave.
-    // No marker is consulted, because none is reachable: a preflight denial
-    // binds no execution, and `observeToolResult` discards any result whose
-    // execution is unbound, so a locally-denied call never reaches recovery at
-    // all. The reason therefore has to travel with the result, from whichever
-    // layer observed the refusal.
+    // No marker is consulted, because none is reachable: the reason is only
+    // meaningful on the result, and `observeToolResult` discards any result
+    // whose execution is unbound. Which results those are depends on Pi's
+    // emission order — start-before-preflight binds first, so a refusal that
+    // arrives afterwards DOES bind and does reach recovery. The reason has to
+    // travel with the result, from whichever layer observed the refusal.
+    // See f006-denial-certificate-shape.test.ts for the measured order.
     const denied = isError && denialReason !== undefined;
     const actualDenialReason = denialReason;
     const declared = this.declaredOutputs.get(toolCallId) ?? [];
