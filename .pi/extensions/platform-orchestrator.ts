@@ -166,6 +166,8 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
 
   // `tool_execution_end` is observation and validation of a real bound execution.
   pi.on("tool_execution_end", async (event) => {
+    const denialReason = pendingDenialReasons.get(event.toolCallId);
+    pendingDenialReasons.delete(event.toolCallId);
     if (!kernel.currentTask) return;
     // Pi owns the actual result shape; the kernel normalizes it against the
     // bound execution identity so task/step correlation cannot drift.
