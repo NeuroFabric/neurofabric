@@ -136,6 +136,65 @@ export function resolveWithinRoot(root: string, candidate: unknown): PathVerdict
 }
 
 /**
+ * The common safety bound for every bounded security scanner in the platform.
+ *
+ * A depth bound is a SAFETY limit, not an allow condition. When a scan stops
+ * early because a payload is deeper than this, the operation has not been shown
+ * to be safe -- it has been left uninspected. Truncation is therefore reported
+ * explicitly and propagated to the policy decision, which fails closed. It is
+ * never inferred from an empty candidate list.
+ *
+ * 12 is the bound D-027 already fixed for the write deny-scan (MAX_DEPTH in
+ * redaction.ts, MAX_WRITE_PAYLOAD_DEPTH in configured-policy.ts), so reads,
+ * writes, and pattern scanning share one threshold instead of the three
+ * unrelated literals (4, 6, 12) that had drifted apart.
+ *
+ * Defined HERE, once, because this is the lowest module both scanners depend
+ * on; the alternative -- a second literal in tool-paths.ts -- is how the
+ * literals drifted apart in the first place.
+ *
+ * Recursion is safe at this depth: the walkers recurse once per payload level,
+ * so frame count is capped at 13 regardless of input size. The RangeError that
+ * motivated D-027 appeared around 2000-3000 levels. Breadth is unaffected --
+ * the walk was already linear in the payload, as any traversal of one must be.
+ */
+export const MAX_SECURITY_SCAN_DEPTH = 12;
+
+/**
+ * Mutable truncation flag threaded through a bounded walk. Never a global, and
+ * never inferred from the emptiness of a result.
+ */
+export interface ScanState {
+  truncated: boolean;
+}
+
+/**
+ * The one typed contract every bounded security scan returns.
+ *
+ * `candidates: []` with `truncated: false` means "scanned, nothing found".
+ * `candidates: []` with `truncated: true` means "not fully inspected". Only
+ * the first is evidence of safety, and a policy decision must be able to tell
+ * them apart.
+ */
+export interface CandidateScan {
+  candidates: string[];
+  truncated: boolean;
+}
+
+/**
+ * The one typed contract every bounded string scan returns: what was seen, and
+ * whether the walk was able to finish.
+ */
+export interface StringScan {
+  strings: string[];
+  truncated: boolean;
+}
+
+export function newScanState(): ScanState {
+  return { truncated: false };
+}
+
+/**
  * Collect path-like candidates out of a tool input without assuming a schema.
  *
  * A fixed set of well-known argument names is inspected first. Command strings
@@ -143,13 +202,21 @@ export function resolveWithinRoot(root: string, candidate: unknown): PathVerdict
  * detector*, not a shell parser: it is meant to catch escapes, not to model
  * what a shell would do.
  */
-export function extractPathCandidates(input: unknown): string[] {
+export function scanPathCandidates(input: unknown): CandidateScan {
   const candidates = new Set<string>();
   const seeds: string[] = [];
+  let truncated = false;
   const KEY_NAMES = ["path", "filePath", "file_path", "filename", "fileName", "dir", "directory", "cwd", "output", "outputPath", "target"];
 
   const visit = (value: unknown, depth: number): void => {
-    if (depth > 6 || value === null || value === undefined) return;
+    if (depth > MAX_SECURITY_SCAN_DEPTH) {
+      // Recorded, never swallowed. The previous bare `return` here meant a deep
+      // payload yielded an empty list that read as "no paths", so the boundary
+      // was never consulted for whatever the payload actually contained.
+      truncated = true;
+      return;
+    }
+    if (value === null || value === undefined) return;
     if (typeof value === "string") {
       seeds.push(value);
       return;
@@ -185,7 +252,18 @@ export function extractPathCandidates(input: unknown): string[] {
     }
   }
 
-  return [...candidates];
+  return { candidates: [...candidates], truncated };
+}
+
+/**
+ * The candidates from `scanPathCandidates`, without the truncation flag.
+ *
+ * A SECURITY decision must use `scanPathCandidates`: an empty array here is
+ * ambiguous between "nothing found" and "the walk stopped early", and that
+ * ambiguity is the defect this contract exists to remove.
+ */
+export function extractPathCandidates(input: unknown): string[] {
+  return scanPathCandidates(input).candidates;
 }
 
 /**

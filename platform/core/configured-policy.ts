@@ -1,6 +1,6 @@
 import path from "node:path";
-import { collectStrings } from "./policy.ts";
-import { extractCommandText, extractToolPathCandidates } from "./tool-paths.ts";
+import { scanStrings, truncatedScanReason } from "./policy.ts";
+import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
 import { globToRegExp, normalizeForMatch, type PolicyConfig, type RuleVerdict } from "./policy-config.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
 import type {
@@ -344,9 +344,11 @@ export class ConfiguredPolicy implements PolicyEngine {
     //    whatever the tool's tier. Secret patterns are matched only against the
     //    content a write would persist: searching for a secret is analysis,
     //    writing one is the hazard.
+    const commandScope = scanCommandText(tool, input);
+    const commandScan = scanStrings(commandScope.text);
     const commandDenial = this.matchIn(
       this.config.destructiveCommandPatterns,
-      collectStrings(extractCommandText(tool, input)),
+      commandScan.strings,
       "destructive command pattern matched",
       where,
     );
@@ -354,7 +356,7 @@ export class ConfiguredPolicy implements PolicyEngine {
 
     const tokenDenial = this.matchCommandTokens(
       this.config.destructiveCommandTokens,
-      collectStrings(extractCommandText(tool, input)),
+      commandScan.strings,
       where,
     );
     if (tokenDenial) return tokenDenial;
@@ -378,6 +380,15 @@ export class ConfiguredPolicy implements PolicyEngine {
       if (depth > MAX_WRITE_PAYLOAD_DEPTH) {
         return `${where}: write payload nesting depth ${depth} exceeds the limit of ${MAX_WRITE_PAYLOAD_DEPTH}`;
       }
+    }
+
+    // 4c. An incomplete security scan fails closed. Placed AFTER the D-027
+    //     write-depth check above so a deep WRITE keeps D-027's own reason
+    //     rather than being relabelled by the generic scanner rule, and so this
+    //     covers the tiers D-027 deliberately never reached: reads, controlled
+    //     calls, and anything else that was previously uninspected-but-allowed.
+    if (commandScan.truncated || commandScope.truncated) {
+      return `${where}: ${truncatedScanReason(tool.name)}`;
     }
 
     if (tool.riskLevel === "WRITE" && !SCAN_EXEMPT_TOOLS.has(tool.name)) {
@@ -407,7 +418,12 @@ export class ConfiguredPolicy implements PolicyEngine {
   }
 
   private evaluatePaths(request: PolicyRequest, where: string): string | undefined {
-    const candidates = extractToolPathCandidates(request.tool, request.input);
+    const scan = scanToolPathCandidates(request.tool, request.input);
+    // Checked before the empty-list shortcut below. "No candidates" and "the
+    // walk stopped before it could find any" both present as an empty list, and
+    // only one of them means the boundary has actually cleared the payload.
+    if (scan.truncated) return `${where}: ${truncatedScanReason(request.tool.name)}`;
+    const candidates = scan.candidates;
     if (candidates.length === 0) return undefined;
 
     const writing = request.tool.riskLevel === "WRITE";

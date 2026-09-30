@@ -1,4 +1,4 @@
-import { extractPathCandidates } from "./workspace.ts";
+import { scanPathCandidates, MAX_SECURITY_SCAN_DEPTH, newScanState, type CandidateScan, type ScanState, type StringScan } from "./workspace.ts";
 import type { ToolDescriptor } from "./types.ts";
 
 /**
@@ -397,14 +397,21 @@ function extractFromCommand(command: string, origin: string, into: Map<string, P
  * under some other name contributes its objects, and leaves that are not under
  * a path-bearing name are not paths.
  */
+/** The outcome of a bounded path scan: what was found, and whether it finished. */
+export type PathScan = CandidateScan;
+
 function collectFromArray(
   items: readonly unknown[],
   key: string,
   origin: string,
   depth: number,
   into: Map<string, PathOperand>,
+  state: ScanState,
 ): void {
-  if (depth > 4) return;
+  if (depth > MAX_SECURITY_SCAN_DEPTH) {
+    state.truncated = true;
+    return;
+  }
   const direct = PATH_PARAM_NAMES.has(key);
 
   for (const item of items) {
@@ -418,16 +425,22 @@ function collectFromArray(
     if (Array.isArray(item)) {
       // A further array keeps the enclosing name, so `paths: [[x]]` still
       // yields `x` rather than dropping it.
-      collectFromArray(item, key, origin, depth + 1, into);
+      collectFromArray(item, key, origin, depth + 1, into, state);
       continue;
     }
-    collectFromObject(item, origin, depth + 1, into);
+    collectFromObject(item, origin, depth + 1, into, state);
   }
 }
 
 /** Pull path operands out of a structured payload, by argument name. */
-function collectFromObject(value: unknown, origin: string, depth: number, into: Map<string, PathOperand>): void {
-  if (depth > 4 || value === null || typeof value !== "object") return;
+function collectFromObject(value: unknown, origin: string, depth: number, into: Map<string, PathOperand>, state: ScanState): void {
+  if (depth > MAX_SECURITY_SCAN_DEPTH) {
+    // Truncation is recorded, not swallowed. A caller that ignored this flag
+    // would read the empty result as "no paths here" and allow the call.
+    state.truncated = true;
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
 
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
     if (typeof nested === "string") {
@@ -442,11 +455,11 @@ function collectFromObject(value: unknown, origin: string, depth: number, into: 
     }
 
     if (Array.isArray(nested)) {
-      collectFromArray(nested, key, origin, depth, into);
+      collectFromArray(nested, key, origin, depth, into, state);
       continue;
     }
 
-    collectFromObject(nested, origin, depth + 1, into);
+    collectFromObject(nested, origin, depth + 1, into, state);
   }
 }
 
@@ -468,11 +481,12 @@ function expandEncoded(candidates: readonly string[]): string[] {
  * Containment of these operands is decided by the caller through
  * `WorkspaceBoundary.checkCandidates`.
  */
-export function extractToolPathCandidates(
+export function scanToolPathCandidates(
   tool: Pick<ToolDescriptor, "name" | "inputSchema">,
   input: unknown,
-): string[] {
+): PathScan {
   const found = new Map<string, PathOperand>();
+  const state: ScanState = newScanState();
 
   if (isShellTool(tool)) {
     if (input !== null && typeof input === "object") {
@@ -486,15 +500,15 @@ export function extractToolPathCandidates(
         extractFromCommand(value, key, found);
       }
     }
-    return expandEncoded([...found.keys()]);
+    return { candidates: expandEncoded([...found.keys()]), truncated: state.truncated };
   }
 
   const schema = tool.inputSchema === null || typeof tool.inputSchema !== "object" ? undefined : tool.inputSchema;
   const properties = schema === undefined ? undefined : (schema as Record<string, unknown>).properties;
 
   if (properties !== null && typeof properties === "object") {
-    collectFromObject(input, "schema", 0, found);
-    return expandEncoded([...found.keys()]);
+    collectFromObject(input, "schema", 0, found, state);
+    return { candidates: expandEncoded([...found.keys()]), truncated: state.truncated };
   }
 
   /** No schema to reason from: keep the old conservative behaviour rather
@@ -506,12 +520,29 @@ export function extractToolPathCandidates(
    * truncated prefix (`C:\Users\Jane Doe\x` -> `C:\Users\Jane`) and that bogus
    * candidate is then denied as a boundary escape. The tokenizer still runs
    * over everything it did not consume, so the fallback stays fail-closed. */
-  collectFromObject(input, "heuristic", 0, found);
+  collectFromObject(input, "heuristic", 0, found, state);
   const consumed = new Set([...found.values()].map((operand) => operand.value));
-  for (const candidate of extractPathCandidates(scrubConsumed(input, consumed))) {
+  const fallback = scanPathCandidates(scrubConsumed(input, consumed, state));
+  if (fallback.truncated) state.truncated = true;
+  for (const candidate of fallback.candidates) {
     found.set(candidate, { value: candidate, origin: "scan", kind: "shell" });
   }
-  return expandEncoded([...found.keys()]);
+  return { candidates: expandEncoded([...found.keys()]), truncated: state.truncated };
+}
+
+/**
+ * The path operands of a tool call.
+ *
+ * Retained for callers that only need the operands. A SECURITY decision must
+ * use `scanToolPathCandidates` instead: this function cannot distinguish "no
+ * path operands" from "the walk stopped early", and that distinction is the
+ * whole point of the fail-closed contract.
+ */
+export function extractToolPathCandidates(
+  tool: Pick<ToolDescriptor, "name" | "inputSchema">,
+  input: unknown,
+): string[] {
+  return scanToolPathCandidates(tool, input).candidates;
 }
 
 /**
@@ -520,9 +551,13 @@ export function extractToolPathCandidates(
  * Recursive to match `collectFromObject`, and bounded in depth for the same
  * reason.
  */
-function scrubConsumed(value: unknown, consumed: ReadonlySet<string>, depth = 0): unknown {
-  if (depth > 4 || value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => scrubConsumed(item, consumed, depth + 1));
+function scrubConsumed(value: unknown, consumed: ReadonlySet<string>, state: ScanState, depth = 0): unknown {
+  if (depth > MAX_SECURITY_SCAN_DEPTH) {
+    state.truncated = true;
+    return value;
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => scrubConsumed(item, consumed, state, depth + 1));
 
   const out: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
@@ -530,7 +565,7 @@ function scrubConsumed(value: unknown, consumed: ReadonlySet<string>, depth = 0)
       out[key] = consumed.has(nested) ? "" : nested;
       continue;
     }
-    out[key] = scrubConsumed(nested, consumed, depth + 1);
+    out[key] = scrubConsumed(nested, consumed, state, depth + 1);
   }
   return out;
 }
@@ -551,4 +586,55 @@ export function extractCommandText(tool: Pick<ToolDescriptor, "name">, input: un
     if (COMMAND_PARAM_NAMES.has(key)) scoped[key] = value;
   }
   return scoped;
+}
+
+/**
+ * True when a command-bearing argument sits below the top level of a
+ * structured payload.
+ *
+ * `extractCommandText` scopes a structured tool's command text to TOP-LEVEL
+ * keys, so a command argument nested one level down is not command text as far
+ * as the pattern scan is concerned -- the scan sees `{}` and matches nothing.
+ * An empty result there is indistinguishable from "no command was present",
+ * which is the same fail-open shape this change exists to remove: a security
+ * scan that inspected nothing reported it as a clean bill of health.
+ *
+ * Bounded by the same depth limit as every other walk, and iterative in its
+ * recursion depth for the same reason the others are.
+ */
+function commandKeyNestedBelowTopLevel(value: unknown, state: ScanState, depth = 1): void {
+  if (depth > MAX_SECURITY_SCAN_DEPTH) {
+    state.truncated = true;
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const entries: [string, unknown][] = Array.isArray(value)
+    ? value.map((item, index): [string, unknown] => [String(index), item])
+    : Object.entries(value as Record<string, unknown>);
+
+  for (const [key, nested] of entries) {
+    if (COMMAND_PARAM_NAMES.has(key)) {
+      // Found, and out of reach of the top-level scope. Not inspected.
+      state.truncated = true;
+      return;
+    }
+    commandKeyNestedBelowTopLevel(nested, state, depth + 1);
+  }
+}
+
+/**
+ * The command text of a tool call, together with whether the whole payload was
+ * actually reachable through it.
+ *
+ * A caller making a security decision must use this rather than
+ * `extractCommandText`, for the same reason a path decision must use
+ * `scanToolPathCandidates`: the unscoped form cannot tell "there is no command
+ * here" from "the command was somewhere the scan could not reach".
+ */
+export function scanCommandText(tool: Pick<ToolDescriptor, "name">, input: unknown): { text: unknown; truncated: boolean } {
+  const state: ScanState = newScanState();
+  if (input !== null && typeof input === "object" && !isShellTool(tool)) {
+    commandKeyNestedBelowTopLevel(input, state);
+  }
+  return { text: extractCommandText(tool, input), truncated: state.truncated };
 }

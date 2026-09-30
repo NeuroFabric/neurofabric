@@ -2955,3 +2955,134 @@ a draft-and-reduce cycle that cannot be evidenced.
 - D-028 — owns the gate itself: what runs, where, and what was retired.
 - D-011 — the ruleset that makes the gate binding on `main`.
 - D-024 — the terminal-state discipline this operationalises.
+
+## D-031: A truncated security scan fails closed — the depth bound is a safety limit, not an allow condition
+
+- **Date:** 2026-09-29
+- **Status:** accepted and executed
+- **Affects:** `platform/core/workspace.ts`, `platform/core/tool-paths.ts`,
+  `platform/core/policy.ts`, `platform/core/configured-policy.ts`, and the new
+  suite `platform/core/bounded-scan-truncation.test.ts`. No policy file, no
+  `.pi/` configuration, and no runtime semantics outside these four modules.
+
+### Context
+
+A security audit of the workspace and path boundary found a fail-open on the
+production decision path. Depth bounds in the security scanners were written as
+a bare `return`:
+
+- `tool-paths.ts` `collectFromObject` and `collectFromArray` — `depth > 4`, return
+- `workspace.ts` `extractPathCandidates` — `depth > 6`, return
+- `policy.ts` `collectStrings` — `depth > 6`, return empty list
+
+A bare `return` is a silent skip. The scan stops, returns an empty list, and
+every downstream check iterates zero times. The workspace boundary is never
+consulted, and an empty result is read as "nothing to find" rather than "not
+inspected".
+
+Measured against the real `TrustedProjectPolicy.evaluate` (not the helper), with
+an absolute out-of-root path wrapped in N anonymous levels:
+
+| nesting | candidates | decision |
+| --- | --- | --- |
+| 0 to 4 | 1 | DENY (boundary) |
+| 5 and above | 0 | **ALLOW** |
+
+A clean cliff between depth 4 and 5, on a byte-identical payload.
+
+D-027 had already established the correct principle for the write deny-scan —
+"too deep to scan safely is itself the reason" — but that check was gated on
+`riskLevel === "WRITE"`, so reads, controlled calls, and every other tier had no
+depth protection at all. The three literals (4, 6, 12) had drifted apart.
+
+A fourth, independent instance was found while closing the first three:
+`extractCommandText` scopes a structured tool's command text to top-level keys
+only. A command argument nested one level down produced a command scope of an
+empty object, which the pattern scan matched against and reported as clean.
+Verified separately rather than assumed to share an implementation with the path
+walk: a `printenv` command at nesting 10 returned ALLOW from both engines.
+
+### Ruling
+
+**Truncation of a security scan fails closed. A depth bound is a safety limit,
+not an allow condition. "Not scanned" is never read as "safe".**
+
+### Implementation
+
+One bound, one typed contract, propagated explicitly — never inferred from an
+empty result, never a global, never parsed out of error text.
+
+- `MAX_SECURITY_SCAN_DEPTH = 12` is defined **once**, in `workspace.ts`, the
+  lowest module all four scanners depend on. It reuses D-027's bound rather
+  than inventing a fourth literal, and replaces 4 and 6.
+- `CandidateScan { candidates, truncated }` and
+  `StringScan { strings, truncated }` are the scan results. `ScanState` threads
+  truncation through the recursive walks. Truncation is recorded at the point
+  the walk gives up, and the policy checks the flag *before* the empty-list
+  shortcut.
+- `scanToolPathCandidates`, `scanPathCandidates`, `scanStrings`, and
+  `scanCommandText` return the truncation-carrying form. The old unscoped
+  functions are retained for callers that only want the values, and each is
+  documented as unfit for a security decision.
+- `classifyTrustedOperation` and `ConfiguredPolicy.evaluateRules` and
+  `evaluatePaths` deny on truncation via `truncatedScanReason`, which quotes only
+  the tool name and the bound — never any part of the payload, which may itself
+  be the secret being hunted for.
+- The generic scanner check sits **after** the D-027 write-depth check, so a
+  deep WRITE keeps D-027's own reason rather than being relabelled.
+
+### Why 12 is safe
+
+The walkers recurse once per payload level, so frame count is capped at 13
+regardless of input size. The `RangeError` that motivated D-027 appeared around
+2000 to 3000 levels — three orders of magnitude beyond this. Breadth is
+unchanged: the walk was already linear in the payload, as any traversal of one
+must be. A 5000-level payload terminates inside the bounded walk and is denied
+deterministically.
+
+### Evidence
+
+`platform/core/bounded-scan-truncation.test.ts`, 8 cases, written **before** the
+production change. Red against the unmodified tree: tests 1, 2, 4 and 7 failed
+with "must be DENY, got ALLOW"; tests 5 and 6 **passed** pre-fix, which is the
+guard against over-correcting into a false-positive denial. Test 8 was added
+after the first fix attempt and caught the `extractCommandText` gap, which is
+why the fourth instance is in this record.
+
+Mutation testing, both reverted and verified by SHA-256 against pre-mutation
+hashes:
+
+| mutation | result |
+| --- | --- |
+| fail-closed deny removed from `classifyTrustedOperation` | tests 4 and 8 fail |
+| truncation recording removed from `collectFromObject` | test 3 fails |
+
+### Consequence
+
+The read, controlled, and structured-command tiers are now covered by the same
+fail-closed rule D-027 established for writes. Three drifted depth literals
+become one. No policy file or `.pi/` configuration changed; the bound is a
+property of the scanners, not of the operator's policy.
+
+### Observation, deliberately not changed
+
+`artifact.ts declaredArtifactReferences` still calls the unscoped
+`extractToolPathCandidates`. Truncation there costs artifact provenance
+completeness, not containment: every reference that is declared is still
+boundary-checked by `verifyArtifact`, so an empty result grants nothing. It is
+outside the four affected scanners and is recorded here rather than fixed inside
+a security MR.
+
+Also noted, not fixed: `sensitiveBasenameMatch` retains an
+`extractPathCandidates` default for external callers. Its only in-repo caller
+passes the scanned candidate list, and the enclosing decision already denies on
+truncation, so no live fail-open remains.
+
+### Cross-references
+
+- D-027 — the write deny-scan bound this extends to every tier; its reason text
+  is preserved and pinned by test 6.
+- D-009 — "a limit declared here is a limit that is enforced", the same
+  fail-closed instinct applied to scan bounds.
+- D-030 — referenced by `tool-paths-recursion.test.ts` but absent from this file;
+  that gap is pre-existing and was not fabricated here.
