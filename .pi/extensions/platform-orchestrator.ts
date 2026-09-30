@@ -179,8 +179,8 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     // forward yet, and inventing one would be guessing at an external
     // contract. When Pi (or a tool) surfaces that, this is the one line that
     // has to change, and the flag is already honoured end to end.
-       const denialReason = pendingDenialReasons.get(event.toolCallId);
-    pendingDenialReasons.delete(event.toolCallId);
+    // `denialReason` was read and deleted ABOVE the `currentTask` guard, so
+    // delete-on-read is unconditional and no refusal reason can leak a turn.
     await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denialReason);
     record("tool_execution_end", { toolCallId: event.toolCallId, tool: event.toolName, isError: event.isError, artifacts: kernel.artifacts.length, taskStatus: kernel.currentTask.status });
   });
