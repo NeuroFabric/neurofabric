@@ -158,10 +158,11 @@ steps are given so no judgment is required to act on them.
 - **§2.4(a) boundary unescape is DONE** — see section 3 above, commits
   `b0a8cdf` and `b0ba4aa` on `fix/d4a-boundary-unescape`. Drafted and recorded
   on the branch; **not merged**, and the merge waits on the operator restart.
-- **Glob prefix scope-check is NOT built.** `A3` passes today because the
-  boundary denies only genuinely out-of-root candidates; the prefix scoping
-  itself is not implemented. Ordered directly by the operator; will be filed as
-  item 6 in the F006 §5 table when the work starts.
+- **Glob prefix scope-check is DONE, unmerged** — `af7dc24` on
+  `fix/d4b-glob-prefix-scope`, gates `G1` (red to green) and `G2` (the deny
+  guard, green throughout). Filed as item 6 in the F006 §5 table. A pattern
+  whose prefix matches no rule is now scoped by containment alone rather than
+  default-denied; that widening is recorded in F006 rather than smoothed over.
 - **§2.3 benign non-zero exits stays queued**, now with its exhibit. The
   witness certificate is transcribed into F006 §2.3 and the death counter is
   corrected from 0 to **1** — corrected by exhibit, not by count. The mechanism
@@ -182,6 +183,7 @@ does not exist as work.** As measured, that table holds:
 | 3 | §2.3 benign non-zero exits | OPEN — exhibit recorded |
 | 4 | C3b rebase | CLOSED — `320937f` merged; content assessment owed |
 | 5 | §2.4 / D4 path boundary | (b) CLOSED — merged; (a) DONE, unmerged (`b0ba4aa`) |
+| 6 | Glob prefix scope-check | DONE, unmerged (`af7dc24`) |
 
 Statuses were measured with `git branch -a --contains`, not read off prose.
 Work order as ruled: item 1's remaining half, then item 2, then item 3 — with the

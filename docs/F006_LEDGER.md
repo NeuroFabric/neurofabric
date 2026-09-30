@@ -547,8 +547,10 @@ defined in this section does not exist as work.**
 | 3 | §2.3 benign non-zero exits | **OPEN** | Exhibit and code-backed mechanism in §2.3. Counter 1. |
 | 4 | C3b rebase | **CLOSED as a rebase** | `320937f` is in `origin/main`. Only a content assessment of C3b is owed, which is a review, not queued implementation. |
 | 5 | §2.4 / D4 path boundary | **(b) CLOSED — merged.** (a) **DONE, UNMERGED** | (b) via `f6c6bad`. (a) is `b0ba4aa` on `fix/d4a-boundary-unescape`, pushed, merge gated on the operator restart. |
+| 6 | Glob prefix scope-check | **DONE, UNMERGED** | `af7dc24` on `fix/d4b-glob-prefix-scope`, pushed. Gates `G1`/`G2`. Merge gated on the operator restart. |
 
-**Work order, as ruled:** item 1's remaining half, then item 2, then item 3.
+**Work order, as ruled:** item 1's remaining half, then item 2, then item 3. Items
+6 and the 2.4(a) half of item 5 are recorded and waiting on the same merge.
 
 **Operator-ordered work not numbered here:** the glob prefix scope-check, ordered
 directly. It is authorised, and its boundary statement lives in the `N6` gate
@@ -599,6 +601,29 @@ guard before writing the message. Commit `b0a8cdf` on
    assessment of C3b is still owed.
 5. **§2.4 / D4 path-boundary fix.** Authorised and in progress; see §2.4 for
    both defects, both corpus gates, and the branch.
+6. **Glob prefix scope-check.** **DONE, unmerged** — `af7dc24` on
+   `fix/d4b-glob-prefix-scope`. A glob names no file, so its pattern TEXT was
+   being matched against a file rule, which is a coincidence of spelling rather
+   than a permission and fails in whichever direction the rule is shaped. A
+   pattern is now judged on its literal prefix, the directory the expansion is
+   confined to; containment was already and still is decided on the full
+   spelling.
+
+   **Two gates, both written before the change.** `G1` was measured red — an
+   in-root glob refused by the default-deny branch under a specific rule — and
+   `N6` could not catch it, because `N6` runs under the catch-all where every
+   in-root spelling matches by accident. `G2` is the guard against the obvious
+   wrong fix: skipping the rule matcher for a pattern turns `G1` green while
+   unbinding a deny rule from the subtree the glob sits in. `G2` was green
+   before and green after.
+
+   **The widening, stated rather than buried.** A pattern whose prefix matches no
+   rule is now scoped by containment alone instead of falling through to default
+   deny. That is a deliberate widening of one branch, for patterns only. Real
+   locations are untouched, a rule that denies the prefix still denies, and
+   containment is unchanged, so the widening cannot reach outside the roots. It
+   is recorded here rather than described as a tightening, because it is not
+   one.
 
 ---
 
