@@ -720,6 +720,55 @@ export class KernelAdapter {
   // ---------------------------------------------------------------------------
 
   /**
+   * The refusal text for a call that arrived after the task was already terminal.
+   *
+   * WHY THIS EXISTS. The task's `failureReason` was, until this change, appended
+   * to every subsequent refusal with no indication that it described something
+   * that had already happened. Measured consequence: after a destructive-command
+   * denial, a later call naming no such command was refused with a certificate
+   * naming that earlier command, and the agent reported the earlier denial as
+   * the cause of its own death. Two sessions were lost investigating a
+   * certificate that belonged to a call neither of them had made.
+   *
+   * THE CONTRACT, in this order:
+   *
+   *   1. It names the call that triggered the refusal — tool, operation and
+   *      toolCallId — so the refusal is about THIS call and can be correlated
+   *      with the trace entry for it.
+   *   2. It says the call was NOT evaluated. Nothing ran and no policy rule
+   *      refused it, which is the fact most easily lost and the one that decides
+   *      whether the agent retries, reports a policy problem, or stops.
+   *   3. The stored failure is labelled ORIGINAL, with its counters, and is
+   *      attributed to the moment the task terminated rather than to this call.
+   *      That is what makes a certificate's counters auditable: they describe
+   *      the death, not the call being refused afterwards.
+   *
+   * A replayed reason is never presented as this call's own refusal. Where there
+   * is no stored reason, that is stated outright rather than left as a dangling
+   * separator.
+   */
+  private describeTerminalRefusal(toolName: string, operation: string, toolCallId: string | undefined): string {
+    const status = this.task?.status ?? "UNKNOWN";
+    const identity = `the call that triggered this refusal is tool=${toolName} `
+      + `operation=${operation} toolCallId=${toolCallId ?? "<none>"}`;
+    const notEvaluated = "it was NOT evaluated and no policy rule refused it";
+
+    let tail: string;
+    const original = this.task?.failureReason;
+    if (original !== undefined && original !== "") {
+      tail = `the task's ORIGINAL failure, recorded when the task terminated and unchanged since, is: ${original}`;
+    } else if (status === "COMPLETED") {
+      tail = "the turn completed successfully - report your results and stop; a new user message begins a new task";
+    } else if (status === "ESCALATED") {
+      tail = "the task escalated and awaits operator handling";
+    } else {
+      tail = "the task terminated WITHOUT recording a failureReason, so there is no original failure to replay";
+    }
+
+    return `Task is ${status}; no further tool calls are accepted; ${identity}; ${notEvaluated}; ${tail}`;
+  }
+
+  /**
    * Policy evaluation only. This is called from Pi's `tool_call` preflight hook,
    * which may fire several times *before* any tool actually executes.
    *
@@ -746,14 +795,7 @@ export class KernelAdapter {
       // state that admits no execution. This is a lifecycle refusal, recorded as
       // `refusal`, never as a policy `violation`.
       this.terminalRefusalCount += 1;
-      let reason = `Task is ${this.task.status}; no further tool calls are accepted`;
-      if (this.task.failureReason) {
-        reason += `; failureReason: ${this.task.failureReason}`;
-      } else if (this.task.status === "COMPLETED") {
-        reason += "; the turn completed successfully - report your results and stop; a new user message begins a new task";
-      } else if (this.task.status === "ESCALATED") {
-        reason += "; the task escalated and awaits operator handling";
-      }
+      const reason = this.describeTerminalRefusal(toolName, operation, toolCallId);
 
       const decision: PolicyDecision = {
         decision: "DENY",
@@ -766,10 +808,18 @@ export class KernelAdapter {
       }
       await this.events.emit(event("LIFECYCLE_REFUSED", this.task.taskId, {
         tool: toolName,
+        operation,
         toolCallId,
         reason: decision.reason,
         refusal: decision.refusal,
         taskStatus: this.task.status,
+        // The structured form of the same three facts the reason states in prose.
+        // A trace consumer must not have to parse a sentence to learn which call
+        // was refused, that it was never evaluated, and what the task's ORIGINAL
+        // failure was — the three things whose absence caused the echo.
+        evaluated: false,
+        originalFailureReason: this.task.failureReason ?? null,
+        replayed: this.task.failureReason !== undefined && this.task.failureReason !== "",
       }));
       return { decision, task: this.task };
     }
