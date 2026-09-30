@@ -13,6 +13,17 @@ export interface CoreLimits {
   maxToolRetries: number;
   /** Task-wide bound on replans. Read by recovery.ts. */
   maxReplans: number;
+  /**
+   * Task-wide bound on replans that change strategy, as opposed to replans that
+   * repeat a failed approach. Read by recovery.ts on the new-approach branch.
+   *
+   * Set at parity with `maxReplans`. That RAISES the aggregate ceiling: repeats
+   * and strategy changes each get the old full budget rather than sharing one.
+   * That is the feature, not a regression, and it is now explicit and
+   * profile-tunable. Inert until the adapter supplies the repeat/new-approach
+   * signal, because every attempt currently reads as a repeat.
+   */
+  maxStrategyChanges: number;
   /** Task-wide bound on consecutive recovery rounds. Read by recovery.ts. */
   maxRecoveryDepth: number;
   /** Wall-clock bound on a task. Read by recovery.ts via elapsed time. */
@@ -24,6 +35,7 @@ export interface CoreLimits {
 export const DEFAULT_LIMITS: CoreLimits = {
   maxToolRetries: 2,
   maxReplans: 2,
+  maxStrategyChanges: 2,
   maxRecoveryDepth: 3,
   maxExecutionTimeMs: 30 * 60 * 1000,
   maxArtifactBytes: 10 * 1024 * 1024,

@@ -103,6 +103,12 @@ export interface Task {
   validationResults: ValidationResult[];
   retryCount: number;
   replanCount: number;
+  /**
+   * Strategy changes funded so far. Optional until the adapter books to it:
+   * recovery defaults an absent value to 0, so no task is required to carry a
+   * counter nothing reads yet.
+   */
+  strategyCount?: number;
   context: { estimatedTokens: number; maxTokens: number };
   execution: Record<string, unknown>;
   finalResult?: unknown;

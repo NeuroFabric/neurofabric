@@ -337,6 +337,7 @@ export class KernelAdapter {
     this.limits = options.limits ?? {
       maxToolRetries: DEFAULT_LIMITS.maxToolRetries,
       maxReplans: DEFAULT_LIMITS.maxReplans,
+      maxStrategyChanges: DEFAULT_LIMITS.maxStrategyChanges,
       maxRecoveryDepth: DEFAULT_LIMITS.maxRecoveryDepth,
       maxExecutionTimeMs: DEFAULT_LIMITS.maxExecutionTimeMs,
     };
