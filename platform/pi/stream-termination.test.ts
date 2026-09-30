@@ -22,6 +22,7 @@ test("stream death never completes task (F-000 regression)", async () => {
 
 test("failed task refusal includes failureReason", async () => {
   const adapter = new KernelAdapter();
+    adapter.registerTools([toolDescriptorFromPi({ name: "read", description: "Read file" })]);
   await adapter.beginTask("Task", "Task");
   (adapter as any).task = { ...(adapter as any).task, status: "FAILED", failureReason: "Boom" };
   
@@ -31,6 +32,7 @@ test("failed task refusal includes failureReason", async () => {
 
 test("completed task refusal includes completion instructions", async () => {
   const adapter = new KernelAdapter();
+    adapter.registerTools([toolDescriptorFromPi({ name: "read", description: "Read file" })]);
   await adapter.beginTask("Task", "Task");
   (adapter as any).task = { ...(adapter as any).task, status: "COMPLETED" };
   
@@ -40,6 +42,7 @@ test("completed task refusal includes completion instructions", async () => {
 
 test("escalated task refusal includes escalation status", async () => {
   const adapter = new KernelAdapter();
+    adapter.registerTools([toolDescriptorFromPi({ name: "read", description: "Read file" })]);
   await adapter.beginTask("Task", "Task");
   (adapter as any).task = { ...(adapter as any).task, status: "ESCALATED" };
   
@@ -119,8 +122,11 @@ test("a FAILED task's refusal carries its failureReason (death certificate)", as
   );
 
   // The same reason must reach the emitted event, so it is in the trace too.
-  const denied = adapter.recentEvents(500).filter((e) => e.type === "APPROVAL_DENIED").at(-1);
-  assert.equal(
+ // const denied = adapter.recentEvents(500).filter((e) => e.type === "APPROVAL_DENIED").at(-1);
+   // 86b2d3a renamed the terminal refusal event APPROVAL_DENIED -> LIFECYCLE_REFUSED;
+  // the lookup follows the rename; the asserted payload is unchanged.
+  const denied = adapter.recentEvents(500).filter((e) => e.type === "LIFECYCLE_REFUSED").at(-1);
+ assert.equal(
     (denied?.payload as Record<string, unknown> | undefined)?.reason,
     "Task is FAILED; no further tool calls are accepted; failureReason: Policy abort: workspace boundary violation",
   );
