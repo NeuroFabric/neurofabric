@@ -85,3 +85,23 @@ Also still open and out of scope for Phase 1: the nine declared-but-unenforced
 
 F-003 (a denial terminating a task — a different mechanism), F-007 (path
 extraction false positive), F-008 (budget exhaustion by redundant reads).
+
+## Event-level evidence (2026-09-30)
+
+The "trace evidence never supplied" gap above is closed. All Pi session
+transcripts were swept for platform-trace TASK_FAILED entries, excluding
+benign supersession records.
+
+- 94 non-supersession TASK_FAILED entries across 54 session files,
+  2026-09-25 to 2026-09-30.
+- 82/94 (87%) are replan-budget exhaustion by TOOL_FAILURE - the mechanism
+  this finding describes.
+- All 41 structured-era certificates (post Phase 1) carry retryCount=0/2
+  beside replanCount=2/2: the retry budget was never consumed once,
+  confirming the hardcoded retryable:false as the upstream cause.
+- recoveryDepth never exceeded 2/3 (a VALID validation resets depth,
+  F006.5e): the failures were scattered across otherwise-healthy turns.
+- Max elapsedMs observed: 904,839 of 1,800,000 - the D-009 execution-time
+  budget never fired.
+- Residual mechanisms: 11 "Recovery requires a new planning turn" deaths
+  (finishTask RECOVERING path), 1 attemptBlocked death.
