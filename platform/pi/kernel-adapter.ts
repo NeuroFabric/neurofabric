@@ -295,6 +295,23 @@ export class KernelAdapter {
    * one was recorded is observable.
    */
   private lastAttemptSignature: string | undefined;
+  /**
+   * The signature of the attempt that failed most recently, for THIS task.
+   *
+   * C4. `lastAttemptSignature` answers "which attempt is this?"; this answers
+   * "which attempt failed last?", and comparing the two is what tells the fork
+   * whether the move is a NEW APPROACH or a REPEAT of the same one. Without the
+   * anchor there is nothing to compare against, and the fork stays inert.
+   *
+   * Recorded when a failure is classified, never at preflight: a call that is
+   * admitted is not a failure, and an anchor that moved on admission would
+   * compare an attempt against itself.
+   *
+   * Same lifecycle as `recoveryDepth`: reset on the VALID boundary, cleared when
+   * a newer task supersedes this one, never written by a stale handler. A stale
+   * anchor would fork the newer task's decisions using the older task's history.
+   */
+  private lastFailureSignature: string | undefined;
 
   /** Real executions currently in flight, keyed by Pi toolCallId. */
   private readonly activeExecutions = new Map<string, BoundExecution>();
@@ -658,6 +675,7 @@ export class KernelAdapter {
     this.lastValidation = undefined;
     this.recoveryDepth = 0;
     this.lastAttemptSignature = undefined;
+    this.lastFailureSignature = undefined;
     this.executionStartedAtNs = process.hrtime.bigint();
     this.activeExecutions.clear();
     this.knownToolCallIds.clear();
@@ -1196,13 +1214,34 @@ export class KernelAdapter {
       // them, so the terminal certificate can name WHICH rule refused the call
       // instead of a generic sentence. Spread into describeTerminalRecovery.
       const denialReason = error instanceof CoreError && error.category === "POLICY_DENIED" ? error.message : undefined;
+      // C4: NOVELTY IS COMPUTED BEFORE ANY BUDGET IS BOOKED. Which ledger a
+      // REPLAN charges is knowable only from this comparison, so the comparison
+      // has to exist before `chooseRecoveryDetailed` is called, not after.
+      //
+      // `undefined` means REPEAT, deliberately. A signature is absent when the
+      // attempt was never prechecked (the direct `beginToolExecution` path the
+      // kernel's own tests and any embedder that binds an execution itself use).
+      // There is nothing to compare in that case, and guessing "novel" would
+      // charge a strategy change for a call whose identity was never recorded.
+      // Unknown identity is treated as the legacy path, which is the
+      // conservative direction: it can only preserve today's behaviour.
+      const attemptSignature = this.lastAttemptSignature;
+      const priorFailure = this.lastFailureSignature;
+      const attemptMatchesLastFailure = attemptSignature === undefined
+        || priorFailure === undefined
+        || attemptSignature === priorFailure;
+      // The anchor moves only on a classified FAILURE, and to the signature of
+      // the attempt that just failed, never to the one before it.
+      if (attemptSignature !== undefined) this.lastFailureSignature = attemptSignature;
       const recoveryOptions = {
         failure,
         limits: this.limits,
         retryCount: this.task.retryCount,
         replanCount: this.task.replanCount,
+        strategyCount: this.task.strategyCount ?? 0,
         depth: this.recoveryDepth,
         idempotency: tool.idempotency,
+        attemptMatchesLastFailure,
         elapsedMs: this.elapsedMs(),
         denialReason,
       };
@@ -1215,6 +1254,8 @@ export class KernelAdapter {
         failure,
         retryCount: recoveryOptions.retryCount,
         replanCount: recoveryOptions.replanCount,
+        strategyCount: recoveryOptions.strategyCount,
+        attemptMatchesLastFailure: recoveryOptions.attemptMatchesLastFailure,
         recoveryDepth: this.recoveryDepth,
       }));
 
@@ -1225,7 +1266,17 @@ export class KernelAdapter {
           this.advance("PLANNING", "Retry re-enters planning", { expectTaskId: taskId });
           break;
         case "REPLAN":
-          this.task = { ...this.task, replanCount: this.task.replanCount + 1 };
+          // C4: the budget follows the MOVE, not the failed attempt's character.
+          // A REPLAN that changed strategy is a different move from one that
+          // repeats the same approach, so it is charged to the strategy fund
+          // rather than to the replan budget. An identical attempt keeps the
+          // pre-existing charge, which is the distinction C1 preserves and
+          // pins.
+          if (attemptMatchesLastFailure) {
+            this.task = { ...this.task, replanCount: this.task.replanCount + 1 };
+          } else {
+            this.task = { ...this.task, strategyCount: (this.task.strategyCount ?? 0) + 1 };
+          }
           this.advance("REPLANNING", `Recovery strategy REPLAN (depth ${this.recoveryDepth})`, { expectTaskId: taskId });
           this.advance("PLANNING", "Replan re-enters planning", { expectTaskId: taskId });
           break;
@@ -1254,6 +1305,7 @@ export class KernelAdapter {
     } else {
       this.recoveryDepth = 0;
       this.lastAttemptSignature = undefined;
+      this.lastFailureSignature = undefined;
     }
 
     return validation;
