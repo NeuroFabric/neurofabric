@@ -90,7 +90,8 @@ const PROVIDER_KEY_PREFIXES = [
 /** Value shapes that are secret regardless of the field they appear under. */
 const GENERIC_SECRET_VALUE =
   /(^|[\s"'`=:,;(\[{&?])([A-Za-z0-9+/_-]{40,}={0,2})(?=$|[\s"'`)\]};,&?])/g;
-
+const HEX_ONLY = /^[0-9a-f]+$/i;
+const DECIMAL_ONLY = /^[0-9]+$/;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
