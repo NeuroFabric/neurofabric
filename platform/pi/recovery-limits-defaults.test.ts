@@ -41,6 +41,11 @@ test("an explicitly configured budget is used as given", () => {
   const explicit: RecoveryLimits = {
     maxToolRetries: 5,
     maxReplans: 1,
+    // Distinct from `maxReplans` on purpose: this fixture exists to prove a
+    // configured budget is returned AS GIVEN, so every field is set to
+    // something the other fields do not already carry. A parity value would
+    // make a mix-up invisible.
+    maxStrategyChanges: 4,
     maxRecoveryDepth: 9,
     maxExecutionTimeMs: 1000,
   };
