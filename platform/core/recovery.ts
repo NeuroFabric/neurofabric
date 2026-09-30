@@ -1,7 +1,7 @@
 import { CoreError } from "./errors.ts";
 import type { ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./types.ts";
 
-export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "UNKNOWN";
+export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "POLICY_DENIED" | "UNKNOWN";
 export type RecoveryStrategy = "RETRY" | "MODIFY_INPUT" | "ALTERNATE_TOOL" | "ALTERNATE_SKILL" | "REPLAN" | "ESCALATE" | "TERMINATE";
 
 /**
@@ -58,7 +58,8 @@ export type RecoveryReason =
   | "GENERIC_REPLAN"
   | "REPLAN_BUDGET_EXHAUSTED"
   | "STRATEGY_CHANGE_REPLAN"
-  | "STRATEGY_BUDGET_EXHAUSTED";
+  | "STRATEGY_BUDGET_EXHAUSTED"
+  | "POLICY_DENIED_TERMINATED";
 
 export interface RecoveryDecision {
   strategy: RecoveryStrategy;
@@ -67,6 +68,11 @@ export interface RecoveryDecision {
 
 export function classifyFailure(error: unknown): FailureCategory {
   if (error instanceof CoreError) {
+    // Checked FIRST, and deliberately not derived from any other category. A
+    // refusal is a final answer, not a fault, and it must keep its identity all
+    // the way to recovery: folding it into TOOL_FAILURE is exactly what let the
+    // table replan a denial until the replan budget was spent.
+    if (error.category === "POLICY_DENIED") return "POLICY_DENIED";
     if (error.category === "POLICY_ERROR") return "PERMISSION";
     if (error.category === "VALIDATION_ERROR") return "VALIDATION_FAILURE";
     if (error.category === "MODEL_ERROR") return "MODEL_FAILURE";
@@ -115,6 +121,13 @@ export function chooseRecoveryDetailed(options: {
   if (options.elapsedMs !== undefined && options.elapsedMs > limits.maxExecutionTimeMs) {
     return { strategy: "TERMINATE", reason: "EXECUTION_TIME_EXHAUSTED" };
   }
+  // A policy refusal is final, so it is reported ahead of every budget guard.
+  // If the task had ALSO run out of time or depth, naming the refusal is the
+  // more useful truth: the counters are incidental, the denial is the cause, and
+  // a certificate blaming a budget would send an investigator after the wrong
+  // thing. Refusing to retry or replan is also what stops an identically
+  // re-proposed block from burning replan budget.
+  if (failure === "POLICY_DENIED") return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
   if (depth >= limits.maxRecoveryDepth) return { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" };
   if (failure === "PERMISSION") return { strategy: "ESCALATE", reason: "PERMISSION_FAILURE_ESCALATED" };
   if (failure === "INVALID_INPUT") return { strategy: "ESCALATE", reason: "INVALID_INPUT_ESCALATED" };
@@ -198,15 +211,19 @@ export function chooseRecovery(options: {
  */
 export function describeTerminalRecovery(
   decision: RecoveryDecision,
-  options: { failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number; depth: number; elapsedMs?: number },
+  options: { failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number; depth: number; elapsedMs?: number; denialReason?: string },
 ): string {
   const { limits, retryCount, replanCount, depth, failure } = options;
   const strategyCount = options.strategyCount ?? 0;
   const elapsed = options.elapsedMs === undefined ? "" : `, elapsedMs=${options.elapsedMs}/${limits.maxExecutionTimeMs}`;
+  // The policy's OWN words, when any survived to this point. A refusal is only
+  // actionable if the operator can see WHICH rule refused it, so nothing
+  // generic is substituted for a real reason.
+  const denial = options.denialReason === undefined ? "" : `, denied=${options.denialReason}`;
   // BOTH the replan and the strategy counter are reported, whichever budget
   // blocked the final move: the investigator must always be able to see which
   // pattern died.
-  return `Recovery TERMINATE [${decision.reason}]: failure=${failure}, `
+  return `Recovery TERMINATE [${decision.reason}]: failure=${failure}${denial}, `
     + `replanCount=${replanCount}/${limits.maxReplans}, `
     + `strategyCount=${strategyCount}/${limits.maxStrategyChanges}, `
     + `retryCount=${retryCount}/${limits.maxToolRetries}, `
