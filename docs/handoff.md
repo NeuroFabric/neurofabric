@@ -285,12 +285,17 @@ Five of the entries below are actually read by an enforcement decision today.
 execution-time bound is `maxExecutionTimeMs`. `createArtifact` in
 `platform/core/artifact.ts` enforces `maxArtifactBytes` against the real
 on-disk size of the reference it is asked to register, and that path is live:
-`KernelAdapter` calls it for every declared tool output. The remaining entries
-in `DEFAULT_LIMITS` are declared but not yet consulted by any enforcement path:
-implementing them is open work, not a latent guarantee. Do not rely on
-`maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
-`maxParallelTasks`, `maxParallelTools`, or `maxOutputBytes` to reject anything
-today.
+`KernelAdapter` calls it for every declared tool output.
+
+**Every entry in `DEFAULT_LIMITS` is enforced by a live decision path.** The six
+names `maxTaskDurationMs`, `maxStepDurationMs`, `maxToolDurationMs`,
+`maxParallelTasks`, `maxParallelTools`, and `maxOutputBytes` are **not limits at
+all** — they were removed from `CoreLimits` by D-009, which swept out every
+field that no enforcement path read. They have zero references in `platform/`
+(verified 2026-09-30). They cannot be configured, and an earlier revision of
+this table listed them as "declared only", which described a bound the kernel
+never had. Do not reason about a resource bound by name from this table; read
+`platform/core/limits.ts`, which is the source of truth.
 
 One caveat on `maxArtifactBytes`: it is enforced **only for a reference that
 already exists on disk**. If the size cannot be read — because the file has not
@@ -303,14 +308,8 @@ declared output that is never produced is therefore never size-checked.
 | `maxToolRetries` | 2 | **yes** — task-wide retry budget in `chooseRecoveryDetailed` |
 | `maxReplans` | 2 | **yes** — task-wide replan budget in `chooseRecoveryDetailed` |
 | `maxRecoveryDepth` | 3 | **yes** — consecutive recovery rounds since the last success |
-| `maxExecutionTimeMs` | 1,800,000 (30 min) | supplied to the recovery options; no independent timer is enforced |
+| `maxExecutionTimeMs` | 1,800,000 (30 min) | **yes** — `KernelAdapter.elapsedMs` feeds a monotonic clock to `chooseRecoveryDetailed`, which terminates once it is exceeded. No independent wall-clock timer, so a task that never reaches a recovery decision is not stopped by it |
 | `maxArtifactBytes` | 10,485,760 (10 MiB) | **yes** — on-disk size check in `createArtifact`; skipped when the size cannot be read |
-| `maxTaskDurationMs` | 1,800,000 (30 min) | no — declared only |
-| `maxStepDurationMs` | 300,000 (5 min) | no — declared only |
-| `maxToolDurationMs` | 120,000 (2 min) | no — declared only |
-| `maxParallelTasks` | 1 | no — declared only |
-| `maxParallelTools` | 1 | no — declared only; Pi owns tool-execution mode |
-| `maxOutputBytes` | 2,097,152 (2 MiB) | no — declared only |
 
 `maxContextTokens` was **removed** (D-016b). D-009 had wired it to
 `selectContext`, but that function still had no production caller and the
