@@ -326,3 +326,12 @@ test("redactPreview bounds length without reintroducing unredacted text", () => 
   assert.ok(preview.length <= 161, "preview must be bounded");
   assert.ok(!preview.includes(SECRETS.openai));
 });
+
+test("tool call ids survive redaction in both shapes (forensic correlation)", () => {
+  const uuid = "call-550e8400-e29b-41d4-a716-446655440000";
+  const legacy = "call_123456";
+  const out = redactPayload({ toolCallId: uuid, alt: legacy });
+  assert.equal(out.toolCallId, uuid);
+  assert.equal(out.alt, legacy);
+});
+

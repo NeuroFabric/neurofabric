@@ -72,6 +72,8 @@ export interface BoundExecution {
   stepId: string;
   tool: string;
   startedAt: string;
+  /** The input metadata supplied when the execution was begun. */
+  inputMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -693,25 +695,30 @@ export class KernelAdapter {
       // state that admits no execution. This is a lifecycle refusal, recorded as
       // `refusal`, never as a policy `violation`.
       this.terminalRefusalCount += 1;
-      // The agent reads this string, and nothing else. Without the reason it
-      // was told only THAT the task is dead, never WHY, so a task terminated
-      // by an exhausted recovery budget looked identical to one aborted by
-      // policy. The reason is appended only when the task actually carries one.
+      let reason = `Task is ${this.task.status}; no further tool calls are accepted`;
+      if (this.task.failureReason) {
+        reason += `; failureReason: ${this.task.failureReason}`;
+      } else if (this.task.status === "COMPLETED") {
+        reason += "; the turn completed successfully - report your results and stop; a new user message begins a new task";
+      } else if (this.task.status === "ESCALATED") {
+        reason += "; the task escalated and awaits operator handling";
+      }
+
       const decision: PolicyDecision = {
         decision: "DENY",
-        reason: `Task is ${this.task.status}; no further tool calls are accepted`
-          + (this.task.failureReason ? `; failureReason: ${this.task.failureReason}` : ""),
+        reason,
         refusal: "task_terminal",
       };
       if (toolCallId) {
         this.deniedToolCallIds.add(toolCallId);
         this.knownToolCallIds.add(toolCallId);
       }
-      await this.events.emit(event("APPROVAL_DENIED", this.task.taskId, {
+      await this.events.emit(event("LIFECYCLE_REFUSED", this.task.taskId, {
         tool: toolName,
         toolCallId,
         reason: decision.reason,
         refusal: decision.refusal,
+        taskStatus: this.task.status,
       }));
       return { decision, task: this.task };
     }
