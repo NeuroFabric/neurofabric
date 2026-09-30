@@ -1151,6 +1151,10 @@ export class KernelAdapter {
       this.advance("RECOVERING", "Last validation was not VALID", { expectTaskId: taskId });
       const tool = this.tools.get(result.execution.tool);
       const failure = classifyFailure(error);
+      // D1: the policy's own words, read off the error that already carries
+      // them, so the terminal certificate can name WHICH rule refused the call
+      // instead of a generic sentence. Spread into describeTerminalRecovery.
+      const denialReason = error instanceof CoreError && error.category === "POLICY_DENIED" ? error.message : undefined;
       const recoveryOptions = {
         failure,
         limits: this.limits,
@@ -1159,6 +1163,7 @@ export class KernelAdapter {
         depth: this.recoveryDepth,
         idempotency: tool.idempotency,
         elapsedMs: this.elapsedMs(),
+        denialReason,
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
@@ -1232,6 +1237,26 @@ export class KernelAdapter {
    * `.pi/extensions/platform-orchestrator.ts` for why the bridge does not yet
    * supply it: Pi's `tool_execution_end` carries a boolean `isError` and
    * nothing else, and inventing a contract for it is not this layer's call.
+   *
+   * D1. `denialReason` carries the one piece of information a boolean cannot:
+   * WHY the call was refused, in the policy's own words. It is optional and
+   * additive, exactly like `errorRetryable` beside it, and when it is absent
+   * the behaviour is byte-identical to before — so an ordinary tool failure is
+   * unaffected.
+   *
+   * It is a PARAMETER rather than state recovered from `precheckToolCall` on
+   * purpose. A preflight denial binds no execution, and `observeToolResult`
+   * discards a result whose execution is unbound, so a locally-denied call
+   * never reaches recovery: a marker keyed on the precheck would be written and
+   * never read. The refusal that matters reaches this method on a call whose
+   * execution Pi had already begun, and the reason has to arrive with it.
+   *
+   * EXTERNAL-WIRING LIMITATION, stated rather than papered over: no caller of
+   * `recordToolResult` exists in this repository outside the kernel and its
+   * tests, so which layer supplies `denialReason` cannot be proven here. Pi's
+   * `tool_execution_end` carries only a boolean `isError`; the bridge that
+   * reports a policy denial to this method must forward the reason for the
+   * fix to take effect on that path.
    */
   async recordToolResult(
     toolCallId: string,
@@ -1239,6 +1264,7 @@ export class KernelAdapter {
     payload: unknown,
     isError: boolean,
     errorRetryable?: boolean,
+    denialReason?: string,
   ): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active task");
     const bound = this.activeExecutions.get(toolCallId);
@@ -1250,6 +1276,14 @@ export class KernelAdapter {
     // `=== true`, never truthiness: an absent, undefined or non-boolean value
     // must produce the same classification the hard-coded false always did.
     const retryable = isError && errorRetryable === true;
+    // D1: a policy refusal arrives with the reason the policy actually gave.
+    // No marker is consulted, because none is reachable: a preflight denial
+    // binds no execution, and `observeToolResult` discards any result whose
+    // execution is unbound, so a locally-denied call never reaches recovery at
+    // all. The reason therefore has to travel with the result, from whichever
+    // layer observed the refusal.
+    const denied = isError && denialReason !== undefined;
+    const actualDenialReason = denialReason;
     const declared = this.declaredOutputs.get(toolCallId) ?? [];
     const candidates: Artifact[] = declared.map((reference) =>
       createArtifact({
@@ -1317,10 +1351,16 @@ export class KernelAdapter {
     // F-006: pass the real CoreError so recovery sees the tool error's category
     // and retryable flag. A plain Error collapsed to UNKNOWN and discarded both.
     // F-006 Phase 2a: the flag is the caller's, not a hard-coded `false`.
+    // D1: a policy refusal is NOT a tool error. It is rebuilt as its own
+    // category carrying the policy's own words, so recovery terminates on it
+    // instead of replanning the very block that was denied. Every other failure
+    // keeps the unchanged TOOL_ERROR construction below.
     return this.observeToolResult(
       result,
       isError
-        ? new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
+        ? denied
+          ? new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })
+          : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
         : undefined,
     );
   }

@@ -1,7 +1,16 @@
 export type ErrorCategory =
   | "TASK_ERROR" | "PLANNING_ERROR" | "SKILL_ERROR" | "TOOL_ERROR" | "VALIDATION_ERROR"
   | "POLICY_ERROR" | "CONTEXT_ERROR" | "MEMORY_ERROR" | "MODEL_ERROR" | "RECOVERY_ERROR"
-  | "CONFIGURATION_ERROR";
+  | "CONFIGURATION_ERROR"
+  /**
+   * A call the policy REFUSED, distinct from a permission failure.
+   *
+   * `POLICY_ERROR` is a fault in what the agent was trying to do; this is the
+   * policy declining it outright. The distinction matters because only one of
+   * them is final: a permission failure may be resolved another way, a refused
+   * call cannot, so it must not be retried or replanned.
+   */
+  | "POLICY_DENIED";
 
 export class CoreError extends Error {
   readonly category: ErrorCategory;
