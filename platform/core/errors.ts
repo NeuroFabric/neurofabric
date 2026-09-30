@@ -31,12 +31,33 @@ export class CoreError extends Error {
    */
   readonly field?: string;
 
+  /**
+   * F-006 §2.3: the exit status of the command that failed, when one is known.
+   *
+   * Optional and fail-closed. Absent means the classifier has no exit
+   * information and behaves exactly as it did before, which is what keeps every
+   * existing call site — none of which supplies this — bit-for-bit unchanged.
+   */
+  readonly exitStatus?: number;
+  /**
+   * F-006 §2.3: the PROGRAM name that ran, e.g. `grep`. Never the command text.
+   *
+   * A command line carries paths and can carry credentials; an error object
+   * outlives the call and may be serialized, so only the bare program name is
+   * retained. That is all the classifier needs, and it leaves nothing here that
+   * a later reader would have to remember to redact.
+   */
+  readonly commandName?: string;
+
   override readonly name: string = "CoreError";
 
   constructor(
     category: ErrorCategory,
     message: string,
-    options: { retryable?: boolean; taskId?: string; stepId?: string; executionId?: string; cause?: unknown; field?: string } = {},
+    options: {
+      retryable?: boolean; taskId?: string; stepId?: string; executionId?: string;
+      cause?: unknown; field?: string; exitStatus?: number; commandName?: string;
+    } = {},
   ) {
     super(message);
     this.name = "CoreError";
@@ -47,6 +68,8 @@ export class CoreError extends Error {
     this.executionId = options.executionId;
     this.cause = options.cause;
     this.field = options.field;
+    this.exitStatus = options.exitStatus;
+    this.commandName = options.commandName;
   }
 }
 

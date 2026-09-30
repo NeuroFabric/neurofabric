@@ -34,6 +34,7 @@ import {
 } from "../core/index.ts";
 import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type RecoveryLimits } from "../core/index.ts";
 import { callSignature } from "../core/call-signature.ts";
+import { commandNameFrom, exitStatusFrom } from "../core/benign-exit.ts";
 import { vaultToolDescriptors, vaultToolsEnabled, type VaultWiring } from "./vault-tools.ts";
 
 export interface KernelAdapterOptions {
@@ -337,6 +338,21 @@ export class KernelAdapter {
   private readonly observedExecutionIds = new Set<string>();
   /** Output references declared at preflight, keyed by Pi toolCallId. */
   private readonly declaredOutputs = new Map<string, string[]>();
+  /**
+   * F-006 §2.3: the PROGRAM name of each in-flight shell call, keyed the same
+   * way, written at preflight and read-and-deleted at the record site.
+   *
+   * Why the preflight: Pi's `tool_call` is the only lifecycle event that carries
+   * the call's input, and the extension's own comment says so. The result event
+   * does not carry it, so the name has to be taken while it still exists. That is
+   * the whole reason this map exists, and it is the same shape as the
+   * denial-reason map above.
+   *
+   * Only the bare program name is stored, never the command text, which can
+   * carry paths and credentials. Delete-on-read is unconditional, so a name can
+   * never outlive its call.
+   */
+  private readonly toolCommandNames = new Map<string, string>();
   /**
    * Budget bands already warned about for the CURRENT task.
    *
@@ -801,6 +817,18 @@ export class KernelAdapter {
     const ownerTaskId = this.task.taskId;
     // Unknown tools are rejected here, before Pi executes anything.
     const tool = this.tools.get(toolName);
+    // F-006 §2.3: take the program name while the call's input still exists —
+    // `tool_call` is the only event that carries it. Written only when a name
+    // was actually read, so a repeated preflight cannot erase a good name.
+    //
+    // This does not contradict "side-effect free with respect to task state"
+    // above: nothing here moves the task, and a per-call note keyed by
+    // toolCallId is bookkeeping, not lifecycle. The same is true of the output
+    // references the extension declares from this very event.
+    if (toolCallId !== undefined) {
+      const name = commandNameFrom(input);
+      if (name !== undefined) this.toolCommandNames.set(toolCallId, name);
+    }
     // A task that policy has aborted, or that has already finished, may not
     // admit another call. This is what makes `on_violation: abort` stick: the
     // model can keep asking, and every request is refused.
@@ -1487,6 +1515,16 @@ export class KernelAdapter {
     const stepId = bound?.stepId ?? this.task.currentStep ?? "unknown";
     const tool = this.tools.get(toolName);
 
+    // F-006 §2.3: read the program name now and let it go. The deletion is
+    // unconditional and happens BEFORE every early return below, so a name can
+    // never outlive its call — including the stale-task and unbound-result
+    // returns, which is the same discipline the denial reason follows.
+    const commandName = this.toolCommandNames.get(toolCallId);
+    this.toolCommandNames.delete(toolCallId);
+    // Read only for a call that actually failed. A successful call's result is
+    // not an exit status, and a zero is not a non-zero exit.
+    const exitStatus = isError ? exitStatusFrom(payload) : undefined;
+
     // `=== true`, never truthiness: an absent, undefined or non-boolean value
     // must produce the same classification the hard-coded false always did.
     const retryable = isError && errorRetryable === true;
@@ -1576,7 +1614,7 @@ export class KernelAdapter {
       isError
         ? denied
           ? new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })
-          : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId })
+          : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId, exitStatus, commandName })
         : undefined,
       { violation },
     );

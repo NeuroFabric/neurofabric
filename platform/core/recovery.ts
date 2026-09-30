@@ -1,7 +1,19 @@
 import { CoreError } from "./errors.ts";
+import { isBenignNonZeroExit } from "./benign-exit.ts";
 import type { ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./types.ts";
 
-export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "POLICY_DENIED" | "UNKNOWN";
+export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "POLICY_DENIED"
+  /**
+   * F-006 §2.3: the command ran correctly and its answer is non-zero — a search
+   * that found nothing, a comparison that found a difference.
+   *
+   * A class of its own, not a flavour of `TOOL_FAILURE`, because it is the
+   * distinction the whole fix turns on: this outcome is not a fault, so it must
+   * not be recovered from, and folding it back into `TOOL_FAILURE` is exactly
+   * what let it spend the budget.
+   */
+  | "BENIGN_NONZERO_EXIT"
+  | "UNKNOWN";
 export type RecoveryStrategy = "RETRY" | "MODIFY_INPUT" | "ALTERNATE_TOOL" | "ALTERNATE_SKILL" | "REPLAN" | "ESCALATE" | "CONTINUE" | "TERMINATE";
 
 /**
@@ -60,7 +72,9 @@ export type RecoveryReason =
   | "STRATEGY_CHANGE_REPLAN"
   | "STRATEGY_BUDGET_EXHAUSTED"
   | "POLICY_DENIED_TERMINATED"
-  | "POLICY_SOFT_REFUSED";
+  | "POLICY_SOFT_REFUSED"
+  /** F-006 §2.3: an answer, not a fault. The failure is final; the task lives. */
+  | "BENIGN_NONZERO_EXIT_CONTINUED";
 
 export interface RecoveryDecision {
   strategy: RecoveryStrategy;
@@ -77,7 +91,20 @@ export function classifyFailure(error: unknown): FailureCategory {
     if (error.category === "POLICY_ERROR") return "PERMISSION";
     if (error.category === "VALIDATION_ERROR") return "VALIDATION_FAILURE";
     if (error.category === "MODEL_ERROR") return "MODEL_FAILURE";
-    if (error.category === "TOOL_ERROR") return error.retryable ? "TRANSIENT" : "TOOL_FAILURE";
+    if (error.category === "TOOL_ERROR") {
+      // F-006 §2.3: the exit status is examined BEFORE the classification, not
+      // after it. On `error.retryable` alone this mapped every non-zero exit to
+      // TRANSIENT or TOOL_FAILURE, and neither is retry-eligible, so a `grep`
+      // that found nothing spent a replan and two of them killed the task.
+      //
+      // The check is a table lookup on the program name and the code together,
+      // so it can only ever withhold a recovery decision from an outcome that is
+      // demonstrably an answer. A command outside the table, a code that means
+      // error for that command, and an absent exit status all fall through to
+      // the unchanged line below.
+      if (isBenignNonZeroExit(error.commandName, error.exitStatus)) return "BENIGN_NONZERO_EXIT";
+      return error.retryable ? "TRANSIENT" : "TOOL_FAILURE";
+    }
   }
   return "UNKNOWN";
 }
@@ -150,6 +177,18 @@ export function chooseRecoveryDetailed(options: {
   if (failure === "POLICY_DENIED") {
     if (options.violation === "block") return { strategy: "CONTINUE", reason: "POLICY_SOFT_REFUSED" };
     return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
+  }
+  // F-006 §2.3: the command answered, and the answer was "no". There is nothing
+  // to recover — a repeat would produce the same answer — so this is terminal as
+  // a FAILURE while the task goes on, and it books no budget at all.
+  //
+  // It sits ahead of the depth and budget guards for the same reason the denial
+  // does: terminating here "because the budget is gone" would blame a budget this
+  // outcome never touched, and would kill a task that was only ever looking for
+  // something. The wall-clock guard above still applies, because an exhausted
+  // clock is not this outcome's doing and no strategy can buy more time.
+  if (failure === "BENIGN_NONZERO_EXIT") {
+    return { strategy: "CONTINUE", reason: "BENIGN_NONZERO_EXIT_CONTINUED" };
   }
   if (depth >= limits.maxRecoveryDepth) return { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" };
   if (failure === "PERMISSION") return { strategy: "ESCALATE", reason: "PERMISSION_FAILURE_ESCALATED" };
