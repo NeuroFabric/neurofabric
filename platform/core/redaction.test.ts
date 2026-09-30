@@ -327,10 +327,11 @@ test("redactPreview bounds length without reintroducing unredacted text", () => 
   assert.ok(!preview.includes(SECRETS.openai));
 });
 
-test("redactToolCallId ensures uniform redaction for all uuid-like call IDs", () => {
+test("tool call ids survive redaction in both shapes (forensic correlation)", () => {
   const uuid = "call-550e8400-e29b-41d4-a716-446655440000";
   const legacy = "call_123456";
-  assert.equal(redactToolCallId(uuid), REDACTED);
-  assert.equal(redactToolCallId(legacy), REDACTED);
+  const out = redactPayload({ toolCallId: uuid, alt: legacy });
+  assert.equal(out.toolCallId, uuid);
+  assert.equal(out.alt, legacy);
 });
 
