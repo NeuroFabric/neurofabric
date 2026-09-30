@@ -527,6 +527,62 @@ classification site yet. Threading it is part of this defect, not a follow-on.
 **What the counter is now.** 2, and the second is first-party. The 82/94 census
 remains excluded, on the same reasoning as before: cause unestablished.
 
+#### The fix — `9bc4b75` on `fix/f006-benign-nonzero-exit`
+
+**Red first, measured.** Gate `B1`–`B10` written before any code change and run
+against the unfixed tree: **5 red, 5 green**. The five green ones were green
+*before* the fix and are required to stay green after — they are the guard on
+the obvious wrong fix, not the demonstration of the right one. After the change:
+**10 green**, and those same five are unchanged, which is the evidence that the
+retry-eligible set was not weakened.
+
+| Red before — the new behaviour | Green before and after — the guard on the wrong fix |
+|---|---|
+| `B1` a no-match is not classified `TOOL_FAILURE` | `B3` a genuine failure that exits 1 still is, and still replans |
+| `B2` a benign outcome books no budget at any counter state | `B4` the same command's *error* code is not benign |
+| `B6` the table outranks the `retryable` flag | `B5` an absent exit status changes nothing |
+| `B7` three ordinary no-matches leave the task alive | `B8` a genuine failure still spends budget exactly as before |
+| `B10` a structured exit code is honoured | `B9` a mid-text mention of the words is not an exit status |
+
+**One gate was corrected before it could mislead.** `B8` first asserted the
+benign/genuine split on task status. Both branches end in `PLANNING`, because a
+replan re-enters planning too, so the gate was **red for the wrong reason**: it
+would have failed a fix that worked and passed one that did nothing. The
+discriminators are the budget and the emitted event, and both are asserted now.
+Recorded because a red-first gate wrong in the direction of *staying red* costs a
+cycle, and one wrong in the direction of *staying green* costs the defect.
+
+**The shape of the fix, and why it is not smaller.** Three mechanisms, because
+the defect is three separate facts:
+
+1. `platform/core/benign-exit.ts` (new) — the table, and two readers that both
+   fail closed. `exitStatusFrom` prefers a structured numeric field and falls
+   back to the trailing annotation, over a walk **bounded in depth and count**,
+   for the same reason the path and destructive-command scans elsewhere in this
+   codebase are bounded: an unbounded walk of an untrusted payload is its own
+   defect.
+2. `CoreError` gains `exitStatus` and `commandName`. **Only the bare program name
+   is carried, never the command text**, which can hold paths and credentials
+   and which outlives the call on an object that may be serialized.
+3. `classifyFailure` examines the exit status **before** the classification, and
+   `chooseRecoveryDetailed` answers `BENIGN_NONZERO_EXIT` with `CONTINUE` ahead
+   of the depth and budget guards, so it books nothing and terminates nothing.
+
+**A correction to fact 3 above, because the first measurement was incomplete.**
+It is true that the command text is not forwarded *to the record site*. It is
+**not** true that threading it needed a new parameter or any change to the
+extension: `precheckToolCall` already receives the call's `input` and the
+`toolCallId`, the extension already passes both, and its own comment records that
+`tool_call` is the only event carrying the input. The name is taken at preflight
+and carried by id, in the shape the denial-reason map already uses. The first
+reading would have led to a signature change that was not needed.
+
+**Why the table is narrow, stated as a choice.** Each row is a command whose
+author defined a specific meaning for a specific code. `find` is absent on
+purpose — it exits 1 on *error*, not on "nothing found". The asymmetry is
+deliberate: a false negative costs the old behaviour, a false positive swallows a
+real failure. The table grows only by measurement.
+
 ---
 
 ## 3. WATCH — armed
@@ -605,7 +661,22 @@ defined in this section does not exist as work.**
 | 0 | D5 / `onViolation` divergence | **CLOSED — merged** | `f6c6bad` is in `origin/main`. Red-first gate `B4` is green in the corpus. |
 | 1 | Extractor precision | **PARTIALLY OPEN** | Shell-syntax half `7e5aeb9` is in `origin/main`. The argument-position hypothesis remains unpinned. |
 | 2 | Token guard scoping | **OPEN** | No branch carries it; not in `origin/main`. |
-| 3 | §2.3 benign non-zero exits | **OPEN — NEXT** | Exhibit and code-backed mechanism in §2.3, plus a **second, first-party death** and four measured design facts. Counter **2**. |
+| 3 | §2.3 benign non-zero exits | **FIXED, UNMERGED** | Red-first gate written before the change. Five gates red, five green; after the fix ten green and the five pre-existing guards unchanged. Full suite **515 pass, 0 fail, 2 skipped** (`npm test`, typecheck included). `9bc4b75`. |
+
+**Two side findings, cheap to record and not acted on.** Both are documentation
+defects rather than behaviour, and neither belongs to this defect class, so
+neither is fixed here — recorded so a later session does not re-derive them.
+
+- `platform/pi/f006-strategy-fund-pins.test.ts` declares its `FAILURES` list as
+  "every failure class the contract declares", and it does not: `POLICY_DENIED`
+  is absent, as is now `BENIGN_NONZERO_EXIT`. The omission is harmless for those
+  sweeps, which compare two calls of the same function, but the comment
+  overstates what is covered. Measured while checking whether a new category
+  would break them. It does not, because the list is hard-coded, not derived.
+- The provenance table's `main` row records `625e59f`, which is no longer any
+  ref in this repository. Stale in exactly the way the queue rows were, and
+  recorded here for the same reason: a stale figure in a ledger is a claim about
+  a tree that no longer exists.
 | 4 | C3b rebase | **CLOSED as a rebase** | `320937f` is in `origin/main`. Only a content assessment of C3b is owed, which is a review, not queued implementation. |
 | 5 | §2.4 / D4 path boundary | **CLOSED — both merged** | (b) via `f6c6bad`. (a) `b0ba4aa` on `fix/d4a-boundary-unescape`, **merged** — measured by `git merge-base --is-ancestor`, not read from prose. |
 | 6 | Glob prefix scope-check | **DONE, MERGED** | `af7dc24` on `fix/d4b-glob-prefix-scope`, **merged** as `bee71e0`. Gates `G1`/`G2`. The disclosed widening is on the operator's merge checklist by name (ruling 4); a merge in the tree is not evidence that the checklist item was ratified deliberately, and that question is the operator's to answer, not the tree's. |
