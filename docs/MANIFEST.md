@@ -160,10 +160,29 @@ steps are given so no judgment is required to act on them.
   on the branch; **not merged**, and the merge waits on the operator restart.
 - **Glob prefix scope-check is NOT built.** `A3` passes today because the
   boundary denies only genuinely out-of-root candidates; the prefix scoping
-  itself is not implemented.
-- Item 3 (§2.3 benign non-zero exits) has a live witness and stays queued.
-  **Counter discrepancy, unresolved:** the manifest records a live witness and
-  the operator count is 1, but the F006 §5 death-counter table still reads 0
-  for §2.3. Not reconciled here — the table is corrected only when the witness
-  is exhibited, not on the strength of a count.
-- Items 4–7 untouched.
+  itself is not implemented. Ordered directly by the operator; will be filed as
+  item 6 in the F006 §5 table when the work starts.
+- **§2.3 benign non-zero exits stays queued**, now with its exhibit. The
+  witness certificate is transcribed into F006 §2.3 and the death counter is
+  corrected from 0 to **1** — corrected by exhibit, not by count. The mechanism
+  is separately verified against `recovery.ts:14-15`, `:80` and `:214-215`.
+
+### The authoritative queue is F006 §5, not this manifest
+
+The item numbering used previously in this manifest is **superseded**.
+`docs/F006_LEDGER.md` §5 is the queue of record, with a status table measured
+2026-09-30 against `origin/main` @ `bfc22e8`. **Anything not defined in F006 §5
+does not exist as work.** As measured, that table holds:
+
+| # | Item | Status |
+|---|---|---|
+| 0 | D5 / `onViolation` divergence | CLOSED — merged (`f6c6bad`) |
+| 1 | Extractor precision | PARTIALLY OPEN — `7e5aeb9` merged; argument-position hypothesis unpinned |
+| 2 | Token guard scoping | OPEN |
+| 3 | §2.3 benign non-zero exits | OPEN — exhibit recorded |
+| 4 | C3b rebase | CLOSED — `320937f` merged; content assessment owed |
+| 5 | §2.4 / D4 path boundary | (b) CLOSED — merged; (a) DONE, unmerged (`b0ba4aa`) |
+
+Statuses were measured with `git branch -a --contains`, not read off prose.
+Work order as ruled: item 1's remaining half, then item 2, then item 3 — with the
+operator-ordered glob prefix scope-check ahead of them.
