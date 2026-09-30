@@ -172,11 +172,16 @@ function isPatternPosition(segment: PatternSegment, token: string): boolean {
 export type PathOperandKind = "schema" | "shell";
 
 /**
- * A backslash the SHELL consumed as an escape, rather than as a separator.
+ * A backslash in a SHELL operand is ambiguous, and both readings are checked.
  *
  * `notes/my\ file.md` is one operand naming one file; the boundary would
  * otherwise judge the six-character string `my\` and the spelling `file.md` as
  * two locations, neither of which is the one the shell resolves.
+ *
+ * `..\outside.txt` is the same character meaning the opposite thing: as a
+ * separator it is a traversal, and judging it as a literal in-root filename is
+ * how a traversal becomes invisible. Choosing one reading would be choosing
+ * which of the two failures to ship, so neither is chosen.
  *
  * A drive letter and a UNC prefix are the two forms where a backslash is
  * emphatically NOT an escape -- it separates path components -- so both are
@@ -203,11 +208,22 @@ const DRIVE_OR_UNC = /^(?:[a-zA-Z]:[\\/]|\\\\|\/\/)/;
 function addUnescapedSpelling(text: string, origin: string, into: Map<string, PathOperand>): void {
   if (DRIVE_OR_UNC.test(text)) return;
   if (!SHELL_ESCAPED.test(text)) return;
-  const unescaped = text.replace(/\\(.)/g, "$1");
-  if (unescaped === text || unescaped === "") return;
-  // Only a spelling that is still path-shaped is worth checking; anything else
-  // would be a new string the caller never wrote.
-  if (looksLikePath(unescaped)) into.set(unescaped, { value: unescaped, origin, kind: "shell" });
+  // Two readings of the same backslash, because the caller is not present to
+  // say which one it meant:
+  //
+  //   escape    -- the SHELL consumed it: `my\ file` is the operand `my file`.
+  //   separator -- it divides components:     `..\outside` is `../outside`.
+  //
+  // Neither reading can undo the other. The raw spelling is still in the set
+  // and is still checked, and these are only ever ADDED, so containment is
+  // evaluated on all three forms. A reading that turns out to be the wrong one
+  // therefore costs a redundant check; it can never cost a denial.
+  for (const reading of [text.replace(/\\(.)/g, "$1"), text.replace(/\\/g, "/")]) {
+    if (reading === "" || reading === text) continue;
+    // Only a spelling that is still path-shaped is worth checking; anything
+    // else would be a new string the caller never wrote.
+    if (looksLikePath(reading)) into.set(reading, { value: reading, origin, kind: "shell" });
+  }
 }
 
 export interface PathOperand {
