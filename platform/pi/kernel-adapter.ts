@@ -1345,12 +1345,25 @@ export class KernelAdapter {
    * never read. The refusal that matters reaches this method on a call whose
    * execution Pi had already begun, and the reason has to arrive with it.
    *
-   * EXTERNAL-WIRING LIMITATION, stated rather than papered over: no caller of
-   * `recordToolResult` exists in this repository outside the kernel and its
-   * tests, so which layer supplies `denialReason` cannot be proven here. Pi's
-   * `tool_execution_end` carries only a boolean `isError`; the bridge that
-   * reports a policy denial to this method must forward the reason for the
-   * fix to take effect on that path.
+   * EXTERNAL-WIRING LIMITATION, narrowed 2026-09-30 by measurement. A caller
+   * now exists: `.pi/extensions/platform-orchestrator.ts` forwards `reason` as
+   * this method's sixth positional argument, read back out of a per-taskId map
+   * at `tool_execution_end`.
+   *
+   * But the caller cannot deliver what it was built to deliver, and the reason
+   * is a guard on the other side of it. `beginToolExecution` refuses any id in
+   * `deniedToolCallIds` (:964), so a call refused at preflight binds no
+   * execution; `observeToolResult` then discards its result as
+   * `no_active_execution` before the reason is ever read. Measured, not
+   * inferred — `platform/pi/f006-denial-certificate-shape.test.ts` BRIDGE.1
+   * through BRIDGE.3 pin all three outcomes.
+   *
+   * So `denialReason` reaches this method only for a call that was ADMITTED,
+   * bound, and then failed carrying a policy reason. That path works and is
+   * pinned. The preflight path is inert, which means a policy refusal in
+   * production is still an ordinary tool error to the kernel, and still ends in
+   * a replan. Closing that needs a decision about what a blocked call's result
+   * is allowed to drive — a security-relevant change, not a wiring one.
    */
   async recordToolResult(
     toolCallId: string,
@@ -1372,10 +1385,14 @@ export class KernelAdapter {
     const retryable = isError && errorRetryable === true;
     // D1: a policy refusal arrives with the reason the policy actually gave.
     // No marker is consulted, because none is reachable: a preflight denial
-    // binds no execution, and `observeToolResult` discards any result whose
-    // execution is unbound, so a locally-denied call never reaches recovery at
-    // all. The reason therefore has to travel with the result, from whichever
-    // layer observed the refusal.
+    // binds no execution — `beginToolExecution` refuses any id in
+    // `deniedToolCallIds` (:964) — and `observeToolResult` discards any result
+    // whose execution is unbound, so a locally-denied call never reaches
+    // recovery at all. Confirmed by measurement, not assumed: BRIDGE.1-3 in
+    // `platform/pi/f006-denial-certificate-shape.test.ts`. The reason therefore
+    // has to travel with the result, from whichever layer observed the refusal.
+    // What that layer can actually reach is narrower than it looks — see the
+    // EXTERNAL-WIRING note on this method.
     const denied = isError && denialReason !== undefined;
     const actualDenialReason = denialReason;
     const declared = this.declaredOutputs.get(toolCallId) ?? [];
