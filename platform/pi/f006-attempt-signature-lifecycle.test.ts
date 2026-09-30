@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { KernelAdapter } from "./kernel-adapter.ts";
 import { toolDescriptorFromPi } from "./tool-adapter.ts";
 import { callSignature, stableStringify } from "../core/call-signature.ts";
+import { buildPolicy } from "./project-config.ts";
+import { parsePolicyConfig, type PolicyConfig } from "../core/policy-config.ts";
 import type { PolicyRequest } from "../core/types.ts";
 
 /**
@@ -30,6 +35,35 @@ const TOOLS = ["read", "bash", "write"].map((name) => toolDescriptorFromPi({ nam
 function newKernel(): KernelAdapter {
   const k = new KernelAdapter();
   k.registerTools(TOOLS);
+  return k;
+}
+
+/** A tool refused by name. No destructive construct is named anywhere. */
+const WITHHELD = "withheld_tool";
+
+const DENIAL_RULES = {
+  version: 1,
+  deniedTools: [WITHHELD],
+  allowedTools: [],
+  fileRules: [{ pattern: "**", read: "allow", write: "allow" }],
+  destructiveCommandPatterns: [],
+  destructiveCommandTokens: [],
+  limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
+  onViolation: "block",
+} as const;
+
+/**
+ * A kernel whose refusal is structural: the tool is named on `deniedTools`, so
+ * the denial does not depend on a destructive construct, on quoting, or on how
+ * a permissive policy happens to read command text. That is what makes C3.1b
+ * unable to go vacuous - see the test.
+ */
+async function deniedKernel(): Promise<KernelAdapter> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "nf-c3-"));
+  const policyConfig: PolicyConfig = parsePolicyConfig({ ...DENIAL_RULES }, "c3-denial-policy.json");
+  const k = new KernelAdapter();
+  k.setPolicy(buildPolicy({ policyMode: "TRUSTED_PROJECT", allowedRoots: ["."] }, dir, policyConfig));
+  k.registerTools([...TOOLS, toolDescriptorFromPi({ name: WITHHELD, description: WITHHELD })]);
   return k;
 }
 
@@ -71,10 +105,18 @@ test("C3.1b a call that binds no execution records nothing", async () => {
   // A refused call never ran, so it has no identity to repeat. Recording it
   // would make the next attempt look like a repeat of a call that never
   // happened, and would spend a strategy change on a fiction.
-  const k = newKernel();
+  //
+  // This now pins the refusal property it always claimed to pin. It previously
+  // offered a `rm` construct to a default policy, asserted nothing if that
+  // policy allowed the call, and so reported green while asserting nothing at
+  // all; what it reached was an approval gate, not a refusal. The denial is now
+  // structural - a tool named on `deniedTools` - so there is no ALLOW branch to
+  // escape into, and the precondition below makes a missing refusal a failure
+  // rather than a quiet pass.
+  const k = await deniedKernel();
   await k.beginTask("one");
-  const { decision } = await k.precheckToolCall("bash", "execute", { cmd: "rm -rf x" }, undefined, "d1");
-  if (decision.decision === "ALLOW") return; // tier policy allows bash: nothing to assert
+  const { decision } = await k.precheckToolCall(WITHHELD, "execute", { path: "notes.md" }, undefined, "d1");
+  assert.equal(decision.decision, "DENY", "precondition: the call really was refused");
   assert.equal(recorded(k), false, "a refused call records no signature");
 });
 
