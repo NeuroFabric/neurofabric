@@ -97,6 +97,25 @@ function isPattern(candidate: string): boolean {
 }
 
 /**
+ * The literal directory a pattern would have to enter before the shell expands
+ * it: everything up to and including the last separator that precedes the first
+ * magic character.
+ *
+ * `notes/*.txt` is scoped by `notes/`, because that is the directory the
+ * expansion is confined to. A pattern with no separator before its first magic
+ * character has no literal directory to be scoped by and yields the empty
+ * string; containment has already been decided on the full spelling by then, so
+ * the empty prefix carries no authority of its own.
+ */
+function literalPatternPrefix(value: string): string {
+  const magic = value.search(/[*?]/);
+  if (magic === -1) return value;
+  const before = value.slice(0, magic);
+  const cut = Math.max(before.lastIndexOf("/"), before.lastIndexOf("\\"));
+  return cut === -1 ? "" : value.slice(0, cut + 1);
+}
+
+/**
  * Every string in a write payload, at any depth, except values whose key is a
  * locator name.
  *
@@ -483,6 +502,27 @@ export class ConfiguredPolicy implements PolicyEngine {
       const resolved = verdict.resolvedPath ?? candidate;
       const relative = this.relativeToRoots(resolved);
       if (relative === undefined) continue; // inside a root, but not relativisable; containment already passed
+
+      // A glob names no file. Matching its PATTERN TEXT against a file rule is a
+      // coincidence of spelling rather than a permission -- `notes/*.txt` is
+      // refused by a rule shaped for markdown paths, which is a dead task for an
+      // enumeration that is plainly in scope -- so a pattern is judged on its
+      // literal PREFIX, the directory the expansion is confined to. Containment
+      // was already decided above, on the full spelling.
+      //
+      // A rule that DENIES the prefix still refuses, so scoping a pattern by its
+      // prefix cannot unbind a deny rule from the subtree the pattern sits in.
+      // An unmatched prefix is scoped by containment alone and does NOT fall
+      // through to the default-deny branch, which stays reserved for real
+      // locations: a pattern is not one.
+      if (isPattern(candidate)) {
+        const prefix = literalPatternPrefix(relative);
+        const scoped = this.matchRule(normalizeForMatch(prefix), writing);
+        if (scoped?.verdict === "deny") {
+          return `${where}: path rule '${scoped.pattern}' denies ${writing ? "write" : "read"} of '${prefix}'`;
+        }
+        continue;
+      }
 
       const matched = this.matchRule(normalizeForMatch(relative), writing);
       if (matched === undefined) {
