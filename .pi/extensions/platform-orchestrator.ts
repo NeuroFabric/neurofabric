@@ -105,7 +105,8 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
         return (await ctx.ui.confirm("Neurofebric policy approval", prompt)) === true;
       });
 
-    const { decision } = await kernel.precheckToolCall(event.toolName, "execute", event.input, approval, event.toolCallId);
+    const decision = await kernel.precheckToolCall(event.toolName, "execute", event.input, approval, event.toolCallId);
+    
     // Capture the output references this call declares so they can be verified
     // once Pi reports the result. `tool_call` is the only lifecycle event that
     // carries the tool input.
@@ -113,19 +114,23 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     record("policy_decision", {
       tool: event.toolName,
       toolCallId: event.toolCallId,
-      decision,
+      decision: decision.decision,
       // `violation` is present ONLY when policy actually evaluated the call and
       // escalated the denial. A terminal-state refusal carries `refusal` instead:
       // nothing was evaluated, so no rule was broken. The two must never be
       // conflated, and there is deliberately no `?? "block"` fallback.
-      violation: decision.decision === "DENY" ? decision.violation : undefined,
-      refusal: decision.decision === "DENY" ? decision.refusal : undefined,
+      violation: decision.decision.decision === "DENY" ? decision.decision.violation : undefined,
+      refusal: decision.decision.decision === "DENY" ? decision.decision.refusal : undefined,
       declaredOutputs: declared.length,
       taskStatus: kernel.currentTask.status,
+      // Augment refusal with model metadata when available.
+      ...(decision.decision.decision === "DENY" && decision.decision.refusal === "task_terminal"
+        ? { responseId: event.responseId, responseModel: event.responseModel }
+        : {}),
     });
-    if (decision.decision !== "ALLOW") {
+    if (decision.decision.decision !== "ALLOW") {
       // `decision.reason` is present on both DENY and REQUIRE_APPROVAL.
-      return { block: true, reason: decision.reason };
+      return { block: true, reason: decision.decision.reason };
     }
     return undefined;
   });
