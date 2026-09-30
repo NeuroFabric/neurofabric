@@ -283,6 +283,48 @@ test("N8 MUST-DENY: an out-of-root glob under a read tool is a hard violation", 
 });
 
 /**
+ * G1 (MUST-PASS, red-first). An in-root glob is scoped by its literal prefix.
+ *
+ * `notes/*.txt` names no file, so matching the PATTERN TEXT against a rule
+ * shaped for markdown paths is a coincidence of spelling rather than a
+ * permission. Today that text simply fails to match, and the call falls through
+ * to the default-deny branch: a dead task for an enumeration that is plainly
+ * inside the root. N6 does not catch this, because it runs under the catch-all
+ * where every in-root spelling matches by accident.
+ */
+test("G1 MUST-PASS: an in-root glob is allowed when only its prefix is in scope", () => {
+  const decision = configured(true).evaluate(request(lsTool, { path: "notes/*.txt" }));
+  assert.equal(decision.decision, "ALLOW", `in-root glob was refused: ${decision.reason ?? ""}`);
+});
+
+/**
+ * G2 (MUST-DENY, the guard against the obvious wrong fix).
+ *
+ * Skipping the rule matcher for a pattern is the cheap way to turn G1 green and
+ * it is wrong: it would let a glob enumerate a subtree a rule DENIES, because
+ * the deny would never be consulted. Scoping a glob by its literal prefix must
+ * not unbind a deny rule from the subtree the glob sits in.
+ *
+ * GREEN today, and it must stay green after the fix. If a change to G1 turns
+ * this red, that change opened a hole and is not a fix.
+ */
+test("G2 MUST-DENY: a glob inside a denied subtree is still refused", () => {
+  const policy = new ConfiguredPolicy(
+    parsePolicyConfig({
+      version: 1,
+      onViolation: "block",
+      fileRules: [{ pattern: "secrets/**", read: "deny", write: "deny" }],
+      destructiveCommandPatterns: [],
+      destructiveCommandTokens: [],
+      limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
+    }, "path-boundary-corpus.json"),
+    { mode: "TRUSTED_PROJECT", base: new DefaultPolicy(), allowedRoots: [root()] },
+  );
+  const decision = policy.evaluate(request(lsTool, { path: "secrets/*.txt" }));
+  assert.equal(decision.decision, "DENY", "a glob enumerated a subtree that a rule denies");
+});
+
+/**
  * B1 (MUST-DENY, §2.1 gate — unchanged). The existing deny set, carried here so
  * precision work cannot quietly relax a guardrail. A MUST-DENY that denies for
  * the wrong reason is a silent regression, so each asserts the specific rule.

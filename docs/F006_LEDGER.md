@@ -417,6 +417,55 @@ can exhaust the budget without ever being blocked by anything.
 **Next step.** Investigate and propose only (§5, item 3). This changes recovery
 semantics and does not merge without explicit sanction.
 
+#### Exhibit — the witnessed death, transcribed
+
+**One session died to this class.** The terminal certificate, as supplied by the
+operator from that session's death report:
+
+```
+Recovery TERMINATE [REPLAN_BUDGET_EXHAUSTED]: failure=TOOL_FAILURE, replanCount=2/2, retryCount=0/2
+```
+
+**Provenance of the exhibit, stated precisely.** The death report itself is
+**not in this repository** — measured this session by searching
+`.session-archive/`, `verification/findings/` and the tree for the certificate
+string. The one certificate-shaped string the repository does contain,
+`verification/findings/F-006-edit-failures-terminate-task.md:48`, is prefixed
+`e.g.` and illustrates the `describeTerminalRecovery` format rather than
+capturing an event. The certificate above is therefore transcribed from the
+operator's record and is labelled as operator-supplied, not as something
+verified in-repo.
+
+**The mechanism is verified in-repo, and was read in order to write this entry.**
+It is not inferred from the certificate:
+
+| # | Site | What it does |
+|---|---|---|
+| a | `platform/core/recovery.ts:14-15` | `RETRY_ELIGIBLE` is exactly `TRANSIENT`, `TIMEOUT`, `RATE_LIMIT`, `MODEL_FAILURE`. `TOOL_FAILURE` is **not** in it, so a tool failure is never retry-eligible by category. |
+| b | `platform/core/recovery.ts:80` | `classifyFailure` maps a `TOOL_ERROR` to `TRANSIENT` or `TOOL_FAILURE` on `error.retryable` alone. |
+| c | `platform/core/recovery.ts:214-215` | Having missed the retry-eligible set and the two dedicated rows above it, `repeatAttemptDecision` falls through to `GENERIC_REPLAN` while `replanCount < maxReplans`, then returns `TERMINATE` / `REPLAN_BUDGET_EXHAUSTED`. |
+
+That chain reproduces the certificate's shape exactly, `replanCount=2/2`
+included: an ordinary non-zero exit becomes `TOOL_FAILURE`, is not
+retry-eligible, spends the replan budget on replans that cannot help it, and
+terminates. **Nothing in the code distinguishes a search with no match from a
+command that genuinely failed.** The exit status is the only signal available and
+it is not examined.
+
+**Corroboration, independently measured in-repo.** F-006's event-level sweep
+records 94 non-supersession `TASK_FAILED` entries across 54 session files, 82 of
+them (87%) replan-budget exhaustion by `TOOL_FAILURE`, and states that all 41
+structured-era certificates carry `retryCount=0/2` beside `replanCount=2/2` —
+the retry budget was never spent, because the category is not retry-eligible.
+That is a separate observation from the exhibit and it agrees with it.
+
+**What the counter is and is not.** This row is 1 because a specific death was
+witnessed and its certificate recorded. It is not 1 because a number was
+asserted, and the 82/94 census above is explicitly **not** counted here: those
+are replan exhaustions whose cause is not established to be a benign exit, and
+§2.5 records that a certificate naming `TOOL_FAILURE` does not by itself
+identify which mechanism produced it.
+
 ---
 
 ## 3. WATCH — armed
@@ -484,11 +533,30 @@ misreading of a stale local ref; the lesson is in §6.
 Each item is corpus-first, on its own branch, full suite green before push.
 **No merges without operator sanction.**
 
-0. **D5 / onViolation divergence.** See §2.5. Highest priority: a sufficient
-   cause for every `POLICY_DENIED` death, and the reason two consecutive
-   sessions died while queued to fix other defects. Red-first gate: a test
-   asserting a `block` violation received as a **tool result** leaves the task
-   running, which today terminates. Corpus-first, then the thread-through.
+#### Queue status — measured 2026-09-30, `origin/main` @ `bfc22e8`
+
+Measured with `git branch -a --contains <sha>`, not inferred from prose. This
+table supersedes any item numbering used outside this file; **anything not
+defined in this section does not exist as work.**
+
+| # | Item | Measured status | Evidence |
+|---|---|---|---|
+| 0 | D5 / `onViolation` divergence | **CLOSED — merged** | `f6c6bad` is in `origin/main`. Red-first gate `B4` is green in the corpus. |
+| 1 | Extractor precision | **PARTIALLY OPEN** | Shell-syntax half `7e5aeb9` is in `origin/main`. The argument-position hypothesis remains unpinned. |
+| 2 | Token guard scoping | **OPEN** | No branch carries it; not in `origin/main`. |
+| 3 | §2.3 benign non-zero exits | **OPEN** | Exhibit and code-backed mechanism in §2.3. Counter 1. |
+| 4 | C3b rebase | **CLOSED as a rebase** | `320937f` is in `origin/main`. Only a content assessment of C3b is owed, which is a review, not queued implementation. |
+| 5 | §2.4 / D4 path boundary | **(b) CLOSED — merged.** (a) **DONE, UNMERGED** | (b) via `f6c6bad`. (a) is `b0ba4aa` on `fix/d4a-boundary-unescape`, pushed, merge gated on the operator restart. |
+
+**Work order, as ruled:** item 1's remaining half, then item 2, then item 3.
+
+**Operator-ordered work not numbered here:** the glob prefix scope-check, ordered
+directly. It is authorised, and its boundary statement lives in the `N6` gate
+rather than in this table; it is recorded as item 6 when the work is filed so
+that this table remains the single queue.
+
+0. **D5 / onViolation divergence.** **CLOSED — merged at `f6c6bad`.** Retained
+   below for the decision record, not as open work. §2.5 for the mechanism.
 
 ### Death counter — sessions lost per defect class
 
@@ -500,7 +568,7 @@ rather than defended.
 |---|---|---|
 | Path-boundary false DENY / out-of-root scratch (§2.4) | **2** | Sessions 1 and 2 of this log; both died on a `path boundary violation` |
 | `onViolation` dropped on the result path (§2.5) | **2** | The **same two sessions** — the counter is per class, not per session, and the overlap is the finding |
-| Benign non-zero exit (§2.3) | 0 | No session has died to it yet |
+| Benign non-zero exit (§2.3) | **1** | Witnessed death, certificate transcribed above. Was 0 pending the exhibit. |
 | Token guard over-breadth (§2.2) | 0 | Not measured live |
 
 **Session proof, 2026-09-30.** This session added **zero deaths and zero rows** to
