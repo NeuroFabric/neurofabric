@@ -11,7 +11,7 @@ export type PlatformEvent =
   // Budget telemetry. Neither can deny anything or move a task: they exist so a
   // task that is running low, or repeating the same call, is visible in the
   // trace BEFORE the terminal limit denial (F-008).
-  | "BUDGET_LOW" | "TOOL_CALL_REPEATED";
+  | "BUDGET_LOW" | "TOOL_CALL_REPEATED" | "LIFECYCLE_REFUSED";
 
 export interface PlatformEventRecord {
   eventId: string;
