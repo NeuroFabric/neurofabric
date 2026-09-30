@@ -151,7 +151,10 @@ test("every refusal is a TASK_ERROR, whatever the cause", () => {
   for (const [label, from, to, pattern] of cases) {
     assert.throws(
       () => transitionTask(fresh(from), to),
-      (error: unknown) => isTaskError(error) && pattern.test(error.message),
+      // `instanceof` narrows `unknown` for the compiler. `isTaskError` is a
+      // runtime predicate, not a type guard, so it cannot do this on its own,
+      // and the previous form relied on it narrowing anyway.
+      (error: unknown) => error instanceof Error && isTaskError(error) && pattern.test(error.message),
       `${label} must be refused`,
     );
   }
