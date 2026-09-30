@@ -171,6 +171,61 @@ function isPatternPosition(segment: PatternSegment, token: string): boolean {
 /** How an operand was discovered. Useful in traces and in operator-facing errors. */
 export type PathOperandKind = "schema" | "shell";
 
+/**
+ * A backslash in a SHELL operand is ambiguous, and both readings are checked.
+ *
+ * `notes/my\ file.md` is one operand naming one file; the boundary would
+ * otherwise judge the six-character string `my\` and the spelling `file.md` as
+ * two locations, neither of which is the one the shell resolves.
+ *
+ * `..\outside.txt` is the same character meaning the opposite thing: as a
+ * separator it is a traversal, and judging it as a literal in-root filename is
+ * how a traversal becomes invisible. Choosing one reading would be choosing
+ * which of the two failures to ship, so neither is chosen.
+ *
+ * A drive letter and a UNC prefix are the two forms where a backslash is
+ * emphatically NOT an escape -- it separates path components -- so both are
+ * excluded. `\\\\` and `//` open a UNC path; `[a-zA-Z]:` opens a drive path.
+ * Neither is rewritten, because rewriting them would produce a second spelling
+ * of a path the caller never asked a second question about.
+ */
+const SHELL_ESCAPED = /\\(?![\\/])/;
+const DRIVE_OR_UNC = /^(?:[a-zA-Z]:[\\/]|\\\\|\/\/)/;
+
+/**
+ * Add the shell-resolved spelling of `text` as an ADDITIONAL candidate.
+ *
+ * ADDITIVE BY CONSTRUCTION, which is the entire safety argument: a candidate
+ * added to the set can only produce another denial, never remove one. The raw
+ * spelling stays in the set and is still checked, so containment is evaluated on
+ * the raw form AND the resolved form, and the fix can only ever tighten the
+ * boundary. This is the same shape as the percent-decode below it, which adds a
+ * decoded spelling for the same reason.
+ *
+ * Only SHELL operands reach here. A structured `path` field is data: no shell
+ * ever saw it, so there is no shell reading of it to resolve toward.
+ */
+function addUnescapedSpelling(text: string, origin: string, into: Map<string, PathOperand>): void {
+  if (DRIVE_OR_UNC.test(text)) return;
+  if (!SHELL_ESCAPED.test(text)) return;
+  // Two readings of the same backslash, because the caller is not present to
+  // say which one it meant:
+  //
+  //   escape    -- the SHELL consumed it: `my\ file` is the operand `my file`.
+  //   separator -- it divides components:     `..\outside` is `../outside`.
+  //
+  // Neither reading can undo the other. The raw spelling is still in the set
+  // and is still checked, and these are only ever ADDED, so containment is
+  // evaluated on all three forms. A reading that turns out to be the wrong one
+  // therefore costs a redundant check; it can never cost a denial.
+  for (const reading of [text.replace(/\\(.)/g, "$1"), text.replace(/\\/g, "/")]) {
+    if (reading === "" || reading === text) continue;
+    // Only a spelling that is still path-shaped is worth checking; anything
+    // else would be a new string the caller never wrote.
+    if (looksLikePath(reading)) into.set(reading, { value: reading, origin, kind: "shell" });
+  }
+}
+
 export interface PathOperand {
   value: string;
   /** The argument or field the operand came from. */
@@ -397,6 +452,7 @@ function extractFromCommand(command: string, origin: string, into: Map<string, P
     }
     if (looksLikePath(text)) {
       into.set(text, { value: text, origin, kind: "shell" });
+      addUnescapedSpelling(text, origin, into);
       continue;
     }
 

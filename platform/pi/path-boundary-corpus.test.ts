@@ -7,6 +7,7 @@ import { ConfiguredPolicy, DefaultPolicy, TrustedProjectPolicy } from "../core/i
 import { parsePolicyConfig, type PolicyConfig } from "../core/policy-config.ts";
 import { chooseRecoveryDetailed } from "../core/recovery.ts";
 import { DEFAULT_LIMITS } from "../core/limits.ts";
+import { scanToolPathCandidates } from "../core/tool-paths.ts";
 import type { PolicyRequest, ToolDescriptor } from "../core/types.ts";
 
 /**
@@ -175,8 +176,111 @@ test("A3 MUST-PASS: an in-root glob is allowed", () => {
 });
 
 // ===========================================================================
-// SECTION B — what the refusal does to the task
+// SECTION N — the boundary judges the spelling (the unbuilt §2.4(a) fix)
 // ===========================================================================
+
+/**
+ * Section A's gates pass against UNFIXED behaviour, so they prove nothing about
+ * this fix and are not allowed to stand as its evidence. These gates assert the
+ * FIXED behaviour and are written to be host-INDEPENDENT, so they mean the same
+ * thing on Windows and on POSIX.
+ *
+ * The fix is additive: a shell operand carrying a shell escape contributes its
+ * UNESCAPED spelling as an ADDITIONAL candidate, never as a replacement. The raw
+ * spelling is still checked. That direction is the whole safety argument -- a
+ * candidate added to the set can only ever produce another denial, never remove
+ * one -- so the boundary itself is not modified at all.
+ */
+
+/** Candidate spellings the scanner produced for one shell command. */
+function candidatesFor(command: string): string[] {
+  return scanToolPathCandidates(
+    { name: "bash", inputSchema: { type: "object", properties: { command: { type: "string" } } } },
+    { command },
+  ).candidates;
+}
+
+/**
+ * N1 (MUST-PASS, red-first). An escaped shell operand contributes BOTH readings.
+ *
+ * RED against unmodified code: only the raw spelling is produced today, which is
+ * why `..\outside.txt` is a literal in-root filename on POSIX and the traversal
+ * is invisible. Host-independent, so it is meaningful here.
+ */
+test("N1 MUST-PASS: an escaped shell operand yields its raw and unescaped spellings", () => {
+  const found = candidatesFor("cat " + ESCAPED_TRAVERSAL);
+  assert.ok(found.includes(ESCAPED_TRAVERSAL), `raw spelling dropped: ${JSON.stringify(found)}`);
+  assert.ok(found.includes("../outside.txt"), `unescaped spelling absent: ${JSON.stringify(found)}`);
+});
+
+/**
+ * N2 (MUST-DENY). A drive letter is a SEPARATOR, not an escape.
+ *
+ * `C:\Users\x` unescaped to `C:/Users/x` would be a second spelling of the same
+ * absolute path. It happens to be harmless, but "happens to be harmless" is not
+ * a reason to rewrite a drive path, and a UNC prefix is the same case. Neither
+ * spelling is added.
+ */
+test("N2 MUST-DENY: a drive-letter operand is not unescaped", () => {
+  const found = candidatesFor("type " + "C:\\Users\\someone\\notes.md");
+  assert.deepEqual(found, ["C:\\Users\\someone\\notes.md"], `a drive path was rewritten: ${JSON.stringify(found)}`);
+});
+
+test("N3 MUST-DENY: a UNC operand is not unescaped", () => {
+  const found = candidatesFor("type " + "\\\\server\\share\\notes.md");
+  assert.deepEqual(found, ["\\\\server\\share\\notes.md"], `a UNC path was rewritten: ${JSON.stringify(found)}`);
+});
+
+/**
+ * N4 (MUST-DENY). A SCHEMA operand is never unescaped.
+ *
+ * A structured `path` field is data, not shell text. The shell never saw it, so
+ * there is no shell reading of it to resolve toward, and inventing one would let
+ * a caller smuggle a second spelling past the boundary by choosing a backslash.
+ */
+test("N4 MUST-DENY: a schema path operand is not unescaped", () => {
+  const found = scanToolPathCandidates(
+    { name: "read", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
+    { path: "notes\\my file.md" },
+  ).candidates;
+  assert.deepEqual(found, ["notes\\my file.md"], `a schema operand was rewritten: ${JSON.stringify(found)}`);
+});
+
+/**
+ * N5 (MUST-PASS). The fix must not introduce the false DENY it was meant to end.
+ *
+ * An in-root escaped path is allowed under BOTH spellings, so adding a candidate
+ * costs nothing here. This is the gate that would catch a fix which replaced the
+ * raw spelling instead of supplementing it, or which unescaped too eagerly.
+ */
+test("N5 MUST-PASS: an in-root escaped path is still allowed after the fix", () => {
+  const decision = configured(true).evaluate(request(bashTool, { command: `cat ${ESCAPED_IN_ROOT}` }));
+  assert.equal(decision.decision, "ALLOW", `in-root escaped path was refused: ${decision.reason ?? ""}`);
+});
+
+/**
+ * N6 (MUST-DENY). A glob is a PATTERN and is not matched against file rules.
+ *
+ * `notes/*.md` names no file. Matching it against a rule shaped for real
+ * markdown paths is a coincidence of spelling, not a permission, so the rule
+ * matcher is not consulted for a pattern: the glob is scope-checked by its
+ * literal prefix and nothing else.
+ */
+test("N6 MUST-PASS: an in-root glob is scoped by prefix, not matched against file rules", () => {
+  const decision = configured(true).evaluate(request(lsTool, { path: "notes/*.md" }));
+  assert.equal(decision.decision, "ALLOW", `in-root glob was refused: ${decision.reason ?? ""}`);
+});
+
+test("N7 MUST-DENY: an out-of-root glob is still refused", () => {
+  const decision = configured().evaluate(request(lsTool, { path: "../../*" }));
+  assert.equal(decision.decision, "DENY", "an out-of-root glob was permitted");
+});
+
+test("N8 MUST-DENY: an out-of-root glob under a read tool is a hard violation", () => {
+  const decision = configured().evaluate(request(readTool, { path: "../../*.md" }));
+  assert.equal(decision.decision, "DENY", "an out-of-root glob was permitted to a read tool");
+  assert.equal(decision.refusal, undefined, "a read inherited the enumeration class");
+});
 
 /**
  * B1 (MUST-DENY, §2.1 gate — unchanged). The existing deny set, carried here so
