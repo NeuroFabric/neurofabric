@@ -1237,6 +1237,99 @@ guard before writing the message. Commit `b0a8cdf` on
    alternative, quietly restoring a file to its committed state, is exactly
    the shape of the undisclosed-work hazard this session opened with.
 
+10. **The 2026-10-01 session death — MEASURED. The premise is REFUTED, and
+    the real cause is one `git` exit code.**
+    Filed 2026-10-01, session `2026-10-01T08-33-49-295Z_01a0f699…jsonl`,
+    task `bdb479c6-2337-4d72-a995-3c73c2f9efd8`. Transcript line numbers below
+    are lines of that file.
+
+    **The claim that was to be confirmed: the task died of
+    `REPLAN_BUDGET_EXHAUSTED` / `failure=TOOL_FAILURE` *after two
+    deletion-guard denials*, because a `POLICY_DENIED` collapsed to
+    `TOOL_FAILURE` at the `ValidationResult` boundary. It did not happen. The
+    denials are exonerated, and the collapse is confirmed present and
+    confirmed harmless-in-this-death.**
+
+    **The denials — exonerated by the trace.** Three policy denials occurred.
+    All three were classified `POLICY_DENIED`, answered `CONTINUE` /
+    `POLICY_SOFT_REFUSED`, and emitted `SOFT_REFUSAL_CONTINUED` carrying the
+    policy's own reason verbatim. **Every one left `replanCount=0`,
+    `retryCount=0`, `recoveryDepth=0`. Not one of them spent a unit of any
+    budget.** They are the reversal working, not failing:
+
+    | line | time | denial | outcome |
+    |---|---|---|---|
+    | 56 | 08:34:37 | path boundary, `/tmp/commit.diff` | `CONTINUE`, `replanCount=0` |
+    | 88 | 08:34:45 | deletion guard, `rm` (compound) | `CONTINUE`, `replanCount=0` |
+    | 527 | 08:39:25 | deletion guard, `rm` (standalone) | `CONTINUE`, `replanCount=0` |
+
+    **The collapse is real, and it is exactly where Candidate A said.** Line
+    527 emits, in order: `APPROVAL_DENIED` → `policy_decision DENY` →
+    `TOOL_FAILED` → **`VALIDATION_FAILED {"status":"INVALID","validator":
+    "pi-result","message":"…destructive command 'rm' is denied…"}`**, and only
+    then `RECOVERY_STARTED {failure: "POLICY_DENIED"}`. The `ValidationResult`
+    and the recovery classification disagree about the same event. Source:
+    `platform/pi/kernel-adapter.ts:1270` builds `INVALID`/`pi-result` from
+    `!result.success` alone, with no reference to whether `error` is a
+    `CoreError` carrying `POLICY_DENIED`; the correct classification is
+    recovered 50 lines later at `:1320` from `classifyFailure(error)`, on a different
+    object. **So the premise's mechanism is real — it simply did not kill this
+    task.** Recovery reads the `CoreError`, not the `ValidationResult`, so it
+    classified every denial correctly. Consistent with item 8's own note that
+    this collapse is **latent**: the only in-repo caller discards the returned
+    `ValidationResult`.
+
+    **What actually spent the budget** — three events, none of them a denial,
+    and only the first of them independent:
+
+    | line | time | event | cost |
+    |---|---|---|---|
+    | 602 | 08:40:19 | `git switch -c docker-ui-scaffold 12c89d5` → **`fatal: a branch named 'docker-ui-scaffold' already exists`, exit 128** | replan #1 |
+    | 711 | 08:41:28 | `edit` writes `c1-replanning-stored-failure.test.ts` → `ARTIFACT_INVALID`, *"artifact does not exist"* | replan #2 |
+    | 841 | 08:44:20 | `read Dockerfile` + `read docker-compose.yml`, bound as **siblings** → `ENOENT` ×2 | **TERMINATE** |
+
+    **One root cause, and it is trivial.** The branch already existed because
+    a prior session had created it. `git switch -c` on an existing branch is
+    a benign, exit-128, zero-information failure — the correct response is
+    `git switch docker-ui-scaffold`, one token different. Because the `switch`
+    failed, the task stayed on `fix/f006-post-reversal-ledger`, where those
+    two files do not exist; the ENOENT reads are the **echo of failure #1**,
+    not an independent fault, and `joiningSibling: true` is visible at line
+    838. The death is a single `git` error that spent two replans and then
+    the task.
+
+    **The one genuinely surprising event.** Line 711 marks the harness's *own
+    just-written output* `INVALID`: *"artifact does not exist at …/
+    c1-replanning-stored-failure.test.ts"*. The file **does** exist
+    (`platform/pi/c1-replanning-stored-failure.test.ts`, 12,440 bytes,
+    committed at `28800c2`). So a successful write was declared a failed
+    artifact — a read-after-write race between the edit and artifact
+    verification, charging a replan for a write that landed. This is a **new
+    defect, distinct from every item in this ledger**, and it is not yet
+    characterised: single-sample, cause not isolated between "verification ran
+    before the write was durable" and "the write raced a branch switch (the
+    task was switching branches mid-session at exactly this point)". It is
+    **filed, not diagnosed**, and it is the highest-value target in this
+    entry because it is the only observed case where the harness rejected its
+    own correct work.
+
+    **The finding that survives, and it is F-006's own headline.** A benign
+    fault with no chance of success on retry consumed an entire task, while
+    the retry budget sat untouched at `0/2` and `recoveryDepth` never exceeded
+    `1/3`. The three failures are in three unrelated domains — a `git` branch
+    name, an artifact write, a file read — and recovery spends **one shared
+    replan budget** across all of them. Nothing here is a D1 defect. This is
+    §2.3 (benign non-zero exits spend recovery budget), reproduced on a `git`
+    exit code instead of an application exit code, with a fatal outcome
+    instead of a replan.
+
+    **Consequences for the queue, stated because the fix order rested on the
+    refuted premise.** P1 (caller-boundary validator threading) is **not
+    promoted by this death** and its own gate is not met. It remains a real
+    boundary defect, measured at `kernel-adapter.ts:1270` and confirmed
+    *latent*, and it should be taken when taken — as its own review cycle, on
+    its own merits, not as the fix for a death it did not cause.
+
 ---
 
 ## 6. DEBT
