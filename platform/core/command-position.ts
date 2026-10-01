@@ -142,6 +142,19 @@ export interface CommandPositionResult {
    */
   readonly commandTokens: ReadonlySet<string>;
   /**
+   * Tokens that would be DELEGATED TO by an unmeasured wrapper -- that wrapper's
+   * first bare operand, with option values skipped.
+   *
+   * This is R6's whole content, and it is deliberately narrower than "any token
+   * under an unmeasured program". An unmeasured program might be a wrapper that
+   * runs its first operand, or a leaf command that merely prints it; nothing
+   * measurable here says which. The ruling fails closed, but only for the
+   * operand a wrapper would actually hand control to. Widening it to every
+   * operand would make a commit message hard and undo payload tiering, because
+   * a VCS wrapper's operands include the message text.
+   */
+  readonly delegatedTokens: ReadonlySet<string>;
+  /**
    * Per-segment exemptions. A compound command is several command lines joined
    * by `;`, `|` or `&&`, and each is judged on its own: a segment that could
    * not be understood forfeits only its OWN exemptions, never a sibling's.
@@ -172,6 +185,35 @@ type Unclassified = { classified: false; reason: string; commandTokens: Readonly
  * from every recursive step below it.
  */
 type SegmentParse = { patternTokens: Set<string>; commandTokens: Set<string>; classified: true };
+
+/**
+ * The first bare operand after an unmeasured head: the program such a wrapper
+ * would delegate to.
+ *
+ * Option values are skipped on the POSIX convention that `-X` consumes the next
+ * token. That convention is NOT measured for an unmeasured program -- nothing
+ * about it can be from this host -- so this is an approximation. It fails in the
+ * safe direction in the case that matters: a wrapper given `-u root` skips the
+ * value and still reaches its command. It UNDER-detects in the opposite case,
+ * where an option genuinely takes no value and one operand too many is skipped.
+ * That gap is recorded rather than papered over; closing it properly needs the
+ * measurement host to move to Linux, which is Task 2.
+ */
+function delegatedOperand(tokens: readonly string[], start: number): string | undefined {
+  let index = start;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token === "--") return tokens[index + 1];
+    if (token.startsWith("-")) {
+      // An attached value (`-u=root`) has nothing after it to skip.
+      if (token.includes("=")) { index += 1; continue; }
+      index += 2;
+      continue;
+    }
+    return token;
+  }
+  return undefined;
+}
 
 /** Split on the operators that separate one command from the next. */
 function splitSegments(text: string): string[] {
@@ -301,6 +343,7 @@ function parseTokens(
   depth: number,
   patternTokens: Set<string>,
   commandTokens: Set<string>,
+  delegatedTokens: Set<string>,
 ): SegmentParse | Unclassified {
   if (depth > MAX_SECURITY_SCAN_DEPTH) {
     return { classified: false, reason: `command nesting exceeds the depth cap of ${MAX_SECURITY_SCAN_DEPTH}`, commandTokens };
@@ -321,7 +364,7 @@ function parseTokens(
     // The payload's own segments are not surfaced here: only the shared union
     // accumulators matter to this step, and the top-level `parseCommandLine`
     // owns the per-segment view.
-    const nested = parseCommandLine(payload, depth + 1, patternTokens, commandTokens);
+    const nested = parseCommandLine(payload, depth + 1, patternTokens, commandTokens, delegatedTokens);
     if (!nested.classified) return { classified: false, reason: nested.reason ?? "unclassified payload", commandTokens };
     return { patternTokens, commandTokens, classified: true };
   }
@@ -344,7 +387,7 @@ function parseTokens(
         // Measured: find reports "missing argument to '-exec'" in this shape.
         return { classified: false, reason: `'${tokens[i]}' has no terminator`, commandTokens };
       }
-      const nested = parseTokens(body, depth + 1, patternTokens, commandTokens);
+      const nested = parseTokens(body, depth + 1, patternTokens, commandTokens, delegatedTokens);
       if (!nested.classified) return nested;
     }
     return { patternTokens, commandTokens, classified: true };
@@ -370,13 +413,20 @@ function parseTokens(
 
   // A wrapper's command operand may itself be a wrapper: `timeout 5 xargs rm`.
   if (COMMAND_WRAPPERS.has(command) || PAYLOAD_WRAPPERS.has(command) || command === "find") {
-    return parseTokens(tokens.slice(index), depth + 1, patternTokens, commandTokens);
+    return parseTokens(tokens.slice(index), depth + 1, patternTokens, commandTokens, delegatedTokens);
   }
 
   for (const token of patternPositionsOf(tokens, index)) patternTokens.add(token);
 
   // An unmeasured program head is not a claim that it is safe.
   if (!COMMAND_WRAPPERS.has(command) && !PATTERN_COMMAND_HEADS.has(command)) {
+    // R6. Nothing measurable here says whether this program is a wrapper that
+    // runs its first operand or a leaf command that merely prints it, so the
+    // operand it would delegate to is recorded and the matcher fails it closed.
+    // Only the DELEGATED operand, never the rest: a VCS wrapper's operands
+    // include its commit message, and claiming those would undo tiering.
+    const delegated = delegatedOperand(tokens, index + 1);
+    if (delegated !== undefined) delegatedTokens.add(delegated);
     return { classified: false, reason: `'${command}' is not a measured command or wrapper`, commandTokens };
   }
   return { patternTokens, commandTokens, classified: true };
@@ -401,11 +451,12 @@ export function parseCommandLine(
   depth = 0,
   patternTokens: Set<string> = new Set(),
   commandTokens: Set<string> = new Set(),
+  delegatedTokens: Set<string> = new Set(),
 ): CommandPositionResult {
   if (hasUnbalancedQuote(text)) {
     // No segment can be trusted, so none is offered. The caller falls back to
     // scanning the whole text, which is strictly MORE aggressive.
-    return { patternTokens, commandTokens, segments: [], classified: false, reason: "unbalanced quote" };
+    return { patternTokens, commandTokens, delegatedTokens, segments: [], classified: false, reason: "unbalanced quote" };
   }
   const segments: SegmentExemption[] = [];
   let firstReason: string | undefined;
@@ -414,7 +465,7 @@ export function parseCommandLine(
     // nested payload, is what this segment may be exempt for.
     const before = new Set(patternTokens);
     const tokens = tokenizeShell(segment).map((token) => token.text.trim()).filter((token) => token !== "");
-    const parsed = parseTokens(tokens, depth, patternTokens, commandTokens);
+    const parsed = parseTokens(tokens, depth, patternTokens, commandTokens, delegatedTokens);
     const earned = [...patternTokens].filter((token) => !before.has(token));
     segments.push({
       text: segment,
@@ -425,6 +476,7 @@ export function parseCommandLine(
   return {
     patternTokens,
     commandTokens,
+    delegatedTokens,
     segments,
     classified: firstReason === undefined,
     reason: firstReason,

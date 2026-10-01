@@ -683,7 +683,7 @@ export class ConfiguredPolicy implements PolicyEngine {
           // anything not positively identified as the operation defaults to the
           // survivable tier: execution is refused either way, so preferring SOFT
           // cannot turn a refusal into an execution.
-          const operation = parsed.commandTokens.has(candidate);
+          const operation = parsed.commandTokens.has(candidate) || parsed.delegatedTokens.has(candidate);
           return this.deny(`${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`,
             operation ? "HARD_DENY" : "SOFT_REFUSE");
         }
