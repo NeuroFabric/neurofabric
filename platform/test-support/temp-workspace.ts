@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -34,9 +34,16 @@ export async function makeTempWorkspace(prefix: string): Promise<string> {
   return realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
 }
 
-/** Write a text fixture into a workspace. Returns its full path. */
+/**
+ * Write a text fixture into a workspace, creating parent directories.
+ *
+ * The mkdir is not convenience: a helper that throws ENOENT on a nested path
+ * makes every test involving a subdirectory fail for a reason that has nothing
+ * to do with what it was testing.
+ */
 export async function writeFixture(dir: string, name: string, contents: string): Promise<string> {
   const target = path.join(dir, name);
+  await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, contents, "utf8");
   return target;
 }

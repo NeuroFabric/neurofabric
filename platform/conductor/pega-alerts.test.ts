@@ -101,14 +101,17 @@ test("G5 every category cites its evidence rows", async () => {
   assert.equal(analysis.categories[0].rows[0], 2, "row numbering must be file lines, header excluded");
 });
 
-test("G6 elapsed time sums without claiming a unit", async () => {
+test("G6 elapsed time sums, and the unit is now RULED rather than guessed", async () => {
   const csv = await pegaExport(realShape);
   const analysis = analyseBottlenecks(csv);
   const mapping = analysis.mappings.find((m) => m.role === "duration");
   assert.ok(mapping, "elapsed_time must be recognised as a duration");
   assert.equal(mapping.column, "elapsed_time");
-  assert.equal(mapping.hypothesis, true, "the unit is not stated anywhere in the export, so the reading is a hypothesis");
-  assert.match(mapping.note, /unit/i, "the missing unit must be said out loud");
+  // R10 supersedes this pin. It used to assert the unit was a HYPOTHESIS,
+  // because no export stated one. The owner has now ruled it to milliseconds,
+  // so it is established fact and the page may print ms.
+  assert.match(mapping.note, /ruling R10/i, "the note must name the ruling, not a guess");
+  assert.equal(analysis.durationUnit, "ms");
 });
 
 test("G7 a threshold comparison is a breach count, flagged as inferred", async () => {
@@ -181,4 +184,81 @@ test("G10 a required field that IS present is never reported missing", async () 
   assert.equal(analysis.missing.includes("time"), false);
   assert.equal(analysis.missing.includes("category"), false);
   assert.equal(analysis.missing.includes("duration"), false);
+});
+
+// === R10-R13: owner rulings, ratified after the first real run ==========
+
+test("R10a the elapsed unit is milliseconds, not a guess", async () => {
+  // R10. Previously this was flagged as a hypothesis because no unit was stated
+  // anywhere in the export. The owner has now ruled it, so it is established
+  // fact and the page may print "ms" rather than an uninterpretable number.
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.durationUnit, "ms");
+  assert.equal(analysis.durationUnitIsRuled, true, "a ruling is not a hypothesis");
+});
+
+test("R11a timestamps are UTC, so the hourly table may say so", async () => {
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.timeZoneIsRuled, true);
+});
+
+test("R13 a category carries its logger alias", async () => {
+  // R13: the code alone is not readable. "PEGA0005" means nothing to the person
+  // who has to act on it, so the label becomes "PEGA0005 (<logger>)".
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.categories[0].label, "PEGA0001 (logger-PEGA0001)",
+    "the alias is appended, not substituted");
+  assert.equal(analysis.categories[0].key, "PEGA0001", "the key stays machine-readable");
+});
+
+test("R13b an alias is only appended when it is unambiguous", async () => {
+  // One logger mapping to several codes is not an alias, it is a coincidence.
+  // Asserting an alias there would print a label that is wrong for most rows.
+  const cwd = await makeTempWorkspace("nf-alias-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [
+    "2026-09-30T12:00:00Z,performance,PEGA0001,shared,1200,1000",
+    "2026-09-30T12:01:00Z,performance,PEGA0002,shared,900,1000",
+    "2026-09-30T12:02:00Z,performance,PEGA0001,shared,1300,1000",
+  ];
+  await writeFixture(cwd, "ambiguous.csv", `${header}\n${rows.join("\n")}\n`);
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "ambiguous.csv") }));
+  assert.equal(analysis.categories[0].label, "PEGA0001", "an ambiguous mapping must not be printed");
+  assert.ok(analysis.ambiguousAliases.length > 0, "and the ambiguity is reported");
+});
+
+test("D1 a divergence between the two rankings is measured, not just noticed", async () => {
+  // Shaped like the REAL export, where the two orderings disagree at the top:
+  // a noisy category that fires constantly and costs almost nothing, and a rare
+  // one that costs a thousand times more. The synthetic Pega fixture above does
+  // NOT diverge at the top -- both orderings lead with PEGA0001 there -- which is
+  // why this needs its own data rather than borrowing that one.
+  const cwd = await makeTempWorkspace("nf-diverge-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [];
+  for (let i = 0; i < 20; i += 1) rows.push(`2026-09-30T12:00:00Z,performance,PEGA_NOISY,logger-noisy,100,1000`);
+  for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:00:00Z,performance,PEGA_MEGA,logger-mega,1000000,1000`);
+  await writeFixture(cwd, "diverge.csv", `${header}\n${rows.join("\n")}\n`);
+
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "diverge.csv") }));
+  assert.ok(analysis.divergence !== null, "the orderings disagree, so divergence must be reported");
+  assert.equal(analysis.divergence.byFrequency.key, "PEGA_NOISY");
+  assert.equal(analysis.divergence.byElapsed.key, "PEGA_MEGA");
+  assert.equal(analysis.divergence.totalRatio, 1000, "2,000,000 over 2,000");
+  assert.equal(analysis.divergence.alertRatio, 0.1, "a tenth of the alerts");
+});
+
+test("D2 no divergence is reported when both rankings agree", async () => {
+  // A headline that always shouts is a headline nobody reads.
+  const cwd = await makeTempWorkspace("nf-agreed-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [];
+  for (let i = 0; i < 6; i += 1) rows.push(`2026-09-30T12:0${i}:00Z,performance,PEGA0001,logger-a,1000,1000`);
+  for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:0${i}:00Z,performance,PEGA0002,logger-b,900,1000`);
+  await writeFixture(cwd, "agree.csv", `${header}\n${rows.join("\n")}\n`);
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "agree.csv") }));
+  assert.equal(analysis.divergence, null, "one leader on both orderings is not news");
 });
