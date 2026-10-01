@@ -91,6 +91,32 @@ export interface CategoryStat {
  * total cost, and the one burying the other is whichever ranking you did not
  * print. Measured rather than eyeballed, so the page can state the ratio.
  */
+/**
+ * WHAT THE REPORT CALLS THE THINGS IT IS COUNTING.
+ *
+ * The report used to say "alert(s)" because every file it had ever seen was a
+ * Pega alert export. That was a defensible default and it became a lie the
+ * moment the generic profiler let an access log through: not merely wrong
+ * vocabulary, but an assertion that the file contained alerts. A reader has no
+ * way to tell an unfounded claim about their data from a founded one.
+ *
+ * `thresholdLabel` is NULL when the file states no threshold, and that null is
+ * what makes the breach column DROPPABLE rather than a column of zeros. "Zero
+ * over threshold" against a limit the file never mentioned is a false
+ * all-clear, and a zero is a fact-shaped hole -- worse than an absent column,
+ * because absent can be noticed and zero cannot.
+ */
+export interface ReportVocabulary {
+  /** Singular, for headings and "X per record" phrasing. */
+  readonly unit: string;
+  /** The mid-sentence form, "13 record(s)". */
+  readonly unitPlural: string;
+  /** Capitalised unit, for section headings. */
+  readonly headingUnit: string;
+  /** Null when the file states no threshold, and the column must be dropped. */
+  readonly thresholdLabel: string | null;
+}
+
 export interface Divergence {
   readonly byFrequency: CategoryStat;
   readonly byElapsed: CategoryStat;
@@ -156,6 +182,8 @@ export interface BottleneckAnalysis {
   readonly ambiguousAliases: readonly string[];
   /** Null when both rankings agree. See D2: a headline that always shouts is noise. */
   readonly divergence: Divergence | null;
+  /** How this report describes the rows it counted. See `ReportVocabulary`. */
+  readonly vocabulary: ReportVocabulary;
 }
 
 /**
@@ -559,6 +587,16 @@ export function analyseBottlenecks(
     : null;
 
   const total = csv.rows.length;
+  // GENERIC FILES ARE DESCRIBED IN RECORDS. A file the profiler had to guess at
+  // is not known to contain alerts, and calling its rows alerts asserts
+  // something about the data the product did not establish. The threshold label
+  // follows the same rule from the other direction: it appears only when the
+  // file really states one.
+  const generic = schema?.source === "GENERIC";
+  const statesThreshold = thresholdCol !== undefined && csv.headers.includes(thresholdCol);
+  const vocabulary: ReportVocabulary = generic
+    ? { unit: "record", unitPlural: "record(s)", headingUnit: "Record", thresholdLabel: statesThreshold ? "over limit" : null }
+    : { unit: "alert", unitPlural: "alert(s)", headingUnit: "Alert", thresholdLabel: statesThreshold ? "over threshold" : null };
   return {
     totalRows: total,
     errorRows,
@@ -583,5 +621,6 @@ export function analyseBottlenecks(
     timeZoneIsRuled: true,
     ambiguousAliases: [...new Set(ambiguousAliases)],
     divergence,
+    vocabulary,
   };
 }

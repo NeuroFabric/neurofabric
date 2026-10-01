@@ -151,10 +151,21 @@ test("markdown prints 'not measurable' rather than a zero when there is no durat
 2026-09-30 12:00:00.000,h,PEGA0001
 2026-09-30 12:00:01.000,h,PEGA0002`)), "Bottleneck report");
   const row = md.split("\n").find((l) => l.startsWith("| 1 |"))!;
-  const cells = row.split("|").map((s) => s.trim());
-  // cells: ['', '1', key, alerts, breach, total, mean, median, p95, rows, '']
-  assert.deepEqual(cells.slice(5, 9), ["not measurable", "not measurable", "not measurable", "not measurable"], "total, mean, median and p95 all decline to state a figure");
-  assert.ok(!/\| 0(\.0+)? \|/.test(row.split("| not measurable |").slice(0, 1).join("")), "and none of them claims zero");
+  const header = md.split("\n").find((l) => l.startsWith("| # | category"))!;
+  // Located BY HEADER NAME, not by index. This test used to slice cells 5..8 and
+  // passed for a while only because the breach column happened to be present; when
+  // the vocabulary work made that column conditional, the fixture without a
+  // threshold shifted every measure one cell left and the assertion quietly
+  // started checking the wrong column. A positional assertion on a table whose
+  // shape is now variable is an assertion about nothing.
+  const cols = header.split("|").map((s) => s.trim());
+  const measures = ["total elapsed (ms)", "mean (ms)", "median (ms)", "p95 (ms)"].map((h) => {
+    const at = cols.indexOf(h);
+    assert.notEqual(at, -1, `the ${h} column is present even when there is nothing to put in it`);
+    return row.split("|")[at].trim();
+  });
+  assert.deepEqual(measures, ["not measurable", "not measurable", "not measurable", "not measurable"], "total, mean, median and p95 all decline to state a figure");
+  assert.ok(!measures.some((m) => /^0(\.0+)?$/.test(m)), "and none of them claims zero");
 });
 
 test("the html table carries the same four columns and the same numbers", async () => {
