@@ -148,11 +148,12 @@ export function chooseRecoveryDetailed(options: {
    * configured as survivable is not turned into a dead task one layer before
    * recovery could know about it.
    *
-   * FAIL-CLOSED BY CONSTRUCTION: the parameter is optional and `"abort"` is the
-   * only value that changes today's behaviour. An absent field means TERMINATE,
-   * never silently survive. Every existing call site keeps its current
-   * decisions bit for bit, which is what makes the threading safe to land
-   * before the call sites are updated.
+   * NO LONGER A BEHAVIOURAL SWITCH (D1 reversal, ratified 2026-10-01). It is
+   * carried for the trace and so a caller can tell a configured refusal from
+   * an unlabelled one, but no value of it changes the decision below: a denial
+   * is an ANSWER, and an answer is never a fault. The parameter is retained
+   * rather than deleted so a future operator ruling has the field already
+   * threaded end to end.
    */
   violation?: "block" | "abort";
 }): RecoveryDecision {
@@ -162,21 +163,36 @@ export function chooseRecoveryDetailed(options: {
   if (options.elapsedMs !== undefined && options.elapsedMs > limits.maxExecutionTimeMs) {
     return { strategy: "TERMINATE", reason: "EXECUTION_TIME_EXHAUSTED" };
   }
-  // A policy refusal is final, so it is reported ahead of every budget guard.
-  // If the task had ALSO run out of time or depth, naming the refusal is the
-  // more useful truth: the counters are incidental, the denial is the cause, and
-  // a certificate blaming a budget would send an investigator after the wrong
-  // thing. Refusing to retry or replan is also what stops an identically
-  // re-proposed block from burning replan budget.
+  // A policy refusal is an ANSWER, not a fault. The rule that refused the call
+  // is a rule about the call itself, so no retry, replan or strategy change can
+  // make that call permitted, and none of them is worth paying for. It is
+  // reported ahead of the budget guards because a task that is both refused and
+  // out of depth has to be told the refusal is what happened: a certificate
+  // blaming a budget would send an investigator after the wrong thing. Booking
+  // no budget here is also what stops an identically re-proposed block from
+  // starving a run that never did anything wrong.
   //
-  // D5: "final" is a property of the VIOLATION, not of the word denial. The
-  // committed policy sets `onViolation: block`, which means the refusal is
-  // survivable and the task lives; terminating there made live behaviour
-  // contradict the committed file. `abort` and an ABSENT violation both
-  // terminate -- absence fails closed, and is the pre-threading behaviour.
+  // D1 REVERSAL, ratified by the operator 2026-10-01. This table no longer
+  // terminates on a denial under ANY label — `block`, `abort`, or absent:
+  //
+  //   - `block` was already survivable by configuration, and the extension is
+  //     what failed to forward the label (the forward violation at
+  //     `.pi/extensions/platform-orchestrator.ts`);
+  //   - an ABSENT label is not evidence of `abort`. It is evidence that some
+  //     layer between policy and recovery did not carry the field, which is a
+  //     defect in that layer. Terminating here made a wiring fault fatal, and
+  //     surviving a wiring fault is what this class exists to do;
+  //   - `abort` still terminates the task, but where the decision is taken:
+  //     `precheckToolCall` calls `abortTask` before the call can be refused. By
+  //     the time a result could reach this line under `abort`, the task is
+  //     already FAILED and `observeToolResult` discards the result as out of
+  //     order, so this table is not where `abort` lives.
+  //
+  // Termination is therefore reserved for the budget and integrity classes:
+  // elapsed time above, and recovery depth plus the exhausted retry, replan and
+  // strategy funds below. Each is unchanged.
   if (failure === "POLICY_DENIED") {
-    if (options.violation === "block") return { strategy: "CONTINUE", reason: "POLICY_SOFT_REFUSED" };
-    return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
+    return { strategy: "CONTINUE", reason: "POLICY_SOFT_REFUSED" };
   }
   // F-006 §2.3: the command answered, and the answer was "no". There is nothing
   // to recover — a repeat would produce the same answer — so this is terminal as

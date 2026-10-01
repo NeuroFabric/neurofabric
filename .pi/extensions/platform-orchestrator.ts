@@ -42,7 +42,13 @@ function record(type: string, details?: Record<string, unknown>): void {
 // on a policy denial (the death shape). Written at the deny site, read and
 // deleted at the record site, cleared per task in before_agent_start. Closes
 // the EXTERNAL-WIRING LIMITATION documented at kernel-adapter.ts:1348.
-const pendingDenialReasons = new Map<string, string>();
+//
+// The `violation` travels in the SAME map, for the same reason: the label is
+// only ever known at the preflight, and forwarding the reason alone handed
+// recovery an UNLABELLED denial. That is the FORWARD VIOLATION found
+// 2026-10-01 — one missing argument here, which made the committed
+// `onViolation: block` unreachosable from the result path.
+const pendingDenials = new Map<string, { reason: string; violation?: "block" | "abort" }>();
 
 
 export default function platformOrchestrator(pi: ExtensionAPI): void {
@@ -96,7 +102,7 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
 
 
   pi.on("before_agent_start", async (event, ctx) => {
-    pendingDenialReasons.clear(); // per-task bound: a leak can span one turn at most
+    pendingDenials.clear(); // per-task bound: a leak can span one turn at most
     // A task is created per user turn. Pi still owns the conversation and model call.
     const task = await kernel.beginTask(event.prompt, event.prompt, { cwd: ctx.cwd });
     record("task_received", { taskId: task.taskId, promptPreview: redactPreview(event.prompt) });
@@ -143,8 +149,14 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
         : {}),
     });
     if (decision.decision.decision !== "ALLOW") {
-      // `decision.reason` is present on both DENY and REQUIRE_APPROVAL.
-       pendingDenialReasons.set(event.toolCallId, decision.decision.reason);
+      // `decision.reason` is present on both DENY and REQUIRE_APPROVAL. The
+      // `violation` is present only on a DENY that policy actually evaluated;
+      // it is forwarded as-is, with no default, so an unlabelled refusal stays
+      // unlabelled here and is visible as such rather than being guessed at.
+      pendingDenials.set(event.toolCallId, {
+        reason: decision.decision.reason,
+        violation: decision.decision.decision === "DENY" ? decision.decision.violation : undefined,
+      });
       return { block: true, reason: decision.decision.reason };
     }
     return undefined;
@@ -166,8 +178,8 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
 
   // `tool_execution_end` is observation and validation of a real bound execution.
   pi.on("tool_execution_end", async (event) => {
-    const denialReason = pendingDenialReasons.get(event.toolCallId);
-    pendingDenialReasons.delete(event.toolCallId);
+    const denial = pendingDenials.get(event.toolCallId);
+    pendingDenials.delete(event.toolCallId);
     if (!kernel.currentTask) return;
     // Pi owns the actual result shape; the kernel normalizes it against the
     // bound execution identity so task/step correlation cannot drift.
@@ -179,9 +191,15 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     // forward yet, and inventing one would be guessing at an external
     // contract. When Pi (or a tool) surfaces that, this is the one line that
     // has to change, and the flag is already honoured end to end.
-    // `denialReason` was read and deleted ABOVE the `currentTask` guard, so
+    // `denial` was read and deleted ABOVE the `currentTask` guard, so
     // delete-on-read is unconditional and no refusal reason can leak a turn.
-    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denialReason);
+    //
+    // The SEVENTH argument is the `onViolation` the policy put on the decision.
+    // It was the one thing this call site never forwarded, and the omission is
+    // what made a committed `onViolation: block` terminate the task anyway:
+    // recovery was told the denial was UNLABELLED, and an unlabelled denial
+    // terminated. The label is now carried the whole way.
+    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denial?.reason, denial?.violation);
     record("tool_execution_end", { toolCallId: event.toolCallId, tool: event.toolName, isError: event.isError, artifacts: kernel.artifacts.length, taskStatus: kernel.currentTask.status });
   });
 
