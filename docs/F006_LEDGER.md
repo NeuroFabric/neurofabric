@@ -991,6 +991,28 @@ directly. It is authorised, and its boundary statement lives in the `N6` gate
 rather than in this table; it is recorded as item 6 when the work is filed so
 that this table remains the single queue.
 
+**Work order of record — operator, 2026-10-01, superseding the ordering
+above.** The status table in this section was measured 2026-09-30 against
+`bfc22e8`; it is not re-measured here and its rows are left as measured. What
+supersedes it is the *sequence*:
+
+1. Record the work order (this entry). Docs only.
+2. **C1** — the echoed refusal. Self-contained, and an open question closed
+   beats a scaffold started. Filed as item 7 above.
+3. **Track B item 1** — Dockerfile + compose, status `UNVERIFIED` pending the
+   operator's Docker run. The frontend shell scaffold was **deliberately not
+   started**: multi-milestone, and it would have ended half-built.
+4. Full status report across both tracks.
+
+**C2 is BLOCKED and was not started.** It waits on the operator's restart
+confirmation, which does not exist in `docs/MANIFEST.md`. Absent evidence is
+not a formality here — it is the entire input. **E1–E8** are next-session work;
+no assessment branch was opened, because an unfinished assessment reads as
+progress in the tree and is nothing in this section.
+
+**The unit of work is a completed item.** The work order is a multi-session
+plan; a session is not entitled to a slice of an item.
+
 0. **D5 / onViolation divergence.** **CLOSED — merged at `f6c6bad`.** Retained
    below for the decision record, not as open work. §2.5 for the mechanism.
 
@@ -1067,6 +1089,74 @@ guard before writing the message. Commit `b0a8cdf` on
    containment is unchanged, so the widening cannot reach outside the roots. It
    is recorded here rather than described as a tightening, because it is not
    one.
+7. **C1 — the echoed refusal, second edition: a refusal that settles as a
+   sibling kills the task, and the certificate names neither the policy nor the
+   rule.** Filed 2026-10-01, measured, **unfixed**.
+
+   **What the D1 reversal fixed, confirmed by measurement.** A lone mid-execution
+   refusal does survive: the task returns to `PLANNING`, the event trail reads
+   `RECOVERY_STARTED` → `SOFT_REFUSAL_CONTINUED`, no budget is booked, and
+   `finishTask` does not fail it. The reversal is intact on the path it was
+   written for.
+
+   **What is still broken, and is reachable.** The reversal's guarantee is stated
+   per *result*, and one result shape never reaches it. When a refused
+   execution settles while a **sibling is still in flight**, `observeToolResult`
+   takes the early return at `kernel-adapter.ts:1300` — which appends the
+   validation, sets `attemptBlocked = true`, and returns **before** the
+   recovery block. No `RECOVERY_STARTED`, no `SOFT_REFUSAL_CONTINUED`, no
+   `denialReason` read. The refusal is then only ever an `INVALID` validation.
+   The last sibling succeeds, `lastValidation.status` is `VALID`, and
+   `finishTask:1807` — "a task whose CURRENT attempt has any unresolved failure
+   is not complete" — reads the refusal's `attemptBlocked` and **fails the
+   task**.
+
+   Measured transcript (probe, not a pin; two executions bound as siblings in one
+   assistant message, the refused one settling first):
+
+   ```
+   bound A/B        : true true active: 2
+   A (refused)      : {"status":"INVALID","validator":"pi-result","message":"policy <d1-policy.json> denied 'read': …"}
+   status now       : EXECUTING attemptBlocked: true
+   B (succeeded)    : {"status":"VALID","validator":"pi-result","message":"Pi returned a successful tool result"}
+   status now       : VALIDATING attemptBlocked: true
+   --- after finishTask ---
+   task status      : FAILED
+   failureReason    : One or more results in this attempt failed or could not be verified
+   denial named?    : false
+   event types      : [… TOOL_FAILED, TOOL_COMPLETED, VALIDATION_COMPLETED, TOOL_RESULT_IGNORED, TASK_FAILED]
+   ```
+
+   **The reason is a false claim, not merely a thin one.** Nothing failed
+   verification. The sibling verified. The sentence is the only account the
+   operator gets, and it names no rule, no policy, no path — which is the one
+   job the refusal certificate existed to do. A denial is an answer; this
+   returns a wrong answer about why the task died.
+
+   **Why it is not the P1 item, and why it is worse.** P1 (roadmap) is the
+   *returned* `ValidationResult`: `status: "INVALID"`, `validator: "pi-result"`
+   is byte-identical to a genuine tool fault. That remains true and remains
+   **latent** — measured, the only in-repo caller
+   (`.pi/extensions/platform-orchestrator.ts:202`) discards the return value, so
+   nothing here branches on it yet. C1 is the same collapse one layer further
+   in, at `attemptBlocked`, where there **is** a live consumer. It is a
+   separate site with a separate fix and must not be closed under P1's number.
+
+   **The fix, when it is taken.** A refusal must not contribute an unresolved
+   *failure* to the attempt it lands in. Two candidate directions, both live,
+   and the choice is the operator's: (a) a denial contributes
+   `SOFT_REFUSAL_CONTINUED`-equivalent bookkeeping instead of
+   `attemptBlocked`; (b) the sibling early return also runs the recovery
+   decision, so the refusal is classified before the attempt is judged. (a) is
+   narrower; (b) is closer to "a refusal is reported wherever it lands". No
+   code changed here, and the refusal's own words must survive either way.
+
+   **Pins owed with the fix, not before it.** A red pin on `main` breaks CI and
+   trains people to ignore red, so none is committed today. The transcript above
+   is the reproduction, and it is complete enough to write both pins from. The
+   gates needed: the lone denial still survives (**green today**, guards the
+   reversal against a fix that over-corrects), and the sibling denial leaves the
+   task alive with the policy's reason reachable (**red today**).
 
 ---
 

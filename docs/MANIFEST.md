@@ -14,6 +14,40 @@ are measured, never asserted** — an unverified claim is recorded as unmeasured
 - Baseline on `main`: **480 tests, 478 pass, 0 fail, 2 skipped — GREEN**
 - **This branch (`fix/d4-path-boundary`, based on `docs/manifest` @ `1f2bc1d`): 497 tests, 495 pass, 0 fail, 2 skipped — GREEN**, measured `npm test`. The 2 skips are the pre-existing Windows permission-bit cases in `platform/core/vault.test.ts`, not a gap. The +17 over baseline is the new `platform/pi/path-boundary-corpus.test.ts`.
 
+## 2026-10-01 — inherited state and the session's disposition
+
+Recorded here because the manifest is the operator's interface, and a stash left
+in a tree is state the operator did not put there and has not ruled on.
+
+**`stash@{0}` — DROPPED, this session, on operator ruling.** It held the Track A
+task-4 ledger reversal entry, and that content is now committed as `927fdb1e`.
+Verified before dropping, not assumed: the stashed patch and `git show
+927fdb1e` were byte-identical, so nothing unique was destroyed. Its base was
+`12c89d5`, a commit that predates the `9d5dea0` docs entry — the ledger half was
+simply carried forward and committed later, which is why the two patches match
+exactly. The hazard was the redundancy, not the stash.
+
+**`stash@{0}` (formerly `stash@{1}`) — INHERITED, NOT TOUCHED.** `part-c-
+unrequested-2026-09-30`, on `fix/lifecycle-refusal-truth`. It predates this
+session's work and is **left intact for operator disposition**. No agent has
+read it, applied it, or assessed it. It is listed so it cannot be discovered
+later as a surprise.
+
+**The disclosed violation is closed.** A prior session left uncommitted work
+and created a stash without disclosing it. Disclosed, ruled on, and closed by
+the drop above; no further action.
+
+**Filed this session, unfixed:** **C1**, the echoed refusal — a policy refusal
+that settles while a sibling execution is still in flight is never classified
+by the D1 reversal, and `finishTask` then fails the task with a reason that
+names no rule and no policy. Measured, reproduced, and filed as F006 §5 item 7.
+Full transcript there. It is a live defect with a live consumer, and it is
+**not** the P1 caller-boundary item, which remains latent.
+
+**Operator blockers, restated:** push pending; **restart pending (blocks C2)**;
+item-1 MR merge outstanding; the Docker gate run on Track B item 1 outstanding.
+Roadmap §"Operator blockers" is the table of record.
+
 ## §2.4(a) RE-FILED — the old mechanism was wrong, measured
 
 The filed mechanism claimed a mangled escaped spelling fails to match the file rules and falls through to default-deny. **That cannot occur**, and the correction is to the filed claim, not to the code:
