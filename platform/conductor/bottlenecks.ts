@@ -700,16 +700,29 @@ export function analyseBottlenecks(
     : null;
 
   const total = csv.rows.length;
-  // GENERIC FILES ARE DESCRIBED IN RECORDS. A file the profiler had to guess at
-  // is not known to contain alerts, and calling its rows alerts asserts
-  // something about the data the product did not establish. The threshold label
-  // follows the same rule from the other direction: it appears only when the
-  // file really states one.
-  const generic = schema?.source === "GENERIC";
+  // PEGA VOCABULARY IS EARNED, NEVER DEFAULTED. "Alert" and "threshold" appear
+  // only when a mapping a PERSON checked is actually being applied. Three states
+  // exist and only two were ever legitimate:
+  //
+  //   DEFAULT / SESSION_ARCHIVE -- verified. Someone checked this mapping
+  //     against a real export, so the wording is supported.
+  //   GENERIC -- inferred from column values, always a hypothesis.
+  //   undefined -- NOTHING WAS ESTABLISHED. This is the state that used to
+  //     claim alerts by default, and it was the worst of the three: absence of
+  //     evidence was being rendered as positive knowledge. A file shaped like a
+  //     Pega export is not a verified Pega export, and 20 anonymous numeric
+  //     columns described as an alert ranking is a sentence with no referent.
+  //
+  // The threshold label follows from the SAME condition rather than from the
+  // column being named "threshold". A guessed column is still a guess, so an
+  // unverified file gets the neutral "over limit" and only a verified one gets
+  // "over threshold".
+  const schemaVerified = schema?.source === "DEFAULT" || schema?.source === "SESSION_ARCHIVE";
+  const generic = !schemaVerified;
   const statesThreshold = thresholdCol !== undefined && csv.headers.includes(thresholdCol);
-  const vocabulary: ReportVocabulary = generic
-    ? { unit: "record", unitPlural: "record(s)", headingUnit: "Record", thresholdLabel: statesThreshold ? "over limit" : null }
-    : { unit: "alert", unitPlural: "alert(s)", headingUnit: "Alert", thresholdLabel: statesThreshold ? "over threshold" : null };
+  const vocabulary: ReportVocabulary = schemaVerified
+    ? { unit: "alert", unitPlural: "alert(s)", headingUnit: "Alert", thresholdLabel: statesThreshold ? "over threshold" : null }
+    : { unit: "record", unitPlural: "record(s)", headingUnit: "Record", thresholdLabel: statesThreshold ? "over limit" : null };
   return {
     totalRows: total,
     errorRows,
