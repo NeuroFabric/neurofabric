@@ -316,3 +316,69 @@ test("P4g an unmeasured wrapper does not change a measured wrapper's tiers", asy
   assert.equal(await tierOf(adapter, `xargs ${TOKEN} < list.txt`, "p4g"), "HARD_DENY",
     "a measured wrapper reaching the same conclusion is unchanged by R6");
 });
+
+// === 5. R7: shell delegation behind an unmeasured wrapper ==================
+//
+// Ruling: when an unmeasured wrapper delegates to a SHELL-EXECUTING command
+// (sh, bash, cmd, powershell), the nested payload is COMMAND POSITION.
+// HARD_DENY, terminate.
+//
+// The reason R6 alone is not enough: R6 records the operand a wrapper delegates
+// to, which for `sudo sh -c "..."` is `sh` -- not the token. And an unmeasured
+// head stops the parse, so the payload behind it is never reached at all. The
+// token is invisible to every rule currently in force. Meanwhile the token
+// inside that payload WILL execute, because the thing that runs it is a shell.
+//
+// So R7 closes a hole rather than adding a preference: today
+// `sudo sh -c "<token> ..."` is the one shape that gets past every layer.
+
+test("P5a a token inside a shell payload behind an unmeasured wrapper is HARD_DENY", async () => {
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `sudo sh -c "${TOKEN} notes.txt"`, "p5a"), "HARD_DENY",
+    "a shell will run it, so it is an operation and not inert payload");
+});
+
+test("P5b that refusal terminates the run", async () => {
+  const { adapter } = await governed();
+  await refuseThenReport(adapter, `sudo sh -c "${TOKEN} notes.txt"`, "p5b");
+  assert.equal(adapter.currentTask!.status, "FAILED", "a deletion behind a shell still ends the run");
+});
+
+test("P5c the same holds for the other shells", async () => {
+  for (const [shell, command] of [
+    ["bash", `sudo bash -c "${TOKEN} notes.txt"`],
+    ["dash", `sudo dash -c "${TOKEN} notes.txt"`],
+    ["cmd", `sudo cmd /c ${TOKEN} notes.txt`],
+    ["powershell", `sudo powershell -Command ${TOKEN} notes.txt`],
+  ]) {
+    const { adapter } = await governed();
+    assert.equal(await tierOf(adapter, command, `p5c-${shell}`), "HARD_DENY",
+      `${shell} executes its payload, so the token is an operation there too`);
+  }
+});
+
+test("P5d a shell payload with NO token is untouched", async () => {
+  for (const command of [`sudo sh -c "ls -la ."`, `sudo bash -c "cat notes.txt"`]) {
+    const { adapter } = await governed();
+    const { decision } = await adapter.precheckToolCall("bash", "execute", { command }, undefined, `p5d-${command}`);
+    assert.equal(decision.decision, "ALLOW",
+      `"${command}" carries no token; got ${decision.decision} ${JSON.stringify((decision as { reason?: string }).reason)}`);
+  }
+});
+
+test("P5e R7 stops at the shell's OWN command, not at every operand", async () => {
+  // The boundary that keeps R7 from becoming 'harden everything behind a shell'.
+  // `sh -c "echo <token>"` runs echo with the token as an argument. The token is
+  // printed. It is payload, and R6's own reasoning says payload continues.
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `sudo sh -c "echo ${TOKEN}"`, "p5e"), "SOFT_REFUSE",
+    "the token is the shell command's ARGUMENT, so R7 must not reach it");
+});
+
+test("P5f the shell payload is parsed, not assumed", async () => {
+  // The payload's own command becomes command position, which is what makes P5e
+  // SOFT rather than merely unexamined.
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `sudo sh -c "${TOKEN}"`, "p5f"), "HARD_DENY",
+    "when the token IS the shell's command it is an operation");
+});
