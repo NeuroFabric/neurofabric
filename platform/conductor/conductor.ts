@@ -3,6 +3,9 @@ import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
 import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
+import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
+import { resolveSchemaMemory, type ResolvedSchema } from "./schema-memory.ts";
 import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
 
 /**
@@ -60,6 +63,8 @@ export interface ConductorResult {
   clarifyRounds: number;
   /** Produced artifacts, referenced by path. */
   artifacts: string[];
+  /** The Markdown report, when the run was asked for one. Never a guess at one. */
+  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema };
   /** Set when the run did not deliver. Never a bare string: always structured. */
   failure?: { code: string; reason: string; kernelReasonCode?: string };
   /** Every kernel event the run produced, in order. */
@@ -73,6 +78,12 @@ export interface ConductorOptions {
   policyConfig?: PolicyConfig;
   /** Injected for tests; defaults to the project's own policy composition. */
   policy?: PolicyEngine;
+  /**
+   * Where `configs/default-schemas.json` lives. Defaults to `cwd`, which is the
+   * product layout; the web server passes the install root so a data workspace
+   * does not have to carry a copy of the schemas.
+   */
+  defaultsRoot?: string;
 }
 
 export class Conductor {
@@ -94,7 +105,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools(STAGE1_CAPABILITIES);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
@@ -118,6 +129,15 @@ export class Conductor {
       resolve?: (question: ClarifyQuestion) => string | undefined;
       /** Where the dashboard is written, when the request implies one. */
       output?: string;
+      /**
+       * `dashboard` (default) is the Stage 1 pair. `bottleneck` is the Stage 2
+       * report: the same governed read, then the analysis, then a governed
+       * WRITE of the report itself.
+       */
+      mode?: "dashboard" | "bottleneck";
+      /** Report title, and the rendering the caller wants back. */
+      title?: string;
+      format?: "html" | "markdown";
     } = {},
   ): Promise<ConductorResult> {
     this.emit("ASK", request);
@@ -191,6 +211,9 @@ export class Conductor {
       }
 
       this.emit("EXECUTE", "render_page");
+      if (options.mode === "bottleneck") {
+        return this.bottleneck(csv, input, options, questions, rounds, kernelEvents);
+      }
       const rendered = await this.callTool("render-1", "render_page", {
         path: options.output ?? path.join(this.cwd, "workspace", "dashboard.html"),
         title: "Sales dashboard",
@@ -213,8 +236,66 @@ export class Conductor {
     }
   }
 
+  /**
+   * STAGE 2, THROUGH THE SAME LOOP: read (governed) -> analyse -> write
+   * (governed).
+   *
+   * The analysis is a PURE function of the rows the governed read returned, so
+   * it runs in process and is not dressed up as a tool call. Putting a
+   * computation with no I/O and no policy surface through the kernel would
+   * manufacture the appearance of governance rather than the substance of it.
+   * Everything that touches the filesystem is a real governed call.
+   */
+  private async bottleneck(
+    csv: CsvReadResult, input: string,
+    options: { output?: string; title?: string; format?: "html" | "markdown" },
+    questions: ClarifyQuestion[], rounds: number,
+    kernelEvents: { type: string; payload: Record<string, unknown> }[],
+  ): Promise<ConductorResult> {
+    // Schema memory is consulted HERE, after the read, because it matches on the
+    // header row the read actually produced.
+    const schema = await resolveSchemaMemory({
+      cwd: this.cwd, headers: csv.headers, defaultsRoot: this.options.defaultsRoot,
+    });
+    if (schema !== undefined) {
+      this.emit("EXECUTE", `schema memory: ${schema.source} (${schema.id})`);
+    } else {
+      this.emit("EXECUTE", "no stored schema matched; inferring from column names");
+    }
+    const analysis = analyseBottlenecks(csv, schema);
+
+    this.emit("EXECUTE", "render_bottleneck_report");
+    const written = await this.callTool("report-1", "render_bottleneck_report", {
+      path: options.output ?? path.join(this.cwd, "workspace", "bottleneck-report.md"),
+      title: options.title ?? `Bottleneck report: ${path.basename(input)}`,
+      csv, schema, format: options.format ?? "markdown",
+    });
+    if (!written.ok) return this.failed(written.failure, questions, rounds, kernelEvents);
+    if (!written.value || (written.value as { rendered?: boolean }).rendered !== true) {
+      return this.failed({
+        code: "REPORT_NOT_RENDERED",
+        reason: `the renderer declined the file: ${((written.value as { problems?: string[] })?.problems ?? []).join("; ") || "no reason given"}`,
+      }, questions, rounds, kernelEvents);
+    }
+
+    const task = await this.kernel.finishTask({ ok: true });
+    this.emit("DELIVER", task.status);
+    const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+    if (task.status !== "COMPLETED") {
+      return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, kernelEvents);
+    }
+    // The Markdown is produced from the SAME analysis object the artifact was
+    // rendered from, so the text in the response and the file on disk cannot
+    // disagree about what was found.
+    const markdown = toBottleneckMarkdown(analysis, options.title ?? `Bottleneck report: ${path.basename(input)}`);
+    return {
+      status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
+      report: { markdown, analysis, schema }, kernelEvents, progress: this.progress,
+    };
+  }
+
   private failed(
-    failure: { code: string; reason: string },
+    failure: { code: string; reason: string; kernelReasonCode?: string },
     questions: ClarifyQuestion[], rounds: number,
     kernelEvents: { type: string; payload: Record<string, unknown> }[],
   ): ConductorResult {
@@ -244,7 +325,11 @@ export class Conductor {
       // artifact is verified once it exists rather than assumed.
       await this.kernel.declareToolOutputs(callId, tool, input);
       await this.kernel.recordToolResult(callId, tool, undefined, true, undefined, decision.reason, decision.violation, decision.tier);
-      return { ok: false, failure: { code: `POLICY_${decision.tier ?? "SOFT_REFUSE"}`, reason: decision.reason } };
+      // The kernel's own tier travels out. A caller that has to guess whether
+      // this was a boundary question or a hazard cannot report it honestly, and
+      // the wedge's whole security claim rests on this being the kernel's
+      // refusal rather than the UI's.
+      return { ok: false, failure: { code: `POLICY_${decision.tier ?? "SOFT_REFUSE"}`, reason: decision.reason, kernelReasonCode: decision.tier ?? "SOFT_REFUSE" } };
     }
     if (decision.decision === "REQUIRE_APPROVAL") {
       // An approval gate that survived precheck authorises nothing, so the tool
@@ -257,9 +342,24 @@ export class Conductor {
     }
     await this.kernel.declareToolOutputs(callId, tool, input);
     try {
-      const value = tool === "csv_read"
-        ? await csvRead({ path: String(input.path) }, { boundary: this.boundary })
-        : await renderPage(input as Parameters<typeof renderPage>[0]);
+      // An explicit dispatch, not a default branch. A tool this Conductor does
+      // not implement must FAIL CLOSED rather than fall through to whichever
+      // capability happened to be written last.
+      let value: unknown;
+      switch (tool) {
+        case "csv_read":
+          value = await csvRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
+        case "render_page":
+          value = await renderPage(input as Parameters<typeof renderPage>[0]);
+          break;
+        case "render_bottleneck_report":
+          value = await renderBottleneckReport(input as Parameters<typeof renderBottleneckReport>[0]);
+          break;
+        default:
+          await this.kernel.recordToolResult(callId, tool, undefined, true);
+          return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
+      }
       await this.kernel.recordToolResult(callId, tool, value, false);
       return { ok: true, value };
     } catch (error) {
@@ -273,12 +373,22 @@ export class Conductor {
 
   /**
    * The one input this conductor understands. Anything that does not resolve to
-   * a CSV inside the workspace becomes a clarify question rather than a guess.
+   * a CSV becomes a clarify question rather than a guess.
+   *
+   * THE BOUNDARY IS NOT CHECKED HERE. That check used to live in this method,
+   * and it was a control in the wrong place: it turned a path outside the
+   * workspace into a clarifying QUESTION ("which CSV should I read?"), so the
+   * kernel never saw the attempt and nothing was recorded. A refusal the user
+   * cannot see is not a control, it is a shrug.
+   *
+   * So the path is resolved and handed to the governed `csv_read`, and the
+   * kernel's policy classifier refuses it (SOFT_REFUSE for out of bounds, a
+   * higher tier for a hazard) with a real event in the stream. Same decision,
+   * same tier, and now it is visible and counted.
    */
   private locateInput(text: string): string | undefined {
     const match = /[\w./\\-]+\.csv\b/i.exec(text);
     if (match === null) return undefined;
-    const resolved = path.resolve(this.cwd, match[0]);
-    return this.boundary.check(resolved).allowed ? resolved : undefined;
+    return path.resolve(this.cwd, match[0]);
   }
 }
