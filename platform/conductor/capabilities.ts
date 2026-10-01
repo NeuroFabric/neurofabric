@@ -21,6 +21,16 @@ export interface CsvReadResult {
   /** The first few rows, enough to chart and small enough to never blow a budget. */
   sample: Record<string, string>[];
   /**
+   * EVERY row, for analysis rather than charting.
+   *
+   * Separate from `sample` on purpose. The sample is capped so a chart cannot
+   * blow a budget; analysis is the opposite requirement, because an analysis
+   * that silently reads only the first N rows reports a confident answer about
+   * a fraction of the data. A real 101-row export was half-analysed before this
+   * existed, and nothing on the page said so.
+   */
+  rows: Record<string, string>[];
+  /**
    * What is wrong with the file, when something is. Never an exception: a
    * malformed file is a RESULT the Conductor has to reason about, because the
    * difference between "the file is broken" and "the tool broke" is the whole
@@ -48,7 +58,6 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][]; p
   let inQuotes = false;
   let i = 0;
   let line = 1;
-  let sawContent = false;
 
   while (i < text.length && rows.length <= MAX_ROWS_SCANNED) {
     const ch = text[i];
@@ -62,16 +71,26 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][]; p
     }
     if (ch === '"') {
       if (field.length > 0) problems.push(`line ${line}: a quote appeared mid-field`);
-      inQuotes = true; sawContent = true; i += 1; continue;
+      inQuotes = true; i += 1; continue;
     }
     if (ch === ",") { row.push(field); field = ""; i += 1; continue; }
     if (ch === "\r") { i += 1; continue; }
     if (ch === "\n") {
-      row.push(field); rows.push(row); row = []; field = ""; line += 1; i += 1; continue;
+      // A blank line is not a record. The conventional final newline on a file
+      // must not manufacture a row of one empty value against a twelve-column
+      // header -- which is what a real export did, and which made the renderer
+      // refuse a file that was not actually ragged.
+      if (row.length > 0 || field.length > 0) { row.push(field); rows.push(row); }
+      row = []; field = ""; line += 1; i += 1; continue;
     }
-    field += ch; sawContent = true; i += 1;
+    field += ch; i += 1;
   }
-  if (sawContent || field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  // Whatever is left over is a final record WITHOUT its terminator. A file that
+  // ends on a newline has nothing left, and pushing an empty row here is what
+  // made every conventionally-terminated CSV look ragged. `sawContent` used to
+  // stand in for "there is something here", but it is true of the whole file,
+  // not of this tail -- which is why the trailing-newline case slipped past it.
+  if (row.length > 0 || field.length > 0) { row.push(field); rows.push(row); }
   if (inQuotes) problems.push("the file ends inside a quoted field");
 
   if (rows.length === 0) return { headers: [], rows: [], problems: [...problems, "the file has no rows"] };
@@ -107,9 +126,10 @@ export async function csvRead(input: { path: string }, boundary?: { boundary?: {
   }
   const text = await readFile(target, "utf8");
   const { headers, rows, problems } = parseCsv(text);
-  const sample = rows.slice(0, SAMPLE_ROWS).map((cells) =>
+  const allRows = rows.map((cells) =>
     Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""])),
   );
+  const sample = allRows.slice(0, SAMPLE_ROWS);
   const columns = headers.map((name, index) => {
     const values = rows.map((cells) => cells[index] ?? "");
     const kind = columnKind(values);
@@ -121,7 +141,7 @@ export async function csvRead(input: { path: string }, boundary?: { boundary?: {
       sum: numbers.reduce((a, b) => a + b, 0),
     };
   });
-  return { path: target, headers, rowCount: rows.length, columns, sample, problems };
+  return { path: target, headers, rowCount: rows.length, columns, sample, rows: allRows, problems };
 }
 
 /**
