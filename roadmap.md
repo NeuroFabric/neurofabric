@@ -101,6 +101,31 @@ reconstructed.
 full test suite green before any UI work. Docker is not installed in the authoring
 environment, so the gate cannot be evaluated there. See Track B item 1 below.
 
+**Track B forks from `12c89d5`,** not `fca77fc`. The delta is docs and one comment;
+both are green, and forking from the tip avoids a rebase later. Fork SHA recorded
+in the MR.
+
+## Standing rules
+
+**No agent may claim verified-green for a gate this harness cannot execute.**
+Label the result `UNVERIFIED`, name the executor who must run it, and move on.
+Ratified 2026-10-01 after Track B's container gate was found to be unrunnable here.
+
+The rationale is not ceremony. An agent-authored "verified green" for an
+environment it never started is the same defect as a caller told `pi-result` for a
+policy refusal: a truthful-looking value that is not what it claims to be, sitting
+exactly where a later reader will not re-check it. `UNVERIFIED` plus a named
+executor is cheap. A fabricated green is not.
+
+## Track B interface ownership
+
+All Track B wire-point interfaces are marked **`@provisional`** in code, with a
+comment naming the owning plane (State / Observability).
+
+**Track A is not bound by them.** If Track A's real contracts diverge, **Track B
+updates to match — never the reverse.** Track B may not constrain Track A's
+design; these interfaces are scaffolding, not a contract.
+
 ## Remaining work
 
 | # | Item | State |
