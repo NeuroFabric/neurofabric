@@ -366,13 +366,32 @@ test("P5d a shell payload with NO token is untouched", async () => {
   }
 });
 
-test("P5e R7 stops at the shell's OWN command, not at every operand", async () => {
-  // The boundary that keeps R7 from becoming 'harden everything behind a shell'.
-  // `sh -c "echo <token>"` runs echo with the token as an argument. The token is
-  // printed. It is payload, and R6's own reasoning says payload continues.
+test("P5e R7 inherits R6 inside the payload, and does not widen it", async () => {
+  // This was written to assert SOFT_REFUSE, and that expectation was wrong. R6
+  // -- ratified as the contract of record -- says an unmeasured head whose
+  // delegated operand is the token has unverifiable operation identity and fails
+  // closed hard. `echo` is unmeasured, so `echo <token>` is hard AT TOP LEVEL,
+  // and R7 does not change that answer, it only carries it inside the payload.
+  //
+  // Asserting SOFT here would have meant R7 quietly narrowing R6, which is the
+  // opposite of what it was authorised to do. The pins below therefore check
+  // CONSISTENCY: the same answer at top level and behind a shell.
+  const topLevel = await governed();
+  const behindShell = await governed();
+  assert.equal(await tierOf(topLevel.adapter, `echo ${TOKEN}`, "p5e-top"), "HARD_DENY",
+    "R6's answer for an unmeasured head delegating to the token");
+  assert.equal(await tierOf(behindShell.adapter, `sudo sh -c "echo ${TOKEN}"`, "p5e-nested"), "HARD_DENY",
+    "R7 carries the same answer inside the payload rather than inventing a new one");
+});
+
+test("P5e2 R7 does not reach a payload it cannot reach", async () => {
+  // The real boundary for R7 is reachability, not shell-ness. A token that is
+  // never executed by anything the wrapper delegates to keeps payload tiering.
+  // `git` is unmeasured but does not execute its operands, and its token sits
+  // behind an option value, so it is untouched by both R6 and R7.
   const { adapter } = await governed();
-  assert.equal(await tierOf(adapter, `sudo sh -c "echo ${TOKEN}"`, "p5e"), "SOFT_REFUSE",
-    "the token is the shell command's ARGUMENT, so R7 must not reach it");
+  assert.equal(await tierOf(adapter, `git commit -m "docs: note the ${TOKEN} step"`, "p5e2"), "SOFT_REFUSE",
+    "payload tiering must survive R7 unchanged");
 });
 
 test("P5f the shell payload is parsed, not assumed", async () => {
