@@ -302,12 +302,18 @@ function numericalSummaryMarkdown(a: BottleneckAnalysis): string {
   const fmt = (v: number | null, digits = 4): string => (v === null ? "not measurable" : Number(v.toFixed(digits)).toLocaleString());
   const out: string[] = ["## Numerical data summary", ""];
   out.push(`_${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : ""}_`, "");
-  out.push("| # | column | measured | empty | dirty | min | max | mean | spread |", "|---|---|---|---|---|---|---|---|---|");
+  out.push("| # | column | measured | empty | dirty | min | max | mean | spread | anomaly |", "|---|---|---|---|---|---|---|---|---|---|");
   n.columns.forEach((c, i) => {
     // A blank and a type mismatch are shown in SEPARATE columns, because they
     // are separate problems. In one "missing" column a reader cannot tell a
     // benign null from a producer writing text into a float.
-    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.empty} | ${c.dirty} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |`);
+    // The outlier flag lives IN THE ROW, not in a separate section. A reader
+    // scanning the column for anomalies has to find it here, and a flag beside
+    // the value is checkable against the fences printed in the same table.
+    const flag = c.outliers > 0
+      ? ` **[ANOMALY: OUTLIER]**${c.outlierMax !== null ? ` max ${fmt(c.outlierMax)}` : ""}${c.fenceUpper !== null ? ` beyond a ${fmt(c.fenceUpper)} fence` : ""}${c.outlierMin !== null ? `, min ${fmt(c.outlierMin)}` : ""}`
+      : "";
+    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.empty} | ${c.dirty} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |${flag || " |"}`);
   });
   out.push("", "_Columns with the widest spread first. `empty` counts blank cells; `dirty` counts cells holding something that is not a number. Neither reaches the figures above, and neither is treated as zero._", "");
   return out.join("\n");
@@ -327,12 +333,13 @@ function numericalSummaryHtml(a: BottleneckAnalysis): string {
       <td class="num">${fmt(c.max)}</td>
       <td class="num">${fmt(c.mean)}</td>
       <td class="num">${fmt(c.spread)}</td>
+      <td>${c.outliers > 0 ? `<span class="badge">OUTLIER</span> ${c.outlierMax !== null ? escapeHtml(`max ${Number(c.outlierMax.toFixed(4)).toLocaleString()}`) : ""}` : ""}</td>
     </tr>`).join("\n");
   const hidden = n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : "";
   return `<h2>Numerical data summary</h2>
 <p class="none">${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${escapeHtml(hidden)}</p>
 <table>
-  <thead><tr><th>#</th><th>column</th><th>measured</th><th>empty</th><th>dirty</th><th>min</th><th>max</th><th>mean</th><th>spread</th></tr></thead>
+  <thead><tr><th>#</th><th>column</th><th>measured</th><th>empty</th><th>dirty</th><th>min</th><th>max</th><th>mean</th><th>spread</th><th>anomaly</th></tr></thead>
   <tbody>
 ${body}
   </tbody>

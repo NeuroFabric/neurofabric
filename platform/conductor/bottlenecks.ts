@@ -513,6 +513,23 @@ export interface NumericColumnStat {
   readonly mean: number | null;
   /** max - min, the reason the column survived the cap. */
   readonly spread: number | null;
+  /** Measured values beyond the Tukey fences. Zero when none, NOT null. */
+  readonly outliers: number;
+  /** The most extreme value beyond a fence, so the flag carries its magnitude. */
+  readonly outlierMax: number | null;
+  /** The most extreme value beyond a fence on the low side. */
+  readonly outlierMin: number | null;
+  /**
+   * The fences used, published so the judgement can be checked.
+   *
+   * A flag with no threshold stated is an oracle. Null means no fence was
+   * computed, which happens only when the column is too short to support one --
+   * never "checked and found clean".
+   */
+  readonly fenceLower: number | null;
+  readonly fenceUpper: number | null;
+  /** The detection method, or null when too few values were present to apply one. */
+  readonly method: "IQR" | null;
 }
 
 /**
@@ -537,6 +554,72 @@ const MAX_NUMERIC_COLUMNS = 10;
 
 /** How many distinct offending values one column may show. */
 const MAX_DIRTY_EXAMPLES = 3;
+
+/**
+ * Values required before outlier detection runs at all.
+ *
+ * Quartiles over four points are interpolation dressed up as a distribution.
+ * Flagging an outlier from four samples manufactures certainty rather than
+ * reporting it, so below this floor `method` is null and the report says the
+ * engine did not look.
+ */
+const MIN_OUTLIER_SAMPLES = 8;
+
+/** Tukey's constant. 1.5 is the standard fence; 3.0 is the "extreme" variant. */
+const OUTLIER_IQR_FACTOR = 1.5;
+
+/**
+ * The p-th percentile by linear interpolation between closest ranks (type 7).
+ *
+ * INTERPOLATION, not the nearest-rank rule used for the hourly p95, and the
+ * difference is deliberate. There, the reported number was a claimed
+ * measurement and had to be a value some row actually held. Here the result is a
+ * THRESHOLD -- a boundary, not an observation -- and the one every statistics
+ * library uses is interpolation, so a reader who checks this against pandas gets
+ * the same fence rather than a near miss and a suspicion that we invented one.
+ */
+function percentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return Number.NaN;
+  if (sorted.length === 1) return sorted[0];
+  const rank = (p / 100) * (sorted.length - 1);
+  const lo = Math.floor(rank);
+  const hi = Math.ceil(rank);
+  return sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+}
+
+/**
+ * Count values beyond the Tukey fences.
+ *
+ * IQR RATHER THAN Z-SCORE, because a z-score compares a point against the mean
+ * and standard deviation OF THE DISTRIBUTION CONTAINING IT. One absurd value
+ * inflates the very sigma it has to clear: a column with 199 values near zero and
+ * one at 9,999,999.99 gets sigma around 700,000, so the point reads as about 13
+ * sigma -- detectable only because it is so absurd, while a merely awkward 50
+ * against the same column is invisible. Tukey fences are built from the
+ * QUARTILES, which one value cannot move.
+ *
+ * The CONSTANT COLUMN IS THE DEGENERATE CASE worth naming: IQR is then zero, both
+ * fences sit on the single value, every value equals them, and nothing is
+ * flagged. That is the correct answer and it falls out of the arithmetic rather
+ * than needing a branch.
+ */
+function detectOutliers(values: readonly number[]): { outliers: number; low: number | null; high: number | null; lower: number | null; upper: number | null } {
+  if (values.length < MIN_OUTLIER_SAMPLES) return { outliers: 0, low: null, high: null, lower: null, upper: null };
+  const sorted = [...values].sort((a, b) => a - b);
+  const q1 = percentile(sorted, 25);
+  const q3 = percentile(sorted, 75);
+  const iqr = q3 - q1;
+  const lower = q1 - OUTLIER_IQR_FACTOR * iqr;
+  const upper = q3 + OUTLIER_IQR_FACTOR * iqr;
+  let count = 0;
+  let low: number | null = null;
+  let high: number | null = null;
+  for (const v of sorted) {
+    if (v < lower) { count += 1; low = v; }
+    else if (v > upper) { count += 1; high = v; }
+  }
+  return { outliers: count, low, high, lower, upper };
+}
 
 /**
  * DESCRIBE EVERY NUMERIC COLUMN, SHOW THE MOST VARIED.
@@ -565,6 +648,10 @@ function numericalProfile(csv: CsvReadResult): NumericalProfile {
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     let sum = 0;
+    // The surviving values, kept so the fences can be computed over exactly the
+    // cells the figures above were computed over. Computing them from the raw
+    // rows instead would let a dirty cell move the threshold that judges it.
+    const values: number[] = [];
     // DISTINCT offending values, capped. A column of four thousand identical
     // "N/A" cells must not produce four thousand words in the report, and the
     // count above already carries the magnitude.
@@ -585,11 +672,14 @@ function numericalProfile(csv: CsvReadResult): NumericalProfile {
         continue;
       }
       measured += 1;
+      values.push(value);
       sum += value;
       if (value < min) min = value;
       if (value > max) max = value;
     }
-    const shape = { column: c.column, measured, missing: empty + dirty, empty, dirty, dirtyExamples: [...examples] };
+    const outliers = detectOutliers(values);
+    const tail = { outliers: outliers.outliers, outlierMin: outliers.low, outlierMax: outliers.high, fenceLower: outliers.lower, fenceUpper: outliers.upper, method: (outliers.lower === null ? null : "IQR") as "IQR" | null };
+    const shape = { column: c.column, measured, missing: empty + dirty, empty, dirty, dirtyExamples: [...examples], ...tail };
     if (measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null };
     return { ...shape, min, max, mean: sum / measured, spread: max - min };
   });
