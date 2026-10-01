@@ -240,3 +240,86 @@ test("the server binds to loopback only", async () => {
     "a local tool that listens on every interface is a remote shell with extra steps");
   await server.close();
 });
+
+// === 6. The bad-request contract =========================================
+
+/**
+ * THE UI HAS NOWHERE TO ASK A QUESTION.
+ *
+ * The CLI answers a clarification by typing at it. A browser cannot: there is
+ * one dropzone and one request, so a run that needs to ask cannot ask. That is
+ * not an error path, it is the ordinary path for anything the conductor cannot
+ * resolve on its own, and it has one correct shape:
+ *
+ *   a 400, and the question, in the body, verbatim.
+ *
+ * 400 rather than 403, because the distinction is who has to act. A 400 means
+ * the caller has something to supply and the request may succeed once they do.
+ * A 403 means the kernel will not permit it however it is answered. A refusal
+ * dressed as a question would send the owner looking for a file that is not
+ * the problem, and a question dressed as a refusal would hide a boundary.
+ *
+ * These were previously only covered by accident, by a test that happened to
+ * trip the same path on its way to asserting something else. That is coverage
+ * of a neighbour, not of this contract, so it is pinned directly here.
+ */
+
+test("an unanswerable request is a 400 carrying the exact clarification prompt", async () => {
+  const { server, post } = await harness();
+  // A name the filesystem cannot hold, so no input can be located and the
+  // conductor has nothing to work with. This is the browser's real situation:
+  // there is no second turn in which to supply an answer.
+  const { status, body } = await post({ path: "a<b>.csv" });
+
+  assert.equal(status, 400, `an unanswerable run is a bad request: ${JSON.stringify(body).slice(0, 200)}`);
+  assert.equal(body.status, "CLARIFY_EXHAUSTED");
+  assert.equal(asFailure(body)?.code, "CLARIFY_EXHAUSTED");
+
+  const questions = body.questions as { code: string; question: string }[] | undefined;
+  assert.ok(Array.isArray(questions) && questions.length > 0,
+    "the body carries the question, because there is no other channel to ask on");
+  assert.equal(questions[0].code, "MISSING_INPUT_FILE");
+  assert.equal(questions[0].question, "Which CSV file should I read?",
+    "the prompt travels verbatim, so the UI shows what the conductor actually asked");
+
+  // It asked and stopped. It did not retry forever and it did not fall over:
+  // the server is still serving after a run that could not proceed.
+  const after = await fetch(`${server.url}/`);
+  assert.equal(after.status, 200, "the server survived a run it could not complete");
+  await after.text();
+  await server.close();
+});
+
+test("a malformed CSV is a 400 that names the problem, not a crash", async () => {
+  const { cwd, server, post } = await harness();
+  // Ragged: the header declares three columns and the row supplies five.
+  await writeFixture(cwd, "ragged.csv", `_time,source_host,alert_code
+2026-09-30 12:00:00.000,host-web,PEGA0001,extra,more`);
+  const { status, body } = await post({ path: "ragged.csv" });
+
+  assert.equal(status, 400, `a file the reader calls malformed is a bad request: ${JSON.stringify(body).slice(0, 200)}`);
+  assert.equal(body.status, "CLARIFY_EXHAUSTED");
+  const questions = body.questions as { code: string; question: string }[] | undefined;
+  assert.equal(questions?.[0]?.code, "AMBIGUOUS_CSV");
+  assert.match(questions?.[0]?.question ?? "", /malformed/i,
+    "the prompt says what is wrong with the file, not merely that something is");
+  await server.close();
+});
+
+test("ambiguity is a 400 and a policy refusal is a 403, and they stay distinct", async () => {
+  const { server, post } = await harness();
+  // Same endpoint, two different reasons for saying no. If these ever collapse
+  // into one status, the UI can no longer tell "tell me more" from "you may
+  // not", which is the whole reason the distinction exists.
+  const ambiguous = await post({ path: "a<b>.csv" });
+  const refused = await post({ path: "../../secrets.csv" });
+
+  assert.equal(ambiguous.status, 400, "the caller has something to supply");
+  assert.equal(refused.status, 403, "the kernel will not permit it however it is answered");
+  assert.equal(refused.body.status, "FAILED");
+  assert.equal(asFailure(refused.body)?.kernelReasonCode, "SOFT_REFUSE",
+    "and the refusal still carries the kernel's own tier");
+  assert.equal(ambiguous.body.failure === undefined || asFailure(ambiguous.body)?.kernelReasonCode === undefined, true,
+    "an ambiguity is not dressed up as a refusal");
+  await server.close();
+});
