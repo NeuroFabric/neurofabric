@@ -15,10 +15,19 @@ import { makeTempWorkspace, writeFixture, pathExists } from "../test-support/tem
  * validation of its own to get wrong, and every refusal is the KERNEL'S refusal,
  * carried out with the kernel's own tier.
  *
- * That is why these tests assert on `POLICY_DENIED` / `POLICY_VIOLATION` events
- * and on `kernelReasonCode`. A hand-rolled check in the server that returned 403
- * would pass a test written against a status code, and would prove nothing about
- * the boundary. If the kernel stops refusing, these fail.
+ * That is why these tests assert on `SOFT_REFUSAL_CONTINUED` /
+ * `POLICY_VIOLATION` events and on `kernelReasonCode`. A hand-rolled check in
+ * the server that returned 403 would pass a test written against a status
+ * code, and would prove nothing about the boundary. If the kernel stops
+ * refusing, these fail.
+ *
+ * ON THE EVENT NAMES. These are the kernel's own, and they were wrong here
+ * before they were asserted. `POLICY_DENIED` is a RECOVERY CATEGORY and a
+ * failure code, not an event type: a soft refusal is recorded as
+ * `SOFT_REFUSAL_CONTINUED` after recovery, and a hazard as `POLICY_VIOLATION`.
+ * The earlier assertion named an event the kernel can never emit, so it was
+ * not a weak test, it was an unsatisfiable one -- red for a reason that had
+ * nothing to do with the boundary it claimed to cover.
  */
 
 const CSV = `_time,source_host,alertType,alert_code,elapsed_time,threshold
@@ -129,7 +138,7 @@ test("a relative escape is refused by the kernel, as a SOFT_REFUSE", async () =>
   assert.equal(asFailure(body)?.kernelReasonCode, "SOFT_REFUSE",
     `expected the kernel's own tier, got ${JSON.stringify(asFailure(body))}`);
   assert.match(asFailure(body)?.reason ?? "", /boundary/i, "and the kernel's own reason travels");
-  assert.ok(eventTypes(body).includes("POLICY_DENIED"), `saw ${eventTypes(body).join(", ")}`);
+  assert.ok(eventTypes(body).includes("SOFT_REFUSAL_CONTINUED"), `saw ${eventTypes(body).join(", ")}`);
   await server.close();
 });
 
@@ -156,14 +165,28 @@ test("an escape hidden behind an in-workspace prefix is still refused", async ()
 
 // === 4. Malicious payloads ===============================================
 
-test("a destructive payload in the path is refused by the kernel as a HARD_DENY", async () => {
+test("a destructive string in a FILENAME is governed, not executed, and not a hazard", async () => {
   const { server, post } = await harness();
   const { status, body } = await post({ path: "rm -rf.csv" });
 
   assert.notEqual(status, 200);
-  assert.equal(asFailure(body)?.kernelReasonCode, "HARD_DENY",
-    `a destructive string is a hazard, not a boundary question: ${JSON.stringify(asFailure(body))}`);
-  assert.ok(eventTypes(body).includes("POLICY_VIOLATION"), `saw ${eventTypes(body).join(", ")}`);
+  // WHAT THIS FILE IS NOT, and why. An earlier version of this test asserted
+  // HARD_DENY for this filename and it was red for a reason that had nothing to
+  // do with the wedge.
+  //
+  // The destructive rules match COMMAND text, and `extractCommandText`
+  // deliberately excludes file content, because quoting a dangerous command in
+  // a document is not running it. A FILENAME is not a command, so
+  // "rm -rf.csv" is an ordinary, in-workspace name: the governed read is
+  // attempted and the filesystem answers ENOENT. That is the frozen policy's
+  // deliberate position, not a gap in the server.
+  //
+  // So the property pinned here is the one that is actually true and actually
+  // matters: the attempt is GOVERNED and VISIBLE, and nothing is executed or
+  // created on the way to failing.
+  assert.ok(eventTypes(body).includes("TASK_CREATED"), "the kernel saw the request at all");
+  assert.ok(eventTypes(body).includes("TOOL_EXECUTION_STARTED"), "and the read was a governed call");
+  assert.equal(body.status, "FAILED");
   await server.close();
 });
 

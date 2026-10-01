@@ -162,12 +162,20 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
           // The handoff. One call, no inspection: whatever the browser asked for
           // is what the kernel is asked to rule on.
+          // THE INPUT IS NAMED, NOT PARSED OUT OF PROSE.
+          //
+          // The path is framed with an explicit marker so the conductor
+          // receives the filename exactly as it was given. Guessing it back
+          // out of a sentence silently truncated `rm -rf.csv` to `-rf.csv`, so
+          // the hazard never reached the kernel and a destructive payload was
+          // quietly downgraded to a missing file. Framing is not validation:
+          // the kernel still rules on whatever arrives, and it still decides.
           const conductor = new Conductor({
             cwd,
             defaultsRoot: options.defaultsRoot ?? installRoot,
             projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
           });
-          const result = await conductor.run(`bottleneck report for ${target}`, {
+          const result = await conductor.run(`bottleneck report; input=${target}`, {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),

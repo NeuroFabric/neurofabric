@@ -147,7 +147,13 @@ export class Conductor {
       format?: "html" | "markdown";
     } = {},
   ): Promise<ConductorResult> {
-    this.emit("ASK", request);
+    // The request text is NOT recorded here. This progress list travels to a
+    // browser in the response body, and a request carries whatever filename a
+    // person typed, so recording it verbatim hands that string back inside the
+    // JSON the page renders. The resolved path is recorded at PLAN instead,
+    // which is safe precisely because a name that survived locating is one the
+    // filesystem could actually have.
+    this.emit("ASK");
     // THE STREAM IS READ BACK FROM THE KERNEL, NOT FROM A SUBSCRIPTION.
     //
     // A subscription here silently lost the second half of every run. The
@@ -176,7 +182,11 @@ export class Conductor {
       let input = this.locateInput(request);
       while (input === undefined && rounds < MAX_CLARIFY_ROUNDS) {
         rounds += 1;
-        const question: ClarifyQuestion = { code: "MISSING_INPUT_FILE", question: "Which CSV file should I read?", detail: { request } };
+        // The raw request is NOT echoed here. This detail travels back to a
+        // browser in the response body, and a request can carry any filename a
+        // person typed, so reflecting it verbatim hands an attacker's string
+        // back inside the JSON the page renders.
+        const question: ClarifyQuestion = { code: "MISSING_INPUT_FILE", question: "Which CSV file should I read?", detail: { requestLength: request.length } };
         questions.push(question);
         const answer = options.resolve?.(question);
         if (answer === undefined) {
@@ -418,8 +428,21 @@ export class Conductor {
    * same tier, and now it is visible and counted.
    */
   private locateInput(text: string): string | undefined {
-    const match = /[\w./\\-]+\.csv\b/i.exec(text);
-    if (match === null) return undefined;
-    return path.resolve(this.cwd, match[0]);
+    // An explicitly framed input is taken verbatim to its end, so a name that
+    // contains spaces survives intact. Guessing backwards out of the prose
+    // around it is what truncated `rm -rf.csv` to `-rf.csv` and hid a
+    // destructive payload from the kernel entirely.
+    const framed = /(?:^|[;\s])input=(.*)$/s.exec(text);
+    const named = framed?.[1].trim();
+    const raw = named !== undefined && named !== ""
+      ? named
+      : /[\w./\\-]+\.csv\b/i.exec(text)?.[0];
+    if (raw === undefined) return undefined;
+    // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
+    // speaking, not a security control: `<`, `>` and a NUL cannot appear in a
+    // filename on the supported platforms, so there is nothing there for the
+    // kernel to rule on. Anything the kernel COULD rule on is passed on.
+    if (/[<>:"|?*\u0000-\u001f]/.test(raw.replace(/^[A-Za-z]:/, ""))) return undefined;
+    return path.resolve(this.cwd, raw);
   }
 }
