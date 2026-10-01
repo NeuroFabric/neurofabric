@@ -337,6 +337,29 @@ export class ConfiguredPolicy implements PolicyEngine {
     this.denialTier = undefined;
     const denial = this.evaluateRules(request);
     if (denial) {
+      // RULING 3: A REFUSAL IS COUNTED, AND IT IS NOT PAID FOR.
+      //
+      // The hole this closes, measured by ruling3-refusal-budget.test.ts: the
+      // budget increment below is only reached when a call is ALLOWED, so a
+      // refused call cost nothing and the same refused call could be proposed
+      // forever. A refusal books no retry and no replan either (D1), so nothing
+      // bounded that loop at all — the policy would be refusing correctly and
+      // the task would never end.
+      //
+      // What is added is COUNTABILITY, not cost. The refusal increments the
+      // repeat map — the same per-(task, signature) map the allowed-call
+      // telemetry already used — and touches no counter. The budget therefore
+      // still cannot be exhausted purely by being refused, which is the failure
+      // mode a naive fix would have introduced.
+      //
+      // `countsFor` is called for its side effect of materialising the task's
+      // telemetry entry. It creates a zeroed record and increments nothing, so
+      // `toolBudget` can answer for a task whose every call so far was refused
+      // instead of reporting "nothing known" for a task it knows plenty about.
+      this.countsFor(request.taskId);
+      const repeats = this.repeatsFor(request.taskId);
+      const signature = callSignature(request);
+      repeats.set(signature, (repeats.get(signature) ?? 0) + 1);
       // D5 / §2.4(b): a scope refusal is still a DENY -- nothing is read and
       // nothing executes -- but it is marked, and the mark is what lets the
       // adapter carry "refused, not violated" to the result instead of
