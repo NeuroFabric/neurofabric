@@ -184,6 +184,20 @@ test("D1.4d a scan that could not complete is HARD_DENY (fail closed)", async ()
     "a scan that stopped early cannot certify the payload, so the call is refused as a hazard");
 });
 
+test("D1.4a a destructive TOKEN is HARD_DENY, distinct from a destructive PATTERN", async () => {
+  // Two different rule sites refuse a destructive command: a pattern matched in
+  // the command text, and a token matched by the parser's own classification.
+  // They are classified separately, so each is pinned separately — a mutation
+  // that only moved one of them must be caught, and this test exists so that it
+  // cannot be "caught" by accident through the other.
+  const { adapter } = await governed();
+  const pattern = await tierOf(adapter, "bash", { command: `${DESTRUCTIVE} /tmp/anything` }, "h1pat");
+  assert.equal(pattern, "HARD_DENY");
+  const token = await tierOf(adapter, "bash", { command: `${DESTRUCTIVE_TOKEN} notes.txt` }, "h1tok");
+  assert.equal(token, "HARD_DENY", "the TOKEN site is classified too, not only the pattern site");
+  assert.notEqual(adapter.currentTask!.status, "FAILED", "precondition: a preflight refusal alone ends nothing");
+});
+
 test("D1.5 a hard refusal TERMINATES with the rule's own reason on the certificate", async () => {
   const { adapter } = await governed();
   const reason = await refuseThenReport(adapter, "bash", { command: `${DESTRUCTIVE} /tmp/anything` }, "d5");
