@@ -72,15 +72,24 @@ test("G3 ranking by frequency, as the owner's question asks", async () => {
   assert.deepEqual(analysis.categories.map((c) => c.count), [13, 5, 4, 2]);
 });
 
-test("G4 ranking by TOTAL ELAPSED, which is a different order", async () => {
-  // PEGA0005 has fewer rows than PEGA0028 but a far larger total. A report that
-  // ranked only by frequency would hide the item that actually cost the most.
+test("G4 ranking by TOTAL ELAPSED, which is a DIFFERENT order", async () => {
+  // PEGA0001 leads on both, which is why a report that ranked only one way would
+  // look correct. The divergence is one place down: PEGA0005 is THIRD by
+  // frequency and SECOND by total elapsed. A frequency-only ranking buries the
+  // category that actually cost the most, while still looking like an answer.
   const csv = await pegaExport(realShape);
   const analysis = analyseBottlenecks(csv);
-  assert.equal(analysis.categoriesByElapsed[0].key, "PEGA0005",
-    "4 rows x 2500 beats 5 rows x 800 on total elapsed time");
-  assert.equal(analysis.categoriesByElapsed[0].totalElapsed, 10_000);
-  assert.equal(analysis.categoriesByElapsed[0].count, 4);
+
+  const byFreq = analysis.categories.map((c) => c.key);
+  const byElapsed = analysis.categoriesByElapsed.map((c) => c.key);
+  assert.notDeepEqual(byFreq, byElapsed, "the two rankings must actually disagree, or this test proves nothing");
+
+  const top = analysis.categoriesByElapsed[0];
+  assert.equal(top.key, "PEGA0001");
+  assert.equal(top.totalElapsed, 15_600, "13 rows x 1200");
+  assert.equal(byFreq.indexOf("PEGA0005"), 2, "third by frequency");
+  assert.equal(byElapsed.indexOf("PEGA0005"), 1, "but second by total elapsed");
+  assert.equal(analysis.categoriesByElapsed.find((c) => c.key === "PEGA0005")!.totalElapsed, 10_000);
 });
 
 test("G5 every category cites its evidence rows", async () => {

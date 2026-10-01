@@ -141,7 +141,11 @@ let analysis;
     assert.ok(checkoutAt < searchAt, "checkout-api should be ranked above search-idx");
   });
   check("it states its own error rate rather than implying one", () => {
-    assert.match(html, /overall error rate \d+\.\d%/);
+    // Present ONLY when a status column was mapped. Without one an error rate is
+    // not computable, and printing 0.0% would be a confident invention.
+    assert.match(html, /error rate \d+\.\d%/);
+    assert.equal(/no status column, so no error rate is claimed/.test(html), false,
+      "this fixture DOES have a status column, so the rate must be claimed");
   });
   }
 }

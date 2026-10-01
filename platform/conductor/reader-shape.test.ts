@@ -107,6 +107,23 @@ test("R6 the real-export shape is still analysable end to end", async () => {
   const analysis = analyseBottlenecks(csv);
   assert.equal(analysis.totalRows, 5);
   assert.equal(analysis.errorRows, 0, "no status column means no errors are claimed");
-  assert.deepEqual(analysis.bySource, [], "and no source column means no invented ranking");
   assert.deepEqual(analysis.recurring, [], "and no message column means no invented signatures");
+  assert.ok(analysis.missing.includes("message"), "the absent message field is named");
+
+  // This fixture is deliberately UNIFORM, and the R9 rule fires on it: every
+  // row carries the same alert_code, so ranking by it would put all five rows in
+  // one bucket. A null category with the column reported as degenerate is the
+  // honest answer, where an earlier version of this test expected a populated
+  // ranking and would have rendered a one-bucket table that looked like a result.
+  assert.equal(analysis.categoryColumn, null, "a single-valued alert_code cannot rank anything");
+  const degenerate = analysis.degenerateColumns.find((d) => d.column === "alert_code");
+  assert.ok(degenerate, "and the demotion is reported, not silent");
+  assert.equal(degenerate.distinctValues, 1);
+
+  // source_host IS a credible source and is now mapped, so the ranking is real
+  // rather than empty. This assertion was written when nothing was recognised;
+  // R9 mapping changed the answer, and the change is the point -- an empty
+  // ranking would have been the absence of a reading, not a finding.
+  assert.equal(analysis.bySource.length, 1);
+  assert.equal(analysis.bySource[0].key, "pega-psd-prt-background-6594d");
 });
