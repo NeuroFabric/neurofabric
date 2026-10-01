@@ -332,6 +332,10 @@ the residual lives:
 - It removes the candidate; it does not teach the extractor the difference
   between a command's own name, an argument, and a pattern position. That
   remains §5 item 1's hypothesis, unpinned.
+  **[SUPERSEDED]** That distinction is now made and pinned: the token guard
+  classifies by position, and the canonical statement of the rule — including
+  the pattern-position exemption and per-segment handling of compound commands —
+  is `docs/handoff.md` §10. Read that rather than this historical note.
 
 **Residual, stated rather than left implicit:** the extractor still judges
 candidates on the text the *shell* would resolve away, so the boundary is asked
@@ -1058,6 +1062,9 @@ guard before writing the message. Commit `b0a8cdf` on
 2. **Token guard scoping.** Enumerate the policy's token rules first, corpus
    second. Bare tokens must match at word boundaries in **command position**, not
    anywhere in any string. Same MUST-DENY gate.
+   **[DONE, by a different route]** Head-only matching was refused as written
+   (§2.1) and replaced by a recursive command-line parse; the position
+   classification now rides on that parse. See `docs/handoff.md` §10.
 3. **Benign non-zero exits.** Enumerate legitimately non-zero commands, propose a
    classification rule, implement on a branch with pins, flag for review.
 4. **C3b rebase.** Gated on the operator's merge signal. Already rebased onto
