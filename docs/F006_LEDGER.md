@@ -268,6 +268,122 @@ itself.
 
 **Next step.** Corpus-first, separate branch, same MUST-DENY gate (§5, item 2).
 
+#### Operator authorisation, 2026-09-30 — item 2 sanctioned, recursive parse AUTHORIZED
+
+Recorded before any implementation code, so the authorisation and the reasoning
+that produced it outlive the session that used it.
+
+**What was ruled.** Item 1 is closed (ratified). Item 2's *stated fix* — bare
+tokens match at word boundaries in command position — is **refused as written**,
+and the recursive command-line parse that replaces it is **authorised**. The
+refusal and the authorisation are one ruling: the head-only rule would un-break a
+committed decision, so the alternative approved is the parse.
+
+**Merge authority is unchanged.** The operator merges. Work is delivered as an
+open MR and waits.
+
+#### Step 0 — remote verification, recorded verbatim
+
+The repository of record is operator-stated and authoritative:
+`https://gitlab.com/neurofebric-group/neurofebric.git`.
+
+`git remote -v`:
+
+```
+origin	https://gitlab.com/neurofebric-group/neurofebric.git (fetch)
+origin	https://gitlab.com/neurofebric-group/neurofebric.git (push)
+```
+
+**Origin already equals the repository of record.** `git remote set-url` was
+therefore **not run** — no before/after difference exists to record, because no
+mutation was needed. Recorded as measured; an authorisation that went unused is
+not a step that was skipped.
+
+`git config --get-regexp '^branch\..*\.remote$'` — 18 branches, all on `origin`:
+
+```
+branch.main.remote origin
+branch.ci/gitlab-gate.remote origin
+branch.rescue/terminal-state-conformance.remote origin
+branch.docs/d025-verified-empty.remote origin
+branch.docs/core-limits-envelope-truth.remote origin
+branch.fix/denial-classification.remote origin
+branch.docs/f006-backlog-ledger.remote origin
+branch.fix/extractor-precision.remote origin
+branch.fix/terminal-refusal-echo.remote origin
+branch.docs/f006-c3b-addendum.remote origin
+branch.chore/f006-pin-hygiene.remote origin
+branch.docs/a1.1-ledger-fold.remote origin
+branch.docs/manifest.remote origin
+branch.fix/d4-path-boundary.remote origin
+branch.fix/d4a-boundary-unescape.remote origin
+branch.fix/d4b-glob-prefix-scope.remote origin
+branch.fix/f006-benign-nonzero-exit.remote origin
+branch.fix/f006-argument-position.remote origin
+```
+
+#### The stranded-docs commit is NOT stranded — measured, not assumed
+
+`git branch -r --contains d63cbc3` returns **five** refs, not zero:
+
+```
+  origin/HEAD -> origin/main
+  origin/fix/d4b-glob-prefix-scope
+  origin/fix/f006-argument-position
+  origin/fix/f006-benign-nonzero-exit
+  origin/main
+```
+
+`d63cbc3` is already contained in `origin/main`. **Nothing was pushed**, so the
+conditional authorisation ("if empty, push it") did not fire. A push here would
+have been an unnecessary write to a shared remote on the strength of an assumed
+rather than measured premise; the probe is what prevented it.
+
+#### Step 1 — branch base, measured
+
+| Fact | Measured value | How |
+|---|---|---|
+| `origin/main` tip | `61c8177` "Merge branch 'fix/f006-benign-nonzero-exit' into 'main'" | `git fetch origin` then `git log origin/main --oneline -1` |
+| `61c8177` is an ancestor of `origin/main` | **yes** | `git merge-base --is-ancestor 61c8177 origin/main` |
+| Working branch | `fix/f006-command-position-parse`, created **from `origin/main`**, tracking it | `git checkout -b fix/f006-command-position-parse origin/main` |
+
+#### Base verified before any security change — standing rule honoured
+
+No security change lands on an unverified base, so the suite was run on the
+freshly created branch, before any edit:
+
+```
+npm test   (typecheck && platform/*.test.mjs && platform/{core,pi}/*.test.ts)
+# tests 517
+# pass 515
+# fail 0
+# skipped 2
+```
+
+**Base green.** 517 tests, 515 pass, 0 fail, 2 skipped. Typecheck is part of
+`npm test`, so the type gate is inside this figure.
+
+#### Structural finding — this branch's base does NOT carry item 1
+
+The directive says branch item 2 from the measured `origin/main` tip, and that is
+what was done. Measured consequence, recorded because it is invisible later:
+
+| Artifact | On `origin/main` (61c8177) | On `fix/f006-argument-position` (73a5fa6) |
+|---|---|---|
+| §2.2 "Item 2 enumerated" write-up | **absent** | present |
+| `platform/pi/argument-position-corpus.test.ts` | **absent** | present, 338 lines |
+| `GREP_FAMILY`, `takeNextAsPattern`, `patternFromFile`, `-e`/`-f` in `tool-paths.ts` | **present** | present |
+
+`git diff --stat origin/main 73a5fa6` is `docs/F006_LEDGER.md | 115 +++++-` and
+`platform/pi/argument-position-corpus.test.ts | 338 +++++`.
+
+Two consequences, both benign but both real. The item-2 **reasoning** this work
+depends on is written up on a branch that has not merged, so it will reach `main`
+only when the operator merges item 1; the work does not depend on that text being
+on `main`, only on the **tables**, and the tables *are* on `main` (verified at
+`61c8177` by `git grep`, not assumed). And the two corpora are in **different
+files**, so item 1's corpus and item 2's cannot collide when both merge.
+
 ### 2.4 D4 — the path boundary judges text the shell never resolves (TWO defects)
 
 Found by Pi during the F-006 work and filed here as **D4**. It is not folded
