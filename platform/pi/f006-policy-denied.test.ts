@@ -162,6 +162,37 @@ test("D1.1b an unmarked tool error still classifies as before", () => {
   assert.equal(classifyFailure(new CoreError("POLICY_ERROR", "denied", { retryable: false })), "PERMISSION");
 });
 
+test("D1.1c a refusal keeps its identity all the way OUT to the caller", async () => {
+  const { adapter } = await denyingAdapter();
+  await deniedMidExecution(adapter, "d1-caller");
+
+  // The reversal stopped the death. It did not stop the refusal being
+  // reported, and reporting it is the whole of the contract.
+  assert.equal(
+    lastPayload(adapter, "RECOVERY_STARTED")?.failure,
+    "POLICY_DENIED",
+    "the refusal reaches recovery under its own category, not collapsed to TOOL_FAILURE",
+  );
+  assert.equal(
+    lastPayload(adapter, "SOFT_REFUSAL_CONTINUED")?.denialReason,
+    DENIAL_REASON,
+    "and reaches the caller verbatim, so the refusal is attributable to a rule",
+  );
+
+  // KNOWN GAP, NOT YET PINNED AS A FAILURE. The ValidationResult returned to the
+  // caller is { status: "INVALID", validator: "pi-result" } - byte-identical to
+  // a genuine tool failure. A caller that branches on `validator` to decide
+  // whether to retry would treat this refusal as a fault and retry it: D1
+  // reborn one layer out, where the kernel's own classification can no longer
+  // reach in to correct it.
+  //
+  // Deliberately NOT asserted here. Threading a refusal-specific validator is a
+  // behaviour change at a public boundary and has its own review cycle
+  // (roadmap.md, P1). Asserting the gap would park a permanently red test in
+  // CI, and a red test people learn to ignore is worse than an unwritten one.
+  // The assertion inverts to an equality when the fix lands.
+});
+
 // --- 2-5. the invariant, end to end ---------------------------------------
 
 test("D1.2 REVERSED: a denied call does NOT terminate the task", async () => {
