@@ -528,6 +528,55 @@ of agent discipline. The repository-level merge buttons under *Settings → Gene
 → Pull Requests* are a separate control and were intentionally left untouched;
 the ruleset is what guarantees the constraint.
 
+## 10a. Known coverage gaps in the command guard — read before trusting it
+
+These are confirmed open, not suspected. Each says what it is, which way it
+fails, and what would close it. They live here rather than only in backlog
+because every one of them is a place where the guard is **weaker than the rule
+it is described by**, and an operator reading only the rule would not know.
+
+**1. No Windows CI job.** Every job runs on the `node:22` image (Debian). The
+command-wrapper table was *measured* on MSYS2/MinGW64, and the Windows half of
+the old matrix is deliberately not reproduced: a Windows runner needs a
+project-level runner registration, which is a project-settings action reserved
+for the operator. **So the guard has never run in CI on the platform where its
+table was measured.** Locally it passes on Windows; nothing enforces that.
+
+**2. `measure-wrappers` re-derives the table on Linux, and that is the partial
+mitigation.** `verification/measure-command-wrappers.mjs` runs each claim the
+table makes as an actual invocation and fails the build on a refutation. It is
+the only thing making the Linux gap visible. It has found no divergence, but it
+also has not measured `sudo`, `setsid` or `watch`, because they are absent from
+the measurement host — `sudo` answers `--version` there as **1.0.1**, which is
+Git for Windows' stub, not GNU sudo. The script probes all three every run, so
+a real GNU sudo appearing on a runner becomes visible rather than silent.
+
+**3. Option-value detection under an unmeasured wrapper.** `delegatedOperand`
+assumes `-X` consumes the next token, which is unverifiable for an unmeasured
+program. It therefore errs in *both* directions and neither is fixable without
+measurement:
+
+- `sudo -u root <token>` → the value is skipped and the token IS reached →
+  `HARD_DENY`. Fails **closed**, which is why the assumption is safe to hold.
+- `sudo -n <token>` where `-n` genuinely takes no value → one operand too many
+  is skipped, the token is not reached, and it is tiered **soft**. Fails
+  **open**. This is a real gap.
+
+**4. Combined shell flags are not read.** `sh -lc "<token> ..."` is not
+recognised: `-lc` is neither `-c` nor any other payload flag, so the payload is
+never parsed and the token inside it is not seen as command position. Fails
+**open**.
+
+Gaps 3 and 4 are the same root cause as gap 1: the wrapper table was measured on
+one host and the behaviours in question cannot be derived without running the
+real programs. Closing them means running GNU `sudo`, `setsid`, `watch` and the
+combined-flag forms on a Linux runner and adding the measurements — which is the
+`measure-wrappers` job's job once those binaries are present.
+
+**None of these is a new policy.** They are places where the existing one does
+less than its description says, and the description is the thing to fix first if
+anyone is misled.
+
 ## 11. Force-push guard divergence — which control actually over-blocks
 
 Recorded 2026-09-29 as the full divergence behind the D-024 correction note.
