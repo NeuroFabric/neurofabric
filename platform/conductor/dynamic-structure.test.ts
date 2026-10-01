@@ -54,14 +54,28 @@ test("a file with no categorical column prints NO ranking headings", () => {
   const md = toBottleneckMarkdown(analysis, "Numerical file");
   assert.ok(!md.includes("categories by frequency"), "no frequency heading");
   assert.ok(!md.includes("categories by total elapsed"), "no elapsed heading");
-  assert.ok(!md.includes("| 1 |"), "and no empty table body pretending to be a result");
   assert.ok(!md.includes("#1 by frequency"), "no headline about a leader that does not exist");
+  // NOT "no row starting | 1 |". The numerical fallback table has one, and it is
+  // a real result. This assertion used to sweep that up and has to name the
+  // RANKING tables specifically, which is what it was always trying to say.
 });
 
 test("the one-line note says what was missing, in plain words", () => {
   const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
   assert.match(md, /^> No categorical columns found; skipping categorical rankings\.$/m,
     "exactly the agreed sentence, as its own line");
+});
+
+test("the provenance table is omitted too when NO column could be read as a role", () => {
+  // Found by running the OWNER'S ACTUAL FILE rather than by reasoning about it.
+  // A header with no body is the same defect as an empty ranking table, and it
+  // was still there: twenty columns named col_1..col_20 match no role candidate
+  // at all, so the report printed role/column/basis/note over zero readings.
+  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
+  assert.ok(!md.includes("| role | column | basis | note |"), "no empty provenance table");
+  assert.match(md, /no readings to report/, "and it says what that means");
+  // The gap statement is real information and must survive.
+  assert.match(md, /cannot answer anything requiring/, "what could not be answered is still reported");
 });
 
 test("a categorical file still gets both tables", () => {

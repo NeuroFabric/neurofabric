@@ -1,5 +1,5 @@
 import type { CsvReadResult } from "./capabilities.ts";
-import type { ResolvedSchema } from "./schema-memory.ts";
+import { profileGenericColumns, type ResolvedSchema } from "./schema-memory.ts";
 
 /**
  * BOTTLENECK ANALYSIS for Stage 2.
@@ -187,6 +187,18 @@ export interface BottleneckAnalysis {
    * the plain counts, and nothing that consumed it changed.
    */
   readonly hourly: HourlyProfile;
+  /**
+   * Descriptive statistics for the file's numeric columns. The FALLBACK, for a
+   * file with no categorical ranking to show.
+   *
+   * ALWAYS COMPUTED, not only when the ranking is empty, and that is the
+   * deliberate choice: a field whose contents depend on a sibling field's
+   * emptiness is exactly the conditional shape that turns into a bug later. The
+   * pass is bounded by the profiler's 200-row classification sample plus one
+   * arithmetic pass over the file, which is not a cost worth optimising into a
+   * landmine. The RENDERER decides when to show it.
+   */
+  readonly numerical: NumericalProfile;
   readonly latency: readonly LatencyBand[];
   /** Rows whose timestamp could not be read, so they are excluded from byHour. */
   readonly unreadableTimestamps: readonly number[];
@@ -463,6 +475,104 @@ function bucket(map: Map<string, { error: number; rows: number[] }>, key: string
 }
 
 /** Turn a parsed CSV into the ranked bottleneck view. Never throws. */
+/**
+ * ONE NUMERIC COLUMN, SUMMARISED.
+ *
+ * `measured` and `missing` are reported SEPARATELY and add up to the row count,
+ * because a column that silently drops two values out of twenty is not
+ * summarising the column. `missing` counts blanks and wrongly-typed cells
+ * together, and neither is treated as zero -- see `durationStats` for why that
+ * distinction is load-bearing rather than pedantic.
+ */
+export interface NumericColumnStat {
+  readonly column: string;
+  /** Values that parsed as a number. */
+  readonly measured: number;
+  /** Rows whose cell was blank or not a number. */
+  readonly missing: number;
+  readonly min: number | null;
+  readonly max: number | null;
+  readonly mean: number | null;
+  /** max - min, the reason the column survived the cap. */
+  readonly spread: number | null;
+}
+
+/**
+ * THE FALLBACK ANALYSIS, for a file with no ranking to make.
+ *
+ * A matrix of anonymous numeric columns has no category, no timestamp and no
+ * source, so every ranking this product knows how to compute is empty. That is
+ * a true conclusion drawn from the wrong question: the file still contains
+ * thousands of numbers, and "what is in this file" has an answer.
+ */
+export interface NumericalProfile {
+  readonly columns: readonly NumericColumnStat[];
+  /** Every numeric column in the file, including any not shown. */
+  readonly numericColumns: number;
+  /** True when `columns` shows a capped subset. Never truncate silently. */
+  readonly truncated: boolean;
+  readonly rows: number;
+}
+
+/** Ten rows is a data dictionary; twenty is noise. The report says which. */
+const MAX_NUMERIC_COLUMNS = 10;
+
+/**
+ * DESCRIBE EVERY NUMERIC COLUMN, SHOW THE MOST VARIED.
+ *
+ * WHICH COLUMNS COME FROM THE PROFILER, but the ARITHMETIC IS OVER EVERY ROW.
+ * `profileGenericColumns` classifies from a 200-row sample because deciding
+ * whether a column is numeric does not need every row -- but a mean computed
+ * over 200 of 2000 rows, presented next to a row count that says 2000, is the
+ * silent-partial-answer bug this codebase has been bitten by twice. Classification
+ * may be sampled; statistics may not.
+ *
+ * ORDER IS BY SPREAD, not file position. Taking the first ten columns would show
+ * col_1..col_10 and hide the eleven most informative, and a column whose every
+ * value is identical is the least informative thing in a numeric file. The name
+ * breaks ties so two runs produce byte-identical reports.
+ *
+ * A cell that will not parse is EXCLUDED from min, max and mean, and counted in
+ * `missing`. It is never treated as zero: zero is a value the file stated.
+ */
+function numericalProfile(csv: CsvReadResult): NumericalProfile {
+  const numericColumns = profileGenericColumns(csv.headers, csv.rows).filter((c) => c.kind === "numeric");
+  const stats = numericColumns.map((c): NumericColumnStat => {
+    let measured = 0;
+    let missing = 0;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    let sum = 0;
+    for (const row of csv.rows) {
+      const raw = String(row[c.column] ?? "").trim();
+      const value = raw.length === 0 ? Number.NaN : Number(raw);
+      if (!Number.isFinite(value)) { missing += 1; continue; }
+      measured += 1;
+      sum += value;
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    if (measured === 0) return { column: c.column, measured: 0, missing, min: null, max: null, mean: null, spread: null };
+    return {
+      column: c.column,
+      measured,
+      missing,
+      min,
+      max,
+      mean: sum / measured,
+      spread: max - min,
+    };
+  });
+
+  const ordered = [...stats].sort((a, b) => (b.spread ?? -1) - (a.spread ?? -1) || a.column.localeCompare(b.column));
+  return {
+    columns: ordered.slice(0, MAX_NUMERIC_COLUMNS),
+    numericColumns: stats.length,
+    truncated: stats.length > MAX_NUMERIC_COLUMNS,
+    rows: csv.rows.length,
+  };
+}
+
 /** Hours below this cannot support a ratio test. See `hourlyProfile`. */
 const MIN_HOUR_BUCKETS = 4;
 
@@ -731,6 +841,7 @@ export function analyseBottlenecks(
     recurring: rank(signatures),
     byHour: rank(hours),
     hourly: hourlyProfile(hours),
+    numerical: numericalProfile(csv),
     latency: bands.filter((b) => b.rows.length > 0).map((b) => ({ label: b.label, count: b.rows.length, rows: b.rows })),
     unreadableTimestamps: unreadable,
     problems: csv.problems,

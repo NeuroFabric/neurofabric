@@ -131,12 +131,12 @@ function mappingsSection(a: BottleneckAnalysis): string {
   const absent = a.missing.length === 0 ? "" : `<p class="gap"><strong>This page cannot answer anything requiring:</strong> ${a.missing.map(escapeHtml).join(", ")}. No credible column for ${a.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted for ${a.missing.length === 1 ? "it" : "them"}.</p>`;
   return `<h2>How this page was read</h2>
 ${provenanceNote(a)}
-<table>
+${mapped === "" ? `<p class="none">No column in this file was credibly readable as any role, so there are no readings to report. The columns exist and are described below.</p>` : `<table>
   <thead><tr><th>role</th><th>column</th><th>basis</th><th>note</th></tr></thead>
   <tbody>
 ${mapped}
   </tbody>
-</table>
+</table>`}
 ${dropped === "" ? "" : `<h2>Columns deliberately not ranked on</h2>
 <ul class="none">
 ${dropped}
@@ -287,6 +287,55 @@ function mdRows(rows: readonly number[], limit = 12): string {
 
 const NO_CATEGORIES_NOTE = "No categorical columns found; skipping categorical rankings.";
 
+/**
+ * THE FALLBACK TABLE. What a file of numbers gets instead of a ranking.
+ *
+ * Shown ONLY when there is no categorical ranking to show, and never alongside
+ * one: a Pega export has four elapsed figures and a threshold, and a min/mean/max
+ * table beside it would displace the answer that actually matters. The cap is
+ * stated rather than implied -- an unannounced truncation reads as "these are all
+ * the numeric columns", which would be false for the Owner's 20-column file.
+ */
+function numericalSummaryMarkdown(a: BottleneckAnalysis): string {
+  const n = a.numerical;
+  if (n.columns.length === 0) return "";
+  const fmt = (v: number | null, digits = 4): string => (v === null ? "not measurable" : Number(v.toFixed(digits)).toLocaleString());
+  const out: string[] = ["## Numerical data summary", ""];
+  out.push(`_${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : ""}_`, "");
+  out.push("| # | column | measured | missing | min | max | mean | spread |", "|---|---|---|---|---|---|---|---|");
+  n.columns.forEach((c, i) => {
+    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.missing} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |`);
+  });
+  out.push("", "_Columns with the widest spread first. A cell that was blank or not a number is counted under `missing` and excluded from the figures above; it is never treated as zero._", "");
+  return out.join("\n");
+}
+
+function numericalSummaryHtml(a: BottleneckAnalysis): string {
+  const n = a.numerical;
+  if (n.columns.length === 0) return "";
+  const fmt = (v: number | null): string => (v === null ? "&mdash;" : escapeHtml(Number(v.toFixed(4)).toLocaleString()));
+  const body = n.columns.map((c, i) => `    <tr>
+      <td class="rank">${i + 1}</td>
+      <td>${escapeHtml(c.column)}</td>
+      <td class="num">${c.measured}</td>
+      <td class="num">${c.missing}</td>
+      <td class="num">${fmt(c.min)}</td>
+      <td class="num">${fmt(c.max)}</td>
+      <td class="num">${fmt(c.mean)}</td>
+      <td class="num">${fmt(c.spread)}</td>
+    </tr>`).join("\n");
+  const hidden = n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : "";
+  return `<h2>Numerical data summary</h2>
+<p class="none">${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${escapeHtml(hidden)}</p>
+<table>
+  <thead><tr><th>#</th><th>column</th><th>measured</th><th>missing</th><th>min</th><th>max</th><th>mean</th><th>spread</th></tr></thead>
+  <tbody>
+${body}
+  </tbody>
+</table>
+<p class="none">Columns with the widest spread first. A cell that was blank or not a number is counted under <strong>missing</strong> and excluded from the figures above; it is never treated as zero.</p>`;
+}
+
 function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string, vocabulary: ReportVocabulary): string {
   // EMPTY IN, EMPTY OUT. A caller that has already established there is nothing
   // to rank gets nothing back, so a heading can never be printed over an empty
@@ -420,11 +469,19 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
       ? "_No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation._"
       : `_${verifiedCount} of ${analysis.mappings.length} column reading(s) come from ${analysis.schemaSource === "SESSION_ARCHIVE" ? "this checkout's own learned schema" : "a core schema shipped with the product"}, verified against a real export of this shape._`);
     out.push("");
-    out.push("| role | column | basis | note |", "|---|---|---|---|");
-    for (const m of analysis.mappings) {
-      out.push(`| ${mdCell(m.role)} | ${mdCell(m.column)} | ${m.hypothesis ? "hypothesis" : "established"} | ${mdCell(m.note)} |`);
+    // The mappings TABLE is conditional for the same reason the ranking tables
+    // are. A header with no body reads as "we checked and found nothing", which
+    // on a file of anonymous numeric columns is four column names over zero
+    // readings. The gap paragraph below still says what could not be answered.
+    if (analysis.mappings.length > 0) {
+      out.push("| role | column | basis | note |", "|---|---|---|---|");
+      for (const m of analysis.mappings) {
+        out.push(`| ${mdCell(m.role)} | ${mdCell(m.column)} | ${m.hypothesis ? "hypothesis" : "established"} | ${mdCell(m.note)} |`);
+      }
+      out.push("");
+    } else {
+      out.push("_No column in this file was credibly readable as any role, so there are no readings to report. The columns exist and are described below._", "");
     }
-    out.push("");
   }
 
   if (analysis.degenerateColumns.length > 0) {
@@ -448,6 +505,9 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     out.push(mdCategoryTable(analysis.categoriesByElapsed, `${vocab.headingUnit} categories by total elapsed time`, "total elapsed time", vocab));
   } else {
     out.push(`> ${NO_CATEGORIES_NOTE}`, "");
+    // The fallback analysis: with no ranking to show, describe the numbers.
+    const summary = numericalSummaryMarkdown(analysis);
+    if (summary !== "") out.push(summary);
   }
 
   if (analysis.byHour.length > 0) {
@@ -565,7 +625,8 @@ ${mappingsSection(analysis)}
 ${analysis.categories.length > 0
     ? `${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
 ${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}`
-    : `<p class="none">${escapeHtml(NO_CATEGORIES_NOTE)}</p>`}
+    : `<p class="none">${escapeHtml(NO_CATEGORIES_NOTE)}</p>
+${numericalSummaryHtml(analysis)}`}
 ${hourlyTable(analysis)}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>
