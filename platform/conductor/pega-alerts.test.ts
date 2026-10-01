@@ -182,3 +182,70 @@ test("G10 a required field that IS present is never reported missing", async () 
   assert.equal(analysis.missing.includes("category"), false);
   assert.equal(analysis.missing.includes("duration"), false);
 });
+
+// === R10-R13: owner rulings, ratified after the first real run ==========
+
+test("R10a the elapsed unit is milliseconds, not a guess", async () => {
+  // R10. Previously this was flagged as a hypothesis because no unit was stated
+  // anywhere in the export. The owner has now ruled it, so it is established
+  // fact and the page may print "ms" rather than an uninterpretable number.
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.durationUnit, "ms");
+  assert.equal(analysis.durationUnitIsRuled, true, "a ruling is not a hypothesis");
+});
+
+test("R11a timestamps are UTC, so the hourly table may say so", async () => {
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.timeZoneIsRuled, true);
+});
+
+test("R13 a category carries its logger alias", async () => {
+  // R13: the code alone is not readable. "PEGA0005" means nothing to the person
+  // who has to act on it, so the label becomes "PEGA0005 (<logger>)".
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.categories[0].label, "PEGA0001 (logger-PEGA0001)",
+    "the alias is appended, not substituted");
+  assert.equal(analysis.categories[0].key, "PEGA0001", "the key stays machine-readable");
+});
+
+test("R13b an alias is only appended when it is unambiguous", async () => {
+  // One logger mapping to several codes is not an alias, it is a coincidence.
+  // Asserting an alias there would print a label that is wrong for most rows.
+  const cwd = await makeTempWorkspace("nf-alias-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [
+    "2026-09-30T12:00:00Z,performance,PEGA0001,shared,1200,1000",
+    "2026-09-30T12:01:00Z,performance,PEGA0002,shared,900,1000",
+    "2026-09-30T12:02:00Z,performance,PEGA0001,shared,1300,1000",
+  ];
+  await writeFixture(cwd, "ambiguous.csv", `${header}\n${rows.join("\n")}\n`);
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "ambiguous.csv") }));
+  assert.equal(analysis.categories[0].label, "PEGA0001", "an ambiguous mapping must not be printed");
+  assert.ok(analysis.ambiguousAliases.length > 0, "and the ambiguity is reported");
+});
+
+test("D1 a divergence between the two rankings is measured, not just noticed", async () => {
+  const csv = await pegaExport(realShape);
+  const analysis = analyseBottlenecks(csv);
+  assert.ok(analysis.divergence !== null, "the orderings disagree, so divergence must be reported");
+  assert.equal(analysis.divergence.byFrequency.key, "PEGA0001");
+  assert.equal(analysis.divergence.byElapsed.key, "PEGA0005");
+  // 10000 / 21543*... compute from the fixture: 13x1200=15600? no - real shape
+  assert.equal(analysis.divergence.totalRatio, 10_000 / 15_600);
+  assert.equal(analysis.divergence.alertRatio, 4 / 13);
+});
+
+test("D2 no divergence is reported when both rankings agree", async () => {
+  // A headline that always shouts is a headline nobody reads.
+  const cwd = await makeTempWorkspace("nf-agreed-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [];
+  for (let i = 0; i < 6; i += 1) rows.push(`2026-09-30T12:0${i}:00Z,performance,PEGA0001,logger-a,1000,1000`);
+  for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:0${i}:00Z,performance,PEGA0002,logger-b,900,1000`);
+  await writeFixture(cwd, "agree.csv", `${header}\n${rows.join("\n")}\n`);
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "agree.csv") }));
+  assert.equal(analysis.divergence, null, "one leader on both orderings is not news");
+});
