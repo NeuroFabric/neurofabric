@@ -247,7 +247,7 @@ Note: Gate 1 of the D-001 migration is verified - a real Pi turn pinned to auto/
 - deniedTools/allowedTools: [] - no name gating; tool risk tier governs.
 - fileRules: catch-all allow read+write inside roots.
 - Pattern lists - destructive command patterns and tokens, credential-filename rules, and the write-time credential guardrail - live in the policy file. Token spellings are intentionally omitted from this document, because persisting them is exactly what the write-time guardrail blocks.
-- limits: maxToolCallsPerTask: 120, maxFileWritesPerTask: 30, maxBytesPerWrite: 2000000, onViolation: block.
+- limits: maxToolCallsPerTask: 200, maxFileWritesPerTask: 30, maxBytesPerWrite: 2000000, onViolation: block.
 
 ### Kernel limits (as implemented)
 
