@@ -72,15 +72,47 @@ reaches the caller verbatim) and names the gap in a comment. **It does not asser
 `validator` is undefined** — a permanently red pin breaks CI and trains people to
 ignore red. The pin inverts when the fix lands.
 
+## Phase 5 split — operator ruling, effective immediately
+
+Phase 5 previously ran as one gated item. It is now split:
+
+- **5a — scaffolding. AUTHORIZED. Track B, new branch `docker-ui-scaffold`.**
+  Dockerfile + compose for the green baseline, and a frontend shell built on
+  mock data. Contracts only; no dependency on any unbuilt plane. Track B
+  commits directly to its own branch, MR per milestone, operator merge
+  ratifies. **Track B must not modify `platform/` internals.**
+- **5b — production integration. STILL GATED** on the acceptance test. Not
+  un-gated by this ruling.
+
+The two tracks, and the only things gating production integration:
+
+- **Track A (unchanged, continues here):** Phase 1 queue → State plane →
+  Observability plane.
+- **Track B (scaffold only):** 5a above.
+
+Track A items are the only gate on production integration.
+
+**Phase numbering is externally sourced.** Neither `roadmap.md` nor
+`docs/F006_LEDGER.md` contained a `Phase N` construct before this entry; the
+numbering comes from a plan held outside this repository. Recorded as stated, not
+reconstructed.
+
+**5a's own gate is stated and currently UNVERIFIED:** the container must run the
+full test suite green before any UI work. Docker is not installed in the authoring
+environment, so the gate cannot be evaluated there. See Track B item 1 below.
+
 ## Remaining work
 
 | # | Item | State |
 |---|---|---|
 | 1 | This roadmap | done |
-| 2 | Stale comment, `kernel-adapter.ts:1620-1623` | pending |
-| 3 | Documenting pin D1.1c | pending |
-| 4 | Ledger reversal entry | pending |
-| 5 | Caller-boundary fix (validator threading) | **deferred — own review cycle** |
+| 2 | Stale comment, `kernel-adapter.ts:1620-1623` | done (`d25ee8e`) |
+| 3 | Documenting pin D1.1c | **blocked — awaiting operator paste** |
+| 4 | Ledger reversal entry | pending, diff first |
+| 5 | Caller-boundary fix (validator threading) | deferred — own review cycle |
+| B1 | Dockerfile + compose, green baseline | in progress |
+| B2 | Frontend shell, mock data | pending B1 |
+| B3 | Typed wire points for State + Observability | pending B2 |
 
 ## Standing hazards
 
