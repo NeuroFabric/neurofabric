@@ -1,100 +1,120 @@
 # Stage 2 — Direction
 
-**Status: BLOCKED pending owner input. No direction is chosen.**
+**Status: ACTIVE. First user: Rishabh (owner). First increment built and pinned.**
 
-## Why this page has no recommendation
+## Who, and what they actually do
 
-The Stage 2 brief supplies its candidate list from the owner. That list arrived
-**empty**. Four criteria cannot be scored against nobody, and the failure mode
-here is not an inconclusive analysis — it is manufacturing a customer to have
-something to analyse. A framework applied to an invented user produces a
-confident page that is worthless, because its confidence would be manufactured
-rather than earned.
+**Rishabh** — reporting, analysis, and finding bottlenecks.
 
-So this page states the criteria, states what each one disqualifies, and states
-exactly what is needed to unblock. Nothing further.
+Data arrives as **Splunk log exports in CSV**. That is the input, and it is not
+a wish: it is the format that already exists, which is the first criterion in the
+framework below and the reason this direction is live rather than hypothetical.
 
-## What Stage 1 actually established
+**Explicitly later scope: documents and attachments.** Not deferred because they
+are unimportant — deferred because the first increment has to be one command and
+one file, and document parsing is a second problem wearing the first one's coat.
 
-Worth restating, because Stage 2 must not re-litigate it. The CSV → one-page
-dashboard loop is **demonstrated end to end**, with a clean file and with a
-malformed one. That is the whole of Stage 1: the loop works, and it fails
-honestly rather than silently. What it has *not* established is that anyone
-wants it. Those are different claims, and only the first is proven.
+**The specifics on this page are hypotheses to validate, not facts.** They were
+drafted from the owner's description before anyone had opened a real export. The
+founder of every claim here is the first session with Rishabh, not this document.
 
-## The four criteria
+## The first increment
 
-A candidate serves the loop **first** only if it clears all four. They are
-ordered by how cheaply they can be checked, not by importance.
+**One command: a Splunk CSV in, a one-page bottleneck report out.**
 
-### 1. The data already exists as CSVs
+The report answers four things, and every number in it cites the rows it came
+from:
 
-Not "could be exported as CSV" — *already is*, today, without a project to get
-there. This is the strictest filter and it should be applied first, because it
-is the one that cannot be argued around later.
+1. **Top error sources by volume** — ranked worst-first, each with its error
+   count, its rate, and the row numbers behind it.
+2. **Time distribution** — error volume bucketed by hour, with unreadable
+   timestamps excluded from the buckets and listed, rather than silently coerced.
+3. **Recurring patterns** — error signatures with volatile numbers masked, so
+   `waiters=57` and `waiters=73` group as one bottleneck instead of appearing as
+   two unrelated events.
+4. **Row-level evidence** — every figure carries its citations, because the
+   ranking is the thing a reader argues with.
 
-The reason is mechanical. The loop's entire value is collapsing the distance
-between a file someone already has and a picture they can look at. If the data
-lives in a database, a SaaS tool, or an inbox, then the first session is a data
-extraction project wearing a dashboard's clothes, and the dashboard is the part
-that gets cut when the week runs out.
+**The dashboard is the artifact. The bottleneck ranking is the product.** A chart
+of a CSV is Stage 1, and it is already built. What is new is being told *which
+thing is costing you*, with the evidence attached.
 
-**Disqualifies:** anything whose first step is an integration.
+## Why this candidate was first
 
-### 2. The pain recurs
+Against the four criteria this direction was scored on:
 
-A one-off is served by a person spending twenty minutes. Recurrence is what makes
-a repeated loop worth automating at all, and it is what makes a second session
-possible — which is the only evidence that can inform Stage 3.
+| Criterion | How Rishabh meets it |
+| --- | --- |
+| Data already in CSVs | Splunk log exports. No extraction project, no integration, no access request. |
+| Pain recurs | Reporting on a live pipeline is continuous, not occasional. |
+| Person reachable | The owner. One named human who will run it and can be asked what they were looking at. |
+| Dashboard-shaped output | Volume over time, ranked sources, recurring signatures — the shape the report renders. |
 
-Weekly or better is the realistic bar. Monthly is arguable.
+All four, without an argument. That is why the page moved from BLOCKED rather
+than being nudged.
 
-**Disqualifies:** anything described as "sometimes" or "whenever I get a chance".
+## What the fixture can and cannot tell us
 
-### 3. The person is reachable
+The Stage-2 acceptance fixture is **synthetic** — hand-authored, modelled on a
+Splunk export, modelling the awkward parts on purpose: mixed epoch and ISO-8601
+timestamps in one file, quoted fields containing commas, doubled-quote escapes,
+recurring signatures across hosts.
 
-One named human who will actually run this, and who can be asked what they were
-looking at. Without this there is no session to learn from, and criterion 4 has
-nothing to be checked against.
+It proves the **reader** handles those shapes. It proves **nothing about a real
+export**, and the first real export supersedes it. What it cannot know: an
+encoding nobody thought of, a column Splunk emits only for certain sourcetypes,
+a locale-formatted timestamp, an export silently capped at 10,000 rows with no
+truncation marker, a `_raw` field containing an unescaped newline.
 
-This is a hard gate, and it is the criterion most likely to be quietly skipped
-by treating a segment as a person.
+Treat every figure the fixture produces as a claim about the reader, never about
+the pipeline.
 
-**Disqualifies:** "operations teams" as a category rather than a named
-individual.
+## What one real session must answer
 
-### 4. A dashboard-shaped output is plausible
+The loop is already proven against synthetic data. What it cannot tell us is
+whether it is *right* for this person's actual work. Four questions, each
+answerable only by sitting with Rishabh and watching:
 
-The loop answers "what happened, compared to what". It does not answer "what
-should I do", "who owes whom", or "tell me the one number". Output that reduces
-to a single figure, or that is fundamentally a list needing a search, is a poor
-fit — and a poor fit discovered after building is the expensive kind.
+1. **What did you open it to decide?** The report ranks by error volume. The
+   session that matters is the one where they open it already knowing which
+   service is broken. If the ranking's top entry is not the thing they came for,
+   the ranking is wrong, however correct the arithmetic.
 
-Note this is a claim about *shape*, not about value. A dashboard can be low-value
-and correctly shaped; it can be high-value and wrongly shaped. Only the second
-failure is ours to avoid at this stage.
+2. **Which export did you reach for first?** Not the one they name when asked —
+   the one they go looking for. If it is not a Splunk CSV, criterion 1 was
+   satisfied on paper and not in practice, and the first increment has aimed at
+   the wrong file.
 
-**Disqualifies:** work whose natural output is an action, an alert, or a queue.
+3. **Did you come back?** Recurrence is the difference between a tool and a
+   one-off. A report opened twice in a week is a product; opened once, it was a
+   favour.
 
-## What one real session must teach us
+4. **What did you do when it was wrong?** Every figure here cites its rows, so
+   "that's wrong" should be checkable rather than merely assertible. What we
+   cannot predict is whether citing rows makes disagreement *cheaper* or just
+   *longer* — a cited report that gets argued past in ten minutes has failed even
+   when the numbers were right.
 
-Stage 1 taught us the loop runs. Stage 2's first session with a real person is
-not for validating that — it is already validated. It is for answering the
-questions a synthetic acceptance test structurally cannot:
+## What Rishabh must supply next session
 
-- **What they actually open the dashboard to decide.** Criterion 4 is a guess
-  about shape until someone has looked at a real one and reached for something
-  else.
-- **Which file they reach for first.** Not the file they named when asked; the
-  one they went looking for. This is the strongest available evidence against
-  criterion 1 being satisfied in practice rather than on paper.
-- **Whether they open it once or repeatedly.** Criterion 2 is the difference
-  between a one-off automation and a habit, and only repetition reveals it.
-- **What they do when it is wrong.** A dashboard they cannot trust is worse than
-  no dashboard, and the failure mode is visible only when a real person hits it.
+**One real Splunk CSV export.** Nothing else is needed to start, and nothing
+else in this repository can substitute for it:
 
-## To unblock
+- A genuine export, not a hand-written approximation of one.
+- **Its source query** — the search that produced it, so we know what population
+  the rows represent and whether the export was capped or filtered.
+- **One sentence on the question they expect it to answer**, so we can tell
+  whether the ranking agrees with their intuition before it is judged on its
+  merits. A mismatch is the most informative possible starting point.
 
-One candidate, named, meeting criteria 1–3. Criterion 4 can be argued in the
-session itself. With that, this page gets a recommendation; without it, Stage 2
-stays blocked and the honest state is that nobody has yet been asked.
+That third item is the cheapest and the most valuable: it converts the first run
+from a demo into a test.
+
+## Building blocks now in place
+
+- `platform/conductor/bottlenecks.ts` — pure analysis. Ranks, groups, buckets,
+  masks, and carries row citations.
+- `platform/conductor/bottleneck-report.ts` — the self-contained report page, and
+  the refusal to render from a structurally broken file.
+- `verification/acceptance-stage2.mjs` — 25 assertions, three-way no-silent-death
+  on the malformed path, mutation-evidenced.
