@@ -14,6 +14,73 @@ are measured, never asserted** — an unverified claim is recorded as unmeasured
 - Baseline on `main`: **480 tests, 478 pass, 0 fail, 2 skipped — GREEN**
 - **This branch (`fix/d4-path-boundary`, based on `docs/manifest` @ `1f2bc1d`): 497 tests, 495 pass, 0 fail, 2 skipped — GREEN**, measured `npm test`. The 2 skips are the pre-existing Windows permission-bit cases in `platform/core/vault.test.ts`, not a gap. The +17 over baseline is the new `platform/pi/path-boundary-corpus.test.ts`.
 
+## 2026-10-01 — inherited state and the session's disposition
+
+Recorded here because the manifest is the operator's interface, and a stash left
+in a tree is state the operator did not put there and has not ruled on.
+
+**`stash@{0}` — DROPPED, this session, on operator ruling.** It held the Track A
+task-4 ledger reversal entry, and that content is now committed as `927fdb1e`.
+Verified before dropping, not assumed: the stashed patch and `git show
+927fdb1e` were byte-identical, so nothing unique was destroyed. Its base was
+`12c89d5`, a commit that predates the `9d5dea0` docs entry — the ledger half was
+simply carried forward and committed later, which is why the two patches match
+exactly. The hazard was the redundancy, not the stash.
+
+**`stash@{0}` (formerly `stash@{1}`) — INHERITED, NOT TOUCHED.** `part-c-
+unrequested-2026-09-30`, on `fix/lifecycle-refusal-truth`. It predates this
+session's work and is **left intact for operator disposition**. No agent has
+read it, applied it, or assessed it. It is listed so it cannot be discovered
+later as a surprise.
+
+**The disclosed violation is closed.** A prior session left uncommitted work
+and created a stash without disclosing it. Disclosed, ruled on, and closed by
+the drop above; no further action.
+
+**Filed this session, unfixed — two defects fell out of closing C1:**
+
+- **F006 §5 item 8 — a refusal that settles as a SIBLING kills the task.**
+  Measured: two executions bound as siblings, the refused one settling first.
+  `observeToolResult` takes the early return at `kernel-adapter.ts:1300`,
+  appends an `INVALID` validation and sets `attemptBlocked = true`, and returns
+  **before** the recovery block — so `SOFT_REFUSAL_CONTINUED` never runs and
+  `denialReason` is never read. The last sibling then succeeds,
+  `lastValidation` is `VALID`, and `finishTask:1807` fails the task with *"One
+  or more results in this attempt failed or could not be verified"*: **no rule,
+  no policy, no path**, and nothing failed verification at all. Live, reachable,
+  unfixed. The lone-denial path is intact — measured, task returns to
+  `PLANNING`. Full transcript in F006 §5.
+- **F006 §5 item 9 — the `REPLANNING` refusal text tells a live task that it
+  terminated** (`kernel-adapter.ts:795`). One sentence, one site. Deferred
+  because it changes a public refusal string.
+
+**C1 itself is CLOSED**, by measurement and a green pin, not by prose: a
+`REPLANNING` task cannot hold a `failureReason` (all eight sites that write one
+target `FAILED`, which is terminal; `REPLANNING` is transient), so the replay
+tail is unreachable and the "should it replay?" question has no live answer to
+give. `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4` — the
+invariant is pinned, and `C1.3` guards the terminal replay so the closure
+cannot later be satisfied by deleting the attribution.
+
+**Operator blockers, restated:** **restart pending (blocks C2)**; the Docker
+gate run on Track B item 1 outstanding. Push and the item-1 MR merge are both
+cleared as of 2026-10-01. Roadmap §"Operator blockers" is the table of record.
+
+**Two leftovers for the operator to delete.** Both are untracked, dot-prefixed
+scratch, so the suite glob `platform/pi/*.test.ts` matches neither and neither is
+in any commit or MR. Neither could be removed from here because the deletion
+guard denied the operation, and routing around that guard is precisely what it
+exists to prevent.
+
+- `platform/pi/.c1-probe.test.ts` — a throwaway probe. Its header now reads
+  **"SPENT PROBE — kept rather than deleted, on purpose"**; the earlier quote in
+  this manifest ("TEMPORARY PROBE. Not a pin. Deleted after the C1 read") was
+  stale and is corrected here. Its findings are pinned in
+  `platform/pi/c1-replanning-stored-failure.test.ts`.
+- `platform/pi/.s8-probe.test.ts` — a scratch probe used to measure the item 8
+  sibling path directly. Its findings are pinned in
+  `platform/pi/f006-sibling-refusal-kill.test.ts`.
+
 ## §2.4(a) RE-FILED — the old mechanism was wrong, measured
 
 The filed mechanism claimed a mangled escaped spelling fails to match the file rules and falls through to default-deny. **That cannot occur**, and the correction is to the filed claim, not to the code:

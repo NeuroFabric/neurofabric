@@ -340,17 +340,32 @@ test("D1.9 the refusal guard precedes the guards that could mask it", () => {
 
 // --- 7-8. nothing else moved ---------------------------------------------
 
-test("D1.10 a generic deterministic tool failure still REPLANS", () => {
+test("D1.10 a generic tool failure still RECOVERS — retry, then replan, then a named terminal", () => {
   // The reversal is scoped to MARKED denials. A tool that failed for reasons of
   // its own keeps every bit of its previous recovery behaviour — this is the
   // pin that stops the reversal becoming "nothing is ever terminal".
+  //
+  // RESTATED UNDER D4B. The claim here is that an unmarked failure is RECOVERED,
+  // and the old form of it ("still REPLANS at every replanCount") was true only
+  // while an unmarked failure could reach REPLAN with the retry budget untouched.
+  // D4B puts a RETRY in front of it, which is the fix the product needed, so the
+  // ladder is asserted in full instead of at one rung of it. What must not
+  // change, and does not: the failure is never CONTINUEd away and never
+  // terminates without naming a budget.
+  const decision = (retryCount: number, replanCount: number) => chooseRecoveryDetailed({
+    failure: "TOOL_FAILURE", limits: DEFAULT_LIMITS,
+    retryCount, replanCount, strategyCount: 0, depth: 0, idempotency: "IDEMPOTENT",
+  });
+  assert.equal(decision(0, 0).strategy, "RETRY", "D4B: retried first");
+  assert.equal(decision(DEFAULT_LIMITS.maxToolRetries, 0).strategy, "REPLAN",
+    `a replan is still reachable at replanCount=0, once the ${DEFAULT_LIMITS.maxToolRetries} retries are spent`);
   for (let replanCount = 0; replanCount < DEFAULT_LIMITS.maxReplans; replanCount++) {
-    const decision = chooseRecoveryDetailed({
-      failure: "TOOL_FAILURE", limits: DEFAULT_LIMITS,
-      retryCount: 0, replanCount, strategyCount: 0, depth: 0, idempotency: "IDEMPOTENT",
-    });
-    assert.equal(decision.strategy, "REPLAN", `TOOL_FAILURE at replanCount=${replanCount} still replans`);
+    assert.equal(decision(DEFAULT_LIMITS.maxToolRetries, replanCount).strategy, "REPLAN",
+      `TOOL_FAILURE at replanCount=${replanCount} still replans`);
   }
+  const spent = decision(DEFAULT_LIMITS.maxToolRetries, DEFAULT_LIMITS.maxReplans);
+  assert.equal(spent.strategy, "TERMINATE", "and when the budgets are gone it terminates");
+  assert.match(spent.reason, /BUDGET_EXHAUSTED/, "naming the budget, never a bare death");
 });
 
 test("D1.11 a transient failure still RETRIES then replans then terminates", () => {

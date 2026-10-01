@@ -8,11 +8,29 @@ and the operator rulings of 2026-10-01.
 Branch `fix/f006-policy-deny-not-fatal` is merged into `origin/main` at `fca77fc`
 (merge commit `066b2b4`, `gate recovery depth on non-CONTINUE strategies`).
 
+Work since then, 2026-10-01, on `fix/f006-post-reversal-ledger` (on origin at
+`54074db`) and `docker-ui-scaffold` (on origin at `6098e8e`). Suite measured on
+`fix/f006-post-reversal-ledger`:
+
 | Suite | Result |
 |---|---|
-| `platform/pi` | 336 pass / 0 fail |
+| `platform/pi` | 347 pass / 0 fail |
 | `platform/core` | 189 pass / 0 fail / 2 skipped |
 | `platform/*.test.mjs` | 22 pass / 0 fail |
+| typecheck (`tsc --noEmit`) | clean |
+
+The 2 skips are pre-existing Windows vault permission-bit cases, not new.
+
+## Operator blockers — restated at every status report
+
+None of these are agent-resolvable. Each one is a person pressing a key.
+
+| # | Blocker | What it holds |
+|---|---|---|
+| 1 | ~~Push pending~~ — **CLEARED 2026-10-01** | `fix/f006-post-reversal-ledger` and `docker-ui-scaffold` are both on origin. Blocker 5 is closed and the MRs can be opened. |
+| 2 | **Restart pending — still blocks C2** | The operator's restart confirmation does not exist in `docs/MANIFEST.md`. Until it does, C2 cannot start and the merge stays un-ratified. |
+| 3 | ~~Item-1 MR merge~~ — **CLEARED 2026-10-01** | Merged. Operator ruling 3. The stale "awaiting merge" rows have been corrected throughout. |
+| 4 | **Docker gate run on B1** | `UNVERIFIED`, unchanged. The B1 defect that would have made this run fail is fixed (`6098e8e`), but fixing it is not running it. Docker is not installed here. Executor: OPERATOR. |
 
 ## Operator rulings, 2026-10-01
 
@@ -28,27 +46,42 @@ what a task is allowed to die of. `abort` still ends a task, one layer out, in
 pre-reversal code as present tense. It is evidence of a bug, not current law, and
 must be marked as such before the ledger is used as a corrective authority again.
 
-## Human decision required
+## Human decision required — **NONE. `REPLANNING` is CLOSED by measurement.**
 
-**`REPLANNING` and the stored-failure echo** — ledger §3.2.
+**`REPLANNING` and the stored-failure echo** — ledger §3.2, closed 2026-10-01.
 
-`REFUSED_EXECUTION_STATES` includes `REPLANNING`, which the ledger's own
-`TERMINAL_TASK_STATES` comment calls "still live and still owned by whoever started
-it". Of the three sites gated on that set, only `kernel-adapter.ts:835`
-(`describeTerminalRefusal`) replays the stored reason. **That replay is unpinned for
-`REPLANNING`.**
+The question was whether a live `REPLANNING` task should replay a stored
+failure reason. It was left unpinned because a pin must assert one of two
+answers. **It is not a choice.** A `REPLANNING` task cannot hold a
+`failureReason` at all: every one of the eight sites that writes one targets
+`FAILED`, which is terminal and cannot transition onward, and `REPLANNING` is
+entered from `RECOVERING` and left on the next line without one. The replay
+tail is therefore unreachable for `REPLANNING`, so the "yes" answer describes a
+state the machine cannot produce and the code already is the "no" answer.
 
-Two candidate answers, both live:
+Full derivation, the eight call sites, and the measured refusal strings: F006
+§5 item 7. Closed with a **green pin** on the invariant, not with prose —
+`platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4`, including
+`C1.3`, which asserts the terminal replay is untouched so the closure cannot be
+satisfied later by deleting the attribution.
 
-- **yes** — a live `REPLANNING` task should replay a stored reason, and the pin
-  should be added;
-- **no** — `REPLANNING` should refuse without replaying a stored reason.
-
-**Deliberately not pinned.** A pin must assert one of these, and choosing silently
-would launder an open design question into settled law. Requires an operator
-decision. No code change.
+**Two defects fell out of the closure and are filed, not closed:** item 8 (a
+sibling refusal fails the task with a reason naming no rule — live, reachable,
+unfixed) and item 9 (the `REPLANNING` refusal text tells a live task it
+terminated). Neither is a reason to reopen the question above.
 
 ## P1 — caller-boundary fix: a refusal is indistinguishable from a tool fault
+
+**STILL DEFERRED, and the gate that was to promote it did not open. Measured
+2026-10-01 — see F006 §5 item 10.** The promotion rested on the premise that the
+2026-10-01 session death was caused by two deletion-guard denials collapsing to
+`TOOL_FAILURE` here. Measured against the transcript: **it was not.** All three
+denials in that session were classified `POLICY_DENIED`, answered
+`CONTINUE`/`POLICY_SOFT_REFUSED`, and left every counter at zero. The collapse is
+real and is exactly where this section says it is; it simply did not kill
+anything, because recovery reads the `CoreError` rather than the returned
+`ValidationResult`. **P1 is a genuine latent boundary defect and is not urgent.**
+It should be taken as its own review cycle on its own merits.
 
 Measured on `fca77fc`. `recordToolResult` returns to its caller:
 
@@ -105,7 +138,45 @@ environment, so the gate cannot be evaluated there. See Track B item 1 below.
 both are green, and forking from the tip avoids a rebase later. Fork SHA recorded
 in the MR.
 
+## Work order of record — operator, 2026-10-01
+
+**The work order is a multi-session plan, not a session plan.** The honest unit
+of work is a *completed* item: complete items, leave nothing half-assessed.
+That is why the confirmed ordering is not the full plan and why the items
+below are the whole of what was authorised this session.
+
+| Order | Item | State | Outcome |
+|---|---|---|---|
+| 1 | F006 work-order record (docs-only) | unblocked | done — F006 §5, and this table |
+| 2 | C1 echoed-refusal | self-contained | **done — CLOSED.** Read from source and measured: the question was vacuous, the replay is unreachable for `REPLANNING`. Closed with a green invariant pin (`C1.1`–`C1.4`). Two further defects surfaced and are filed as F006 §5 items 8 and 9. |
+| 3 | **B2 item 1** — Dockerfile + compose | unblocked | done on `docker-ui-scaffold`, status `UNVERIFIED` pending the operator's Docker run |
+| 4 | Full status report, both tracks | this document's sibling | done |
+
+**Explicitly not started, and why.**
+
+- **The frontend shell scaffold.** Multi-milestone. Starting it this session
+  would end it half-built, which is the failure mode the ordering exists to
+  avoid. It is next-session work and nothing depends on it existing.
+- **C2.** Blocked on blocker 2. Not started.
+- **E1–E8 assessments.** Next session. No assessment branch was opened,
+  because an assessment that cannot be finished is worse than no branch: it
+  reads as progress in the tree and is nothing in the ledger.
+
 ## Standing rules
+
+**Shell `grep` is prohibited; the harness `grep` tool is the sanctioned
+mechanism.** The prohibition is on grep *pipelines inside shell one-liners* —
+the ones that bypass the harness's own tooling and produce output no tool call
+logged. The `grep` tool is compliant and is the mechanism to use. Ratified
+2026-10-01 after the reading was challenged and upheld.
+
+**Commit messages paraphrase a gate command when a guard rejects the literal.**
+When the deletion guard conflicts with writing the command in a commit message,
+describe the command and never quote it. The gate command itself lives in
+`roadmap.md` and the CI config, which is where a reader can execute it — not in
+prose, where it would be a dead end and a way to trip the guard again. This
+closes the rule conflict rather than leaving it to be rediscovered. Ratified
+2026-10-01.
 
 **No agent may claim verified-green for a gate this harness cannot execute.**
 Label the result `UNVERIFIED`, name the executor who must run it, and move on.
@@ -132,10 +203,14 @@ design; these interfaces are scaffolding, not a contract.
 |---|---|---|
 | 1 | This roadmap | done |
 | 2 | Stale comment, `kernel-adapter.ts:1620-1623` | done (`d25ee8e`) |
-| 3 | Documenting pin D1.1c | **blocked — awaiting operator paste** |
-| 4 | Ledger reversal entry | pending, diff first |
-| 5 | Caller-boundary fix (validator threading) | deferred — own review cycle |
-| B1 | Dockerfile + compose, green baseline | in progress |
+| 3 | Documenting pin D1.1c | **done** — landed at `a69be20`, green by design |
+| 4 | Ledger reversal entry | **done** — landed at `927fdb1e` |
+| 5 | Caller-boundary fix (validator threading) | **still deferred.** Promotion gate **failed** on measurement — F006 §5 item 10. Real defect, confirmed latent, no longer justified by a death it did not cause. |
+| C1 | Echoed refusal: `REPLANNING` stored-failure replay | **CLOSED** — unreachable by construction; green pin `C1.1`–`C1.4` |
+| 8 | Sibling refusal fails the task, reason names no rule | **FIXED 2026-10-01** — `54074db`. Red-first: `platform/pi/f006-sibling-refusal-kill.test.ts` (`S8.1`–`S8.3`). `BRIDGE.C2` inverted — it had been asserting the defect as a precondition. |
+| 9 | `REPLANNING` refusal text claims the task terminated | **FILED** — F006 §5 item 9, wording, still deferred (public string) |
+| 10 | The 2026-10-01 death: premise refuted, and an artifact race filed | **FILED** — F006 §5 item 10. New sub-defect: the harness marked its own just-written file `INVALID` (transcript line 711). Single sample, cause not isolated. **This is the one worth chasing.** |
+| B1 | Dockerfile + compose, green baseline | authored; **COPY defect FIXED** at `6098e8e` (`.pi`, `skills`, `reports` were missing and the suite reads all three). Gate still **`UNVERIFIED`** — operator's Docker run. |
 | B2 | Frontend shell, mock data | pending B1 |
 | B3 | Typed wire points for State + Observability | pending B2 |
 

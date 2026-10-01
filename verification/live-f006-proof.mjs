@@ -58,9 +58,18 @@ check("the event carries a structured reason", () => {
   assert.ok(p1.reason.length > 0, "reason must be a non-empty code");
 });
 check("the event carries the budgets as they stood at the decision", () => {
-  assert.equal(p1.retryCount, 0, "a deterministic failure spends no retry budget");
+  assert.equal(p1.retryCount, 0, "the counters are reported BEFORE this decision books any of them");
   assert.equal(p1.replanCount, 0);
   assert.equal(p1.recoveryDepth, 1, "this is the first recovery round");
+});
+check("D4B: that first decision is a RETRY, and it books the retry budget", () => {
+  assert.equal(p1.strategy, "RETRY");
+  assert.equal(p1.reason, "TOOL_FAILURE_RETRY");
+  assert.equal(k1.currentTask.retryCount, 1, "the retry budget the old chain walked past is now spent");
+  assert.equal(k1.currentTask.replanCount, 0, "and the replan budget is untouched");
+  assert.equal(k1.currentTask.status, "PLANNING", "the task lives to try again");
+  assert.equal(k1.lastFailureReport.classification, "TOOL_FAILURE",
+    "and the classification is readable by the bridge for the trace (R5)");
 });
 check("the retryable flag of the CoreError is honoured by classification", () => {
   // The adapter raises CoreError(TOOL_ERROR, retryable:false). The flag is
@@ -70,23 +79,57 @@ check("the retryable flag of the CoreError is honoured by classification", () =>
   assert.equal(classifyFailure(new Error("plain")), "UNKNOWN", "a plain Error is still UNKNOWN");
 });
 
-// --- 2. deterministic non-retryable failures never select RETRY -----------
+// --- 2. what is NOT retried -----------------------------------------------
 console.log("");
-console.log("2. deterministic non-retryable failures never select RETRY:");
-for (const failure of ["PERMISSION", "INVALID_INPUT", "TOOL_FAILURE", "VALIDATION_FAILURE", "DEPENDENCY_FAILURE"]) {
-  check(failure + " never selects RETRY across depths, replans and idempotency", () => {
-    for (let depth = 0; depth <= 3; depth += 1) {
+console.log("2. what still never selects RETRY (D4B, 2026-10-01):");
+// D4B gave an ORDINARY failure a retry rung ahead of the replan tail, because
+// the replan tail is what killed sessions. What it did NOT do is widen the set
+// of failures that may be retried blindly: a tool that DECLARES itself
+// non-idempotent is still escalated, and the fail-closed classes are untouched.
+for (const failure of ["PERMISSION", "INVALID_INPUT"]) {
+  check(failure + " fails closed with ESCALATE, never RETRY", () => {
+    // Depth stops at maxRecoveryDepth - 1: the depth guard sits AHEAD of these
+    // classes and terminates first, which is pre-existing precedence and is not
+    // what this check is about. What matters is that neither class ever reaches
+    // RETRY at any counter, at any depth.
+    for (let depth = 0; depth < LIMITS.maxRecoveryDepth; depth += 1) {
       for (let replanCount = 0; replanCount <= 2; replanCount += 1) {
         for (let retryCount = 0; retryCount <= 2; retryCount += 1) {
           for (const idempotency of ["IDEMPOTENT", "NON_IDEMPOTENT"]) {
             const d = chooseRecoveryDetailed({ failure, limits: LIMITS, retryCount, replanCount, depth, idempotency });
             assert.notEqual(d.strategy, "RETRY", failure + " must not be retried");
+            assert.equal(d.strategy, "ESCALATE", failure + " must escalate");
           }
         }
       }
     }
+    const exhausted = chooseRecoveryDetailed({
+      failure, limits: LIMITS, retryCount: 0, replanCount: 0, depth: LIMITS.maxRecoveryDepth, idempotency: "IDEMPOTENT",
+    });
+    assert.notEqual(exhausted.strategy, "RETRY", failure + " must not be retried even when depth has run out");
   });
 }
+check("a tool that DECLARES itself non-idempotent is never retried", () => {
+  for (let depth = 0; depth < LIMITS.maxRecoveryDepth; depth += 1) {
+    for (let replanCount = 0; replanCount <= 2; replanCount += 1) {
+      for (let retryCount = 0; retryCount <= 2; retryCount += 1) {
+        const d = chooseRecoveryDetailed({
+          failure: "TOOL_FAILURE", limits: LIMITS, retryCount, replanCount, depth, idempotency: "NON_IDEMPOTENT",
+        });
+        assert.equal(d.strategy, "ESCALATE", "a declared non-idempotent call is escalated, whatever the retry budget holds");
+      }
+    }
+  }
+});
+check("an ORDINARY failure walks retry -> replan -> named terminal (D4B)", () => {
+  const at = (retryCount, replanCount) => chooseRecoveryDetailed({
+    failure: "TOOL_FAILURE", limits: LIMITS, retryCount, replanCount, depth: 0, idempotency: "IDEMPOTENT",
+  });
+  assert.deepEqual(at(0, 0), { strategy: "RETRY", reason: "TOOL_FAILURE_RETRY" });
+  assert.deepEqual(at(LIMITS.maxToolRetries, 0), { strategy: "REPLAN", reason: "TOOL_FAILURE_RETRY_EXHAUSTED_REPLAN" });
+  const dead = at(LIMITS.maxToolRetries, LIMITS.maxReplans);
+  assert.deepEqual(dead, { strategy: "TERMINATE", reason: "RETRY_AND_REPLAN_BUDGET_EXHAUSTED" });
+});
 check("PERMISSION and INVALID_INPUT fail closed with ESCALATE", () => {
   for (const failure of ["PERMISSION", "INVALID_INPUT"]) {
     for (const idempotency of ["IDEMPOTENT", "NON_IDEMPOTENT"]) {
@@ -120,7 +163,10 @@ check("non-idempotent transient failures still ESCALATE, never RETRY", () => {
 console.log("");
 console.log("4. driven to exhaustion: specific terminal reason, FAILED, then refused:");
 const k4 = await mk();
-for (let i = 1; i <= 3; i += 1) await failOnce(k4, i);
+// FOUR failures, not three: D4B put a retry rung in front of the replan tail, so
+// the same burst walks RETRY, RETRY, REPLAN, TERMINATE instead of REPLAN, REPLAN,
+// TERMINATE. Four is the new burst length and the certificate below reports it.
+for (let i = 1; i <= 4; i += 1) await failOnce(k4, i);
 const task4 = k4.currentTask;
 const reason4 = task4.failureReason;
 console.log("   status=" + task4.status);
@@ -128,25 +174,25 @@ console.log("   failureReason=" + reason4);
 console.log("   TASK_FAILED payload=" + JSON.stringify(last(k4, "TASK_FAILED")));
 check("the task is FAILED", () => assert.equal(task4.status, "FAILED"));
 check("the terminal reason is specific, not the old generic sentence", () => {
-  assert.match(reason4, /REPLAN_BUDGET_EXHAUSTED/);
+  assert.match(reason4, /RECOVERY_DEPTH_EXHAUSTED/);
   assert.match(reason4, /failure=TOOL_FAILURE/);
-  assert.match(reason4, /replanCount=2\/2/);
-  assert.match(reason4, /retryCount=0\/2/);
-  assert.match(reason4, /recoveryDepth=3\/3/);
+  assert.match(reason4, /replanCount=1\/2/);
+  assert.match(reason4, /retryCount=2\/2/, "D4B: the retry budget was spent before anything terminated");
+  assert.match(reason4, /recoveryDepth=4\/3/);
   assert.doesNotMatch(reason4, /no safe recovery strategy remains/);
 });
 check("TASK_FAILED carries the structured reasonCode and budgets", () => {
   const p = last(k4, "TASK_FAILED");
-  assert.equal(p.reasonCode, "REPLAN_BUDGET_EXHAUSTED");
+  assert.equal(p.reasonCode, "RECOVERY_DEPTH_EXHAUSTED");
   assert.equal(p.failure, "TOOL_FAILURE");
   assert.equal(p.strategy, "TERMINATE");
-  assert.equal(p.replanCount, 2);
-  assert.equal(p.retryCount, 0);
-  assert.equal(p.recoveryDepth, 3);
+  assert.equal(p.replanCount, 1);
+  assert.equal(p.retryCount, 2);
+  assert.equal(p.recoveryDepth, 4);
 });
-check("the spent replan budget is visible on the task", () => {
-  assert.equal(task4.replanCount, 2);
-  assert.equal(task4.retryCount, 0, "a deterministic failure never consumed the retry budget");
+check("the spent budgets are visible on the task", () => {
+  assert.equal(task4.replanCount, 1);
+  assert.equal(task4.retryCount, 2, "D4B: an ordinary failure spends the retry budget it used to walk past");
 });
 const after = await k4.precheckToolCall("read", "execute", { path: "README.md" }, undefined, "after-fail");
 console.log("   post-terminal precheck: decision=" + after.decision.decision

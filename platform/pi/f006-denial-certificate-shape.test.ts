@@ -217,10 +217,25 @@
      );
    });
 
-   test("BRIDGE.C2 a refusal while a sibling is still bound does not reach recovery", async () => {
-     // The third precondition, independent of order: `observeToolResult` returns
-     // early at :1192 while any execution remains in flight, so recovery does not
-     // run. Pinned separately so it cannot be conflated with the ordering findings.
+   test("BRIDGE.C2 a refusal while a sibling is still bound IS classified, and books no budget", async () => {
+     // INVERTED 2026-10-01, F006 §5 item 8, and the inversion is the point.
+     //
+     // This pin used to assert the DEFECT: "recovery did not run while the
+     // sibling was in flight", zero SOFT_REFUSAL_CONTINUED events, and the
+     // early return described as a "precondition". All of it was measured and
+     // all of it was true — and together it is precisely the mechanism by which
+     // a sibling-settled refusal killed the task. `observeToolResult` returned
+     // early at the sibling branch, `attemptBlocked` was set from the
+     // ValidationResult alone, and `finishTask` then failed the task with a
+     // reason naming no rule, no policy and no path, while nothing failed
+     // verification. The old assertion was a description of the bug wearing
+     // the costume of a precondition.
+     //
+     // What this pin ACTUALLY guards is kept, and is still load-bearing: the
+     // refusal must not be discarded as out-of-order, and no terminal outcome
+     // may be recorded while a sibling is still in flight. A fix that
+     // classified the refusal by letting the FULL recovery block run would
+     // advance the task out from under its siblings and break both.
      const adapter = await trustedAdapter();
      await adapter.beginToolExecution("sibling", "read", { toolCallId: "sibling" });
      await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "sibling");
@@ -230,14 +245,23 @@
      const reason = await denyRealRead(adapter, "call-c2");
      const result = await adapter.recordToolResult("call-c2", "read", undefined, true, undefined, reason);
 
+     // Still guarded, unchanged in substance.
      assert.notEqual(result.validator, "pi-result-order", "the refusal was not discarded as unordered");
      assert.notEqual(adapter.currentTask!.status, "FAILED",
-       "but recovery did not run while the sibling was in flight, so no outcome was recorded yet");
-     assert.equal(
-       payloadsOf(adapter, "SOFT_REFUSAL_CONTINUED").length,
-       0,
-       "and specifically no refusal record was invented ahead of its time",
-     );
+       "and no outcome is recorded while the sibling is in flight, so the task is not failed early");
+     assert.equal(payloadsOf(adapter, "TASK_FAILED").length, 0,
+       "specifically: nothing terminal was written ahead of the siblings settling");
+
+     // Inverted: the refusal IS classified where it lands. A refusal that is
+     // visible but not attributable is the outcome the certificate existed to
+     // prevent, and on the sibling path it used to be exactly that.
+     const continued = payloadsOf(adapter, "SOFT_REFUSAL_CONTINUED");
+     assert.equal(continued.length, 1, "the sibling-settled refusal is classified, not silently dropped");
+     assert.equal(continued[0].denialReason, REAL_REASON,
+       "and it carries the policy's own words verbatim, so the operator learns WHICH rule refused it");
+     assert.equal(adapter.currentTask!.retryCount, 0, "and it books no retry budget");
+     assert.equal(adapter.currentTask!.replanCount, 0,
+       "and no replan budget - a refused call that charged one could exhaust it purely by being refused");
    });
 
    // ===========================================================================
@@ -325,8 +349,12 @@
        "no refusal is reported when no reason was delivered",
      );
      assert.equal(adapter.currentTask!.failureReason, undefined, "and no certificate exists either");
-     assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "REPLAN",
-       "an unmarked tool error still replans: the death shape the bridge closes");
+     // D4B: the unmarked tool error no longer REPLANS — it takes the retry rung.
+     // The claim this assertion exists to make is that the failure is NOT
+     // laundered into a survivable refusal, and that is now made on the REASON,
+     // which names the class rather than accumulating into a counter.
+     assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.reason, "TOOL_FAILURE_RETRY",
+       "an unmarked tool error is recovered as an ordinary failure: the death shape the bridge closes, one rung higher");
    });
 
    test("CERT.5 an admitted call that fails reports the same way — the forwarding guard", async () => {

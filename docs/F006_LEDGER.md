@@ -991,6 +991,28 @@ directly. It is authorised, and its boundary statement lives in the `N6` gate
 rather than in this table; it is recorded as item 6 when the work is filed so
 that this table remains the single queue.
 
+**Work order of record — operator, 2026-10-01, superseding the ordering
+above.** The status table in this section was measured 2026-09-30 against
+`bfc22e8`; it is not re-measured here and its rows are left as measured. What
+supersedes it is the *sequence*:
+
+1. Record the work order (this entry). Docs only.
+2. **C1** — the echoed refusal. Self-contained, and an open question closed
+   beats a scaffold started. Filed as item 7 above.
+3. **Track B item 1** — Dockerfile + compose, status `UNVERIFIED` pending the
+   operator's Docker run. The frontend shell scaffold was **deliberately not
+   started**: multi-milestone, and it would have ended half-built.
+4. Full status report across both tracks.
+
+**C2 is BLOCKED and was not started.** It waits on the operator's restart
+confirmation, which does not exist in `docs/MANIFEST.md`. Absent evidence is
+not a formality here — it is the entire input. **E1–E8** are next-session work;
+no assessment branch was opened, because an unfinished assessment reads as
+progress in the tree and is nothing in this section.
+
+**The unit of work is a completed item.** The work order is a multi-session
+plan; a session is not entitled to a slice of an item.
+
 0. **D5 / onViolation divergence.** **CLOSED — merged at `f6c6bad`.** Retained
    below for the decision record, not as open work. §2.5 for the mechanism.
 
@@ -1067,6 +1089,246 @@ guard before writing the message. Commit `b0a8cdf` on
    containment is unchanged, so the widening cannot reach outside the roots. It
    is recorded here rather than described as a tightening, because it is not
    one.
+7. **C1 — the REPLANNING stored-failure echo. CLOSED 2026-10-01 by
+   measurement; nothing to decide.** The open question was whether a REPLANNING
+   task should replay a stored failure reason. It is not a choice, and the
+   reason is structural:
+
+   - `failureReason` is written in exactly one place, `advance()`, and only when
+     a caller passes it. **All eight call sites target FAILED** — supersession
+     `:693`, policy abort `:1036`, recovery TERMINATE `:1432`, the legacy denial
+     path `:1754`, the three `finishTask` kills `:1782`/`:1800`/`:1817`, and
+     the unusable-stream kill `:1854`.
+   - FAILED is terminal and admits nothing (`state-machine.ts:17`,
+     `FAILED: []`), and `transitionTask` throws on any transition out of a
+     terminal state (`:30`). A task holding a stored failure can therefore
+     never be REPLANNING afterwards.
+   - REPLANNING is entered only from the REPLAN branch (`:1397`), left again on
+     the next line (`:1398`), and that branch sets no reason. It is transient
+     inside one synchronous block.
+
+   So the replay tail in `describeTerminalRefusal` (`:780-798`) is
+   **unreachable for REPLANNING**. The "yes" option describes a state the state
+   machine cannot produce, and the code already behaves as the "no" option.
+   Measured, not inferred: a forced REPLANNING task refuses with *"it was NOT
+   evaluated and no policy rule refused it; the task terminated WITHOUT
+   recording a failureReason, so there is no original failure to replay"*, and a
+   forced FAILED task with a certificate still replays it, labelled ORIGINAL.
+
+   **Closed with a green pin, not with prose.**
+   `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.6`. It pins
+   the *invariant* (reachability), not the preference, and it includes the
+   guard against over-correcting: `C1.3` asserts the terminal replay is
+   untouched, so the closure cannot be satisfied later by deleting the
+   attribution. `C1.5` pins the same fact on the *structured* surface — a trace
+   consumer reads `replayed`, not English, so a payload claiming a replay that
+   never happened is the same defect in a field no assertion on prose catches.
+   `C1.6` walks a real recorded transition log and asserts that no transition
+   ever wrote a `failureReason` onto anything but `FAILED` — the empirical
+   counterpart to `C1.1`, which reads the state table. 6 pass, 0 fail,
+   typecheck clean.
+
+   **Stronger still, and read from source rather than pinned:** `REPLANNING` is
+   not merely unreachable *with* a reason, it is unobservable. It is entered at
+   `:1397` and left at `:1398` on consecutive statements, `advance` is entirely
+   synchronous, and nothing awaits between them — so no other code can ever see
+   a task in `REPLANNING` at all. The pins force that state deliberately, and
+   say so. This is a source-reading, not a runtime assertion, because absence of
+   an `await` is not something a test can assert; it is recorded so a later
+   session does not mistake the forced state for a reachable one.
+
+   **The wording defect this surfaced is item 9, not a closure of this item.**
+   A pin asserting today's exact REPLANNING sentence would make a known-wrong
+   string permanent and would break CI on the day it is fixed.
+8. **The echoed refusal, second edition: a refusal that settles as a sibling
+   kills the task, and the certificate names neither the policy nor the
+   rule.** Filed 2026-10-01, measured, **unfixed**. Found while closing item 7;
+   it is a separate site with a separate fix and is not closed under C1.
+
+   **What the D1 reversal fixed, confirmed by measurement.** A lone mid-execution
+   refusal does survive: the task returns to `PLANNING`, the event trail reads
+   `RECOVERY_STARTED` → `SOFT_REFUSAL_CONTINUED`, no budget is booked, and
+   `finishTask` does not fail it. The reversal is intact on the path it was
+   written for.
+
+   **What is still broken, and is reachable.** The reversal's guarantee is stated
+   per *result*, and one result shape never reaches it. When a refused
+   execution settles while a **sibling is still in flight**, `observeToolResult`
+   takes the early return at `kernel-adapter.ts:1300` — which appends the
+   validation, sets `attemptBlocked = true`, and returns **before** the
+   recovery block. No `RECOVERY_STARTED`, no `SOFT_REFUSAL_CONTINUED`, no
+   `denialReason` read. The refusal is then only ever an `INVALID` validation.
+   The last sibling succeeds, `lastValidation.status` is `VALID`, and
+   `finishTask:1807` — "a task whose CURRENT attempt has any unresolved failure
+   is not complete" — reads the refusal's `attemptBlocked` and **fails the
+   task**.
+
+   Measured transcript (probe, not a pin; two executions bound as siblings in one
+   assistant message, the refused one settling first):
+
+   ```
+   bound A/B        : true true active: 2
+   A (refused)      : {"status":"INVALID","validator":"pi-result","message":"policy <d1-policy.json> denied 'read': …"}
+   status now       : EXECUTING attemptBlocked: true
+   B (succeeded)    : {"status":"VALID","validator":"pi-result","message":"Pi returned a successful tool result"}
+   status now       : VALIDATING attemptBlocked: true
+   --- after finishTask ---
+   task status      : FAILED
+   failureReason    : One or more results in this attempt failed or could not be verified
+   denial named?    : false
+   event types      : [… TOOL_FAILED, TOOL_COMPLETED, VALIDATION_COMPLETED, TOOL_RESULT_IGNORED, TASK_FAILED]
+   ```
+
+   **The reason is a false claim, not merely a thin one.** Nothing failed
+   verification. The sibling verified. The sentence is the only account the
+   operator gets, and it names no rule, no policy, no path — which is the one
+   job the refusal certificate existed to do. A denial is an answer; this
+   returns a wrong answer about why the task died.
+
+   **Why it is not the P1 item, and why it is worse.** P1 (roadmap) is the
+   *returned* `ValidationResult`: `status: "INVALID"`, `validator: "pi-result"`
+   is byte-identical to a genuine tool fault. That remains true and remains
+   **latent** — measured, the only in-repo caller
+   (`.pi/extensions/platform-orchestrator.ts:202`) discards the return value, so
+   nothing here branches on it yet. C1 is the same collapse one layer further
+   in, at `attemptBlocked`, where there **is** a live consumer. It is a
+   separate site with a separate fix and must not be closed under P1's number.
+
+   **The fix, when it is taken.** A refusal must not contribute an unresolved
+   *failure* to the attempt it lands in. Two candidate directions, both live,
+   and the choice is the operator's: (a) a denial contributes
+   `SOFT_REFUSAL_CONTINUED`-equivalent bookkeeping instead of
+   `attemptBlocked`; (b) the sibling early return also runs the recovery
+   decision, so the refusal is classified before the attempt is judged. (a) is
+   narrower; (b) is closer to "a refusal is reported wherever it lands". No
+   code changed here, and the refusal's own words must survive either way.
+
+   **Pins owed with the fix, not before it.** A red pin on `main` breaks CI and
+   trains people to ignore red, so none is committed today. The transcript above
+   is the reproduction, and it is complete enough to write both pins from. The
+   gates needed: the lone denial still survives (**green today**, guards the
+   reversal against a fix that over-corrects), and the sibling denial leaves the
+   task alive with the policy's reason reachable (**red today**).
+9. **The REPLANNING refusal text tells a live task that it terminated.**
+   Filed 2026-10-01 by item 7's measurement, **unfixed**. One sentence, one
+   site: `kernel-adapter.ts:795` gives a REPLANNING task *"the task terminated
+   WITHOUT recording a failureReason, so there is no original failure to
+   replay"*. The second clause is true. The first is not — a REPLANNING task is
+   live, and that is exactly the distinction this codebase draws between
+   `TERMINAL_TASK_STATES` and `REFUSED_EXECUTION_STATES` (`:88-92`).
+
+   Small, but it is the one defect class this repository exists to prevent: a
+   message that reads as an account of what happened and is not one, sitting
+   where the operator will not re-check it. The fix is a REPLANNING branch in
+   the same `if/else` chain — the chain already special-cases `COMPLETED` and
+   `ESCALATED`, so a live state was simply not enumerated. Deferred, not
+   dropped: it changes a public refusal string, so it takes its own item and its
+   own review, and `C1.4` is the pin that will need updating when it lands.
+
+   **Consolidation, stated because a discarded working tree is not a silent
+   event.** Two further C1 pins were drafted earlier in the same session into
+   `platform/pi/terminal-refusal-echo.test.ts` and left uncommitted. They
+   covered the trace surface and the log invariant — now `C1.5` and `C1.6` in
+   the file above, which is the canonical home. The draft block was reverted
+   rather than committed: it duplicated coverage, and committing it would have
+   put `platform/` changes on **Track B**, which is barred from touching
+   `platform/` internals at all. Nothing was lost — the two assertions that
+   were unique to it are the two that survived. Recorded here because the
+   alternative, quietly restoring a file to its committed state, is exactly
+   the shape of the undisclosed-work hazard this session opened with.
+
+10. **The 2026-10-01 session death — MEASURED. The premise is REFUTED, and
+    the real cause is one `git` exit code.**
+    Filed 2026-10-01, session `2026-10-01T08-33-49-295Z_01a0f699…jsonl`,
+    task `bdb479c6-2337-4d72-a995-3c73c2f9efd8`. Transcript line numbers below
+    are lines of that file.
+
+    **The claim that was to be confirmed: the task died of
+    `REPLAN_BUDGET_EXHAUSTED` / `failure=TOOL_FAILURE` *after two
+    deletion-guard denials*, because a `POLICY_DENIED` collapsed to
+    `TOOL_FAILURE` at the `ValidationResult` boundary. It did not happen. The
+    denials are exonerated, and the collapse is confirmed present and
+    confirmed harmless-in-this-death.**
+
+    **The denials — exonerated by the trace.** Three policy denials occurred.
+    All three were classified `POLICY_DENIED`, answered `CONTINUE` /
+    `POLICY_SOFT_REFUSED`, and emitted `SOFT_REFUSAL_CONTINUED` carrying the
+    policy's own reason verbatim. **Every one left `replanCount=0`,
+    `retryCount=0`, `recoveryDepth=0`. Not one of them spent a unit of any
+    budget.** They are the reversal working, not failing:
+
+    | line | time | denial | outcome |
+    |---|---|---|---|
+    | 56 | 08:34:37 | path boundary, `/tmp/commit.diff` | `CONTINUE`, `replanCount=0` |
+    | 88 | 08:34:45 | deletion guard, `rm` (compound) | `CONTINUE`, `replanCount=0` |
+    | 527 | 08:39:25 | deletion guard, `rm` (standalone) | `CONTINUE`, `replanCount=0` |
+
+    **The collapse is real, and it is exactly where Candidate A said.** Line
+    527 emits, in order: `APPROVAL_DENIED` → `policy_decision DENY` →
+    `TOOL_FAILED` → **`VALIDATION_FAILED {"status":"INVALID","validator":
+    "pi-result","message":"…destructive command 'rm' is denied…"}`**, and only
+    then `RECOVERY_STARTED {failure: "POLICY_DENIED"}`. The `ValidationResult`
+    and the recovery classification disagree about the same event. Source:
+    `platform/pi/kernel-adapter.ts:1270` builds `INVALID`/`pi-result` from
+    `!result.success` alone, with no reference to whether `error` is a
+    `CoreError` carrying `POLICY_DENIED`; the correct classification is
+    recovered 50 lines later at `:1320` from `classifyFailure(error)`, on a different
+    object. **So the premise's mechanism is real — it simply did not kill this
+    task.** Recovery reads the `CoreError`, not the `ValidationResult`, so it
+    classified every denial correctly. Consistent with item 8's own note that
+    this collapse is **latent**: the only in-repo caller discards the returned
+    `ValidationResult`.
+
+    **What actually spent the budget** — three events, none of them a denial,
+    and only the first of them independent:
+
+    | line | time | event | cost |
+    |---|---|---|---|
+    | 602 | 08:40:19 | `git switch -c docker-ui-scaffold 12c89d5` → **`fatal: a branch named 'docker-ui-scaffold' already exists`, exit 128** | replan #1 |
+    | 711 | 08:41:28 | `edit` writes `c1-replanning-stored-failure.test.ts` → `ARTIFACT_INVALID`, *"artifact does not exist"* | replan #2 |
+    | 841 | 08:44:20 | `read Dockerfile` + `read docker-compose.yml`, bound as **siblings** → `ENOENT` ×2 | **TERMINATE** |
+
+    **One root cause, and it is trivial.** The branch already existed because
+    a prior session had created it. `git switch -c` on an existing branch is
+    a benign, exit-128, zero-information failure — the correct response is
+    `git switch docker-ui-scaffold`, one token different. Because the `switch`
+    failed, the task stayed on `fix/f006-post-reversal-ledger`, where those
+    two files do not exist; the ENOENT reads are the **echo of failure #1**,
+    not an independent fault, and `joiningSibling: true` is visible at line
+    838. The death is a single `git` error that spent two replans and then
+    the task.
+
+    **The one genuinely surprising event.** Line 711 marks the harness's *own
+    just-written output* `INVALID`: *"artifact does not exist at …/
+    c1-replanning-stored-failure.test.ts"*. The file **does** exist
+    (`platform/pi/c1-replanning-stored-failure.test.ts`, 12,440 bytes,
+    committed at `28800c2`). So a successful write was declared a failed
+    artifact — a read-after-write race between the edit and artifact
+    verification, charging a replan for a write that landed. This is a **new
+    defect, distinct from every item in this ledger**, and it is not yet
+    characterised: single-sample, cause not isolated between "verification ran
+    before the write was durable" and "the write raced a branch switch (the
+    task was switching branches mid-session at exactly this point)". It is
+    **filed, not diagnosed**, and it is the highest-value target in this
+    entry because it is the only observed case where the harness rejected its
+    own correct work.
+
+    **The finding that survives, and it is F-006's own headline.** A benign
+    fault with no chance of success on retry consumed an entire task, while
+    the retry budget sat untouched at `0/2` and `recoveryDepth` never exceeded
+    `1/3`. The three failures are in three unrelated domains — a `git` branch
+    name, an artifact write, a file read — and recovery spends **one shared
+    replan budget** across all of them. Nothing here is a D1 defect. This is
+    §2.3 (benign non-zero exits spend recovery budget), reproduced on a `git`
+    exit code instead of an application exit code, with a fatal outcome
+    instead of a replan.
+
+    **Consequences for the queue, stated because the fix order rested on the
+    refuted premise.** P1 (caller-boundary validator threading) is **not
+    promoted by this death** and its own gate is not met. It remains a real
+    boundary defect, measured at `kernel-adapter.ts:1270` and confirmed
+    *latent*, and it should be taken when taken — as its own review cycle, on
+    its own merits, not as the fix for a death it did not cause.
 
 ---
 
