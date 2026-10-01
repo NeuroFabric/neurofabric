@@ -18,6 +18,7 @@
         "time": "_time",
         "source": "source_host",
         "category": "alert_code",
+        "alias": "logger_name",
         "duration": "elapsed_time",
         "threshold": "threshold",
         "status": null,
@@ -31,7 +32,9 @@
         }
       ],
       "notes": [
-        "elapsed_time states no unit anywhere in the export. The reading is sound; the UNIT is a hypothesis and is reported as one.",
+        "elapsed_time states no unit anywhere in the export. The reading is sound; the UNIT is settled by owner ruling R10 as milliseconds, so it is reported as established and the report's columns say ms.",
+        "logger_name is the alias role (R13). It is stored here rather than left to name inference because the report labels a code with its logger, and a label printed off an unverified name is an unverified label. A logger serving MORE THAN ONE code is a coincidence and is deliberately not printed; the analysis refuses those on its own, from the data, and a config file cannot overrule that.",
+        "alert_code is the category role because alertType was measured against a real export and rejected below. Storing it keeps a second export of this shape from re-running the trap.",
         "_time arrives as epoch seconds in some searches and ISO-8601 in others. Both are read.",
         "There is no status column, so this export can say nothing about an error rate. The report must not print 0 percent."
       ]

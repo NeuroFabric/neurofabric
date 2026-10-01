@@ -83,20 +83,36 @@ ${body}
 </table>`;
 }
 
+/**
+ * THE FOUR DURATION COLUMNS. Total, mean, median, p95 -- or a row of em-dashes.
+ *
+ * The four travel TOGETHER in both renderings and in both rank orders. The
+ * frequency table used to omit cost entirely, which is a strange omission in a
+ * product whose headline finding is that frequency and cost disagree: the reader
+ * is shown the two rankings side by side and then asked to compare a number
+ * from one with a number from the other, when both are in the other table.
+ *
+ * A measure the file cannot support is an em-dash and never a 0, for the same
+ * reason the analysis returns null: 0 ms is a finding, "&mdash;" is a gap.
+ */
+function durationCells(c: CategoryStat, format: (n: number) => string): string {
+  const cell = (v: number | null): string => `<td class="num">${v === null ? "&mdash;" : escapeHtml(format(v))}</td>`;
+  return `${cell(c.totalElapsed)}${cell(c.meanElapsed)}${cell(c.medianElapsed)}${cell(c.p95Elapsed)}`;
+}
+
 function categoryTable(rows: readonly CategoryStat[], title: string, order: "frequency" | "elapsed"): string {
   if (rows.length === 0) return "";
   const body = rows.map((c, i) => `    <tr${i === 0 ? ' class="top"' : ""}>
       <td class="rank">${i === 0 ? "<strong>1</strong>" : i + 1}</td>
       <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.label)}</td>
       <td class="num">${c.count}</td>
-      ${order === "elapsed" ? `<td class="num">${c.totalElapsed === null ? "&mdash;" : c.totalElapsed.toLocaleString()}</td>` : ""}
+      ${durationCells(c, (n) => n.toLocaleString())}
       <td class="num">${c.breachCount}</td>
       <td class="cite">rows ${escapeHtml(cite(c.rows))}</td>
     </tr>`).join("\n");
-  const extra = order === "elapsed" ? "<th>total elapsed</th>" : "";
   return `<h2>${escapeHtml(title)}</h2>
 <table>
-  <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th>${extra}<th>over threshold</th><th>evidence</th></tr></thead>
+  <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th><th>total elapsed (ms)</th><th>mean (ms)</th><th>median (ms)</th><th>p95 (ms)</th><th>over threshold</th><th>evidence</th></tr></thead>
   <tbody>
 ${body}
   </tbody>
@@ -168,6 +184,51 @@ function divergenceBanner(a: BottleneckAnalysis): string {
 }
 
 /**
+ * THE DIVERGENCE IN MARKDOWN. The same finding as `divergenceBanner`, in the
+ * rendering the web wedge hands back to a browser and a person pastes into a
+ * ticket.
+ *
+ * RESTORED. The merge kept `divergenceBanner` because the HTML template calls it,
+ * so nothing went red: HTML still shouted. The Markdown template simply never
+ * had a block for it, and it degrades silently rather than failing -- which is
+ * the worse failure, because a report that under-reports is still a report that
+ * looks finished.
+ *
+ * It is a DEDICATED BLOCK rather than a clause appended to the lead sentence,
+ * because the sentence that would have carried it is the one a reader skims.
+ * The two rankings disagreeing is this product's entire claim, and a 158x cost
+ * multiple buried mid-paragraph is read as trivia. A callout cannot be skimmed
+ * past by accident.
+ *
+ * D2 STILL HOLDS: when both orderings agree this returns "", because a headline
+ * that always shouts is one nobody reads.
+ */
+function markdownDivergenceBanner(a: BottleneckAnalysis): string {
+  const d = a.divergence;
+  if (d === null) return "";
+  const elapsed = d.byElapsed.totalElapsed;
+  const freq = d.byFrequency.totalElapsed;
+  const ratio = d.totalRatio ?? null;
+  const pctOfCost = elapsed !== null && elapsed + (freq ?? 0) > 0 && elapsed > 0
+    ? (elapsed / (elapsed + (freq ?? 0))) * 100 : null;
+  const multiple = ratio === null ? null : ratio >= 10 ? Math.round(ratio) : Number(ratio.toFixed(1));
+  const comparison = ratio === null ? "" : ratio >= 1
+    ? ` with **${multiple}x the total elapsed time**`
+    : ` at **${(1 / ratio).toFixed(1)}x LESS total elapsed time**`;
+
+  return [
+    "> [!WARNING]",
+    "> **The two rankings disagree. That is the finding.**",
+    ">",
+    `> - **Most frequent:** ${mdCell(d.byFrequency.label)} — ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.`,
+    `> - **Most expensive:** ${mdCell(d.byElapsed.label)} — ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}${comparison}${pctOfCost === null ? "" : `, and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.`,
+    ">",
+    `> Ranking by frequency alone would have pointed at ${mdCell(d.byFrequency.key)} and buried ${mdCell(d.byElapsed.key)}. Evidence rows are in the tables below.`,
+    "",
+  ].join("\n");
+}
+
+/**
  * The sentence that says where the column readings came from.
  *
  * This used to be a constant: "every column reading is inferred from the column
@@ -178,6 +239,14 @@ function divergenceBanner(a: BottleneckAnalysis): string {
  */
 function provenanceNote(a: BottleneckAnalysis): string {
   const verifiedCount = a.verifiedRoles?.length ?? 0;
+  if (a.schemaSource === "GENERIC") {
+    // The honest sentence for an inferred profile. "Inferred from the column
+    // NAME alone" would be wrong the moment a profiler has read the values, and
+    // a report that mislabels its own evidence is worse than one that admits
+    // what it does not know -- but the reverse mistake is just as bad, letting
+    // an inference from a regex pass as a checked mapping.
+    return `<p class="none">No stored schema matched this file, so every column reading below was <strong>inferred</strong> from the column names and from a statistical profile of the values themselves. None of it has been checked by a person: treat it as a first reading, not a verified mapping.</p>`;
+  }
   if (verifiedCount === 0) {
     return `<p class="none">No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>`;
   }
@@ -199,9 +268,19 @@ function provenanceNote(a: BottleneckAnalysis): string {
  * for the TABLE STRUCTURE here, and the browser escapes them again for HTML
  * before rendering. Two layers, because one layer is a bet about which renderer
  * will eventually see this text.
+ *
+ * EMPHASIS IS ESCAPED, NOT DELETED. This used to strip `*` and `_` outright, and
+ * a column name is mostly underscores: `_time` printed as `time`, `alert_code`
+ * as `alertcode`, `logger_name` as `loggername`. Those are not the columns in the
+ * file. The report was renaming the evidence it cites, which is the one thing
+ * this renderer exists not to do -- and it disagreed with the HTML rendering of
+ * the same analysis, which has no such stripping. A backslash escape renders as
+ * the literal character and cannot open emphasis, so the cell is both safe and
+ * true. Backticks stay deleted: there is no escape that makes them inert in every
+ * renderer, and a value carrying one is vanishingly rare.
  */
 function mdCell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[`*_[\]<>]/g, "").replace(/\r?\n/g, " ").trim();
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[`*_]/g, (c) => `\\${c}`).replace(/[\[\]<>]/g, "").replace(/\r?\n/g, " ").trim();
 }
 
 function mdRows(rows: readonly number[], limit = 12): string {
@@ -214,11 +293,18 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
   const lines = [
     `## ${heading}`,
     "",
-    "| # | category | alerts | over threshold | total elapsed | source rows |",
-    "|---|---|---|---|---|---|",
+    "| # | category | alerts | over threshold | total elapsed (ms) | mean (ms) | median (ms) | p95 (ms) | source rows |",
+    "|---|---|---|---|---|---|---|---|---|",
   ];
   stats.forEach((s, index) => {
-    lines.push(`| ${index + 1} | ${mdCell(s.key)} | ${s.count} | ${s.breachCount} | ${s.totalElapsed === null ? "not measurable" : s.totalElapsed.toLocaleString()} | ${mdRows(s.rows)} |`);
+    const cell = (v: number | null): string => (v === null ? "not measurable" : v.toLocaleString());
+    // R13: the LABEL, not the bare key. The key alone says PEGA0001; the label
+    // says PEGA0001 (HttpAPI), which is the row a person recognises. The key is
+    // still a prefix of it, so anything matching on the code keeps working, and
+    // an alias is only ever present when R13 proved the mapping unambiguous in
+    // both directions -- one logger serving two codes is a coincidence, not a
+    // label.
+    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} | ${s.breachCount} | ${cell(s.totalElapsed)} | ${cell(s.meanElapsed)} | ${cell(s.medianElapsed)} | ${cell(s.p95Elapsed)} | ${mdRows(s.rows)} |`);
   });
   lines.push("", `_Ranked by ${measure}._`, "");
   return lines.join("\n");
@@ -246,10 +332,17 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     out.push(`> ${lead}`, "");
   }
 
+  // The divergence is the HEADLINE, and it leads. Same D2 guard as the HTML
+  // banner: nothing is printed when the two orderings agree.
+  const divergence = markdownDivergenceBanner(analysis);
+  if (divergence !== "") out.push(divergence);
+
   if (analysis.mappings.length > 0 || analysis.missing.length > 0) {
     const verifiedCount = analysis.verifiedRoles?.length ?? 0;
     out.push("## How this report was read", "");
-    out.push(verifiedCount === 0
+    out.push(analysis.schemaSource === "GENERIC"
+      ? "_No stored schema matched this file, so every column reading below was **inferred** from the column names and from a statistical profile of the values. None of it has been checked by a person: treat it as a first reading, not a verified mapping._"
+      : verifiedCount === 0
       ? "_No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation._"
       : `_${verifiedCount} of ${analysis.mappings.length} column reading(s) come from ${analysis.schemaSource === "SESSION_ARCHIVE" ? "this checkout's own learned schema" : "a core schema shipped with the product"}, verified against a real export of this shape._`);
     out.push("");
@@ -327,7 +420,7 @@ export async function renderBottleneckReport(input: {
   format?: "html" | "markdown";
 }): Promise<{ path: string; bytes: number; rendered: boolean; problems: readonly string[]; markdown?: string }> {
   const schema = input.schema ?? (input.workspaceCwd === undefined ? undefined : await resolveSchemaMemory({
-    cwd: input.workspaceCwd, headers: input.csv.headers, defaultsRoot: input.defaultsRoot,
+    cwd: input.workspaceCwd, headers: input.csv.headers, rows: input.csv.rows, defaultsRoot: input.defaultsRoot,
   }));
   const analysis = analyseBottlenecks(input.csv, schema);
   const title = String(input.title ?? "Bottleneck report");

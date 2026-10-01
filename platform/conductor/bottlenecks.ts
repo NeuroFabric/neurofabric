@@ -64,6 +64,20 @@ export interface CategoryStat {
   readonly count: number;
   /** Sum of the duration column in milliseconds (R10), or null when absent. */
   readonly totalElapsed: number | null;
+  /**
+   * The three measures that make a total interpretable, all in milliseconds and
+   * all null when there is no credible duration column.
+   *
+   * `count` is EVERY row in the category; these are the rows that carried a
+   * MEASURABLE duration. The two differ whenever a duration was blank or
+   * unparseable, and the difference is real: a blank is not a zero, and
+   * averaging it in as one would drag the mean toward zero on rows nobody
+   * measured. So these are null-safe by construction rather than by a filter
+   * applied at render time.
+   */
+  readonly meanElapsed: number | null;
+  readonly medianElapsed: number | null;
+  readonly p95Elapsed: number | null;
   /** Rows over the threshold. Zero when there is no threshold column. */
   readonly breachCount: number;
   readonly rows: readonly number[];
@@ -114,7 +128,8 @@ export interface BottleneckAnalysis {
   /** Roles with no credible column. The report must say so, not degrade. */
   readonly missing: readonly string[];
   /** Where the role mapping came from. Absent when everything was inferred. */
-  readonly schemaSource?: "SESSION_ARCHIVE" | "DEFAULT";
+  /** "GENERIC" means inferred from values, never checked by a person. */
+  readonly schemaSource?: "SESSION_ARCHIVE" | "DEFAULT" | "GENERIC";
   /** Roles whose column came from a stored schema rather than from name inference. */
   readonly verifiedRoles?: readonly string[];
   /** Which column supplied the category ranking. */
@@ -242,12 +257,24 @@ function resolveMappings(csv: CsvReadResult, schema?: ResolvedSchema): {
     // A column that came from a stored schema is VERIFIED: someone checked it
     // against a real export of this shape. Everything else is still a
     // hypothesis, and is still printed as one.
-    const fromStore = pick === stored && stored !== undefined;
+    //
+    // "CAME FROM A STORE" IS NOT THE SAME AS "WAS VERIFIED", AND THE GENERIC
+    // PROFILER IS WHY. It fills `roles` too, so a naive equality test would mark
+    // a regex's guess over column values as ESTABLISHED -- giving the report a
+    // green badge that a person never earned. Inference from values is better
+    // informed than inference from a name, but it is still inference, so it is
+    // still printed as a hypothesis.
+    const fromStore = pick === stored && stored !== undefined && schema?.source !== "GENERIC";
     if (fromStore) verified.push(role);
     const hypothesis = !fromStore;
     const note = fromStore
       ? `verified schema "${schema?.id}"`
-      : role === "duration"
+      : schema?.source === "GENERIC"
+        // The note must describe HOW this was guessed, because "inferred from
+        // name" is now only half true and an inaccurate note about evidence is
+        // worse than no note.
+        ? `inferred from name and a profile of ${distinct} sampled value(s)`
+        : role === "duration"
         // R10 superseded the old wording on this branch. It used to say the unit
         // was not stated in the export, which was true of the file and false of
         // the decision: the owner has ruled the elapsed column to be
@@ -328,6 +355,33 @@ function categoryLabel(key: string, alias: string | undefined): string {
   return alias === undefined ? key : `${key} (${aliasLabel(alias)})`;
 }
 
+/**
+ * Mean, median and p95 over the durations that were actually MEASURED.
+ *
+ * NEAREST-RANK PERCENTILE, and that is a choice worth defending. The 95th
+ * percentile is the value at rank ceil(0.95 * n), 1-indexed and clamped, which
+ * always returns a duration some row ACTUALLY had. Linear interpolation, the
+ * more common textbook choice, can return a number between two rows -- fine for
+ * a statistic, wrong for a report whose entire promise is that every figure can
+ * be traced to a row. "p95 is 10,000 ms" should let a reader go find a
+ * 10,000 ms row, and with nearest-rank there always is one.
+ *
+ * MEDIAN AVERAGES THE MIDDLE PAIR on an even count, which is why the renderers
+ * format these figures rather than concatenating them.
+ *
+ * Empty in, null out. Never zero: zero is a claim that the work was free.
+ */
+function durationStats(samples: readonly number[]): { mean: number | null; median: number | null; p95: number | null } {
+  if (samples.length === 0) return { mean: null, median: null, p95: null };
+  const sorted = [...samples].sort((a, b) => a - b);
+  const n = sorted.length;
+  const mid = Math.floor(n / 2);
+  const median = n % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const rank = Math.min(n, Math.max(1, Math.ceil(0.95 * n)));
+  const mean = sorted.reduce((sum, v) => sum + v, 0) / n;
+  return { mean, median, p95: sorted[rank - 1] };
+}
+
 function bucket(map: Map<string, { error: number; rows: number[] }>, key: string, error: boolean, row: number): void {
   const entry = map.get(key) ?? { error: 0, rows: [] };
   if (error) entry.error += 1;
@@ -369,7 +423,7 @@ export function analyseBottlenecks(
 
   let errorRows = 0;
 
-  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[]; loggers: Set<string> }>();
+  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[]; loggers: Set<string>; durations: number[] }>();
 
   let naiveTimestamps = 0;
   let timestampRows = 0;
@@ -421,9 +475,22 @@ export function analyseBottlenecks(
     // question asks for both.
     if (categoryCol !== undefined) {
       const key = String(row[categoryCol] ?? "(none)");
-      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [], loggers: new Set<string>() };
-      const rawDuration = latencyCol === undefined ? Number.NaN : Number(String(row[latencyCol] ?? ""));
-      if (entry.elapsed !== null && Number.isFinite(rawDuration)) entry.elapsed += rawDuration;
+      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [], loggers: new Set<string>(), durations: [] };
+      const raw = latencyCol === undefined ? "" : String(row[latencyCol] ?? "").trim();
+      // A BLANK IS NOT A ZERO. `Number("")` is 0 and `Number(" ")` is 0, so the
+      // obvious parse silently invents a measurement: a row with no duration was
+      // being counted as a row that took 0 ms, which drags the mean down and
+      // quietly asserts the work was free. An unparseable cell is therefore NOT
+      // MEASURED, and it is excluded from the total and from all three measures
+      // alike -- one branch, so the four can never disagree about the sample.
+      const rawDuration = raw.length === 0 ? Number.NaN : Number(raw);
+      // One branch, so the total and the three measures can never disagree about
+      // which rows were measured. A blank or non-numeric duration is skipped
+      // entirely rather than folded in as a zero.
+      if (entry.elapsed !== null && Number.isFinite(rawDuration)) {
+        entry.elapsed += rawDuration;
+        entry.durations.push(rawDuration);
+      }
       if (thresholdCol !== undefined && Number.isFinite(rawDuration)
         && Number(String(row[thresholdCol] ?? Number.NaN)) < rawDuration) {
         entry.breach += 1;
@@ -455,14 +522,20 @@ export function analyseBottlenecks(
     else ambiguousAliases.push(logger);
   }
 
-  const categoryStats: CategoryStat[] = [...categories.entries()].map(([key, v]) => ({
-    key,
-    label: categoryLabel(key, aliasOf.get(key)),
-    count: v.count,
-    totalElapsed: v.elapsed,
-    breachCount: v.breach,
-    rows: [...v.rows].sort((a, b) => a - b),
-  }));
+  const categoryStats: CategoryStat[] = [...categories.entries()].map(([key, v]) => {
+    const stats = durationStats(v.durations);
+    return {
+      key,
+      label: categoryLabel(key, aliasOf.get(key)),
+      count: v.count,
+      totalElapsed: v.elapsed,
+      meanElapsed: stats.mean,
+      medianElapsed: stats.median,
+      p95Elapsed: stats.p95,
+      breachCount: v.breach,
+      rows: [...v.rows].sort((a, b) => a - b),
+    };
+  });
   const byFrequency = [...categoryStats].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
   const byElapsed = [...categoryStats].sort(
     (a, b) => (b.totalElapsed ?? -1) - (a.totalElapsed ?? -1) || b.count - a.count,
