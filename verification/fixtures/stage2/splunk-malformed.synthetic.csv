@@ -1,0 +1,7 @@
+_time,host,source,sourcetype,status,duration_ms,operation,_raw
+1756684800,payments-01,checkout-api,access_combined,200,142,POST /checkout,"OK cart=8841 total=129.95"
+1756684920,payments-01,checkout-api,access_combined,500,4310,POST /checkout,"ERROR upstream timeout after 3000ms"
+1756684980,payments-01,cart-svc,access_combined,500,2980
+1756685220,payments-01,payment-gw,access_combined,502,1120,POST /authorize,"ERROR upstream returned 502, provider=stripe-eu"
+1756685400,payments-03,search-idx,access_combined,429,15,GET /search,ERROR rate limit exceeded, bucket=search-idx
+1756685460,payments-01,checkout-api,access_combined,500,4301,POST /checkout,"ERROR upstream timeout after 3000ms
