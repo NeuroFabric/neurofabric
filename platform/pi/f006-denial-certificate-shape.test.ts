@@ -81,7 +81,35 @@
    }
 
    /** The real policy's own words for a `.env` read — asserted, never assumed. */
-   const REAL_REASON = "Neurofebric policy: operation targets credential file '.env'";
+   /**
+    * RULING 1 (2026-10-01) — WHY THIS FIXTURE IS A SCOPE REFUSAL NOW.
+    *
+    * This file pins that a refusal's REASON survives the bridge. It used to pin
+    * it with a credential-file read, because that is the most dramatic denial
+    * the policy can produce. The ruling now classifies a credential read as
+    * HARD_DENY, which TERMINATEs — so this fixture would no longer exercise a
+    * survivable refusal and the file's subject (attribution of a refusal the
+    * agent lives through) would have to be restated wholesale.
+    *
+    * A read OUTSIDE the workspace is SOFT_REFUSE under the same ruling, is
+    * refused by the real policy in its own words, and travels through the
+    * IDENTICAL bridge path. The attribution evidence is therefore unchanged and
+    * still real. The hazard-class refusals are pinned where they belong, in
+    * d1-refusal-tiers.test.ts, which asserts they TERMINATE — so nothing is lost
+    * by moving the fixture, and nothing is being quietly redefined.
+    */
+   const OUTSIDE_PATH = path.join(os.tmpdir(), "nf-outside-the-roots", "notes.md");
+   /** The real policy's own words for an out-of-root read - asserted, never assumed. */
+   const REAL_REASON_PREFIX = "Neurofebric policy: path boundary violation:";
+   /**
+    * The refusal carries the policy's own words. They are checked by SHAPE
+    * rather than by literal because the real reason names the offending path,
+    * which is per-adapter. A test that hard-coded the string would be pinning a
+    * constant it had also written, which is the mistake the structural pins in
+    * this file exist to avoid.
+    */
+   const isRealReason = (value: unknown): value is string =>
+     typeof value === "string" && value.startsWith(REAL_REASON_PREFIX);
 
    const lastPayload = (k: KernelAdapter, type: string) =>
      k.recentEvents(500).filter((e) => e.type === type).at(-1)?.payload as Record<string, unknown> | undefined;
@@ -89,11 +117,12 @@
    const payloadsOf = (k: KernelAdapter, type: string) =>
      k.recentEvents(500).filter((e) => e.type === type).map((e) => e.payload as Record<string, unknown>);
 
-   /** The real policy must produce REAL_REASON, so every pin below is driven by live policy output. */
+   /** The real policy must produce realReason, so every pin below is driven by live policy output. */
    async function denyRealRead(adapter: KernelAdapter, callId: string): Promise<string> {
-      const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, callId);
+      const { decision } = await adapter.precheckToolCall("read", "execute", { path: OUTSIDE_PATH }, undefined, callId);
      assert.equal(decision.decision, "DENY", "the real policy must actually deny this call");
-     assert.equal(decision.reason, REAL_REASON, "and refuse it in its own words");
+     assert.ok(decision.reason?.startsWith(REAL_REASON_PREFIX), "and refuse it in its own words");
+     assert.equal(typeof decision.reason, "string");
      return decision.reason;
    }
 
@@ -132,8 +161,8 @@
 
    test("BRIDGE.A1 a refusal in production order leaves the task LIVE, and is REPORTED", async () => {
      const adapter = await trustedAdapter();
-     const forwarded = await productionOrder(adapter, "call-a1", { path: ".env" });
-     assert.equal(forwarded, REAL_REASON, "the stashed reason is what gets delivered");
+     const forwarded = await productionOrder(adapter, "call-a1", { path: OUTSIDE_PATH });
+     assert.ok(forwarded?.startsWith(REAL_REASON_PREFIX), "the stashed reason is what gets delivered");
 
      const task = adapter.currentTask!;
      assert.notEqual(task.status, "FAILED", "a refusal does not kill the task");
@@ -146,14 +175,14 @@
      const record = lastPayload(adapter, "SOFT_REFUSAL_CONTINUED");
      assert.ok(record, "the refusal is recorded, not swallowed");
      assert.equal(record!.failure, "POLICY_DENIED", "it keeps its identity all the way through recovery");
-     assert.equal(record!.denialReason, REAL_REASON, "with the policy's own words, verbatim");
+     assert.ok(isRealReason(record!.denialReason), "with the policy's own words, verbatim");
    });
 
    test("BRIDGE.A2 a refusal in production order spends no budget of any kind", async () => {
      // Counters are task-cumulative, so this is measured from a fresh task with no
      // prior failure: the zero is the denial's own doing, not a carryover.
      const adapter = await trustedAdapter();
-     await productionOrder(adapter, "call-a2", { path: ".env" });
+     await productionOrder(adapter, "call-a2", { path: OUTSIDE_PATH });
 
      const task = adapter.currentTask!;
      assert.equal(task.replanCount, 0, "a refusal is not replanned");
@@ -197,7 +226,7 @@
      // a generic tool error that replans to death — with no refusal record and no
      // alarm. This asserts the guard is dormant on the live path.
      const adapter = await trustedAdapter();
-     await productionOrder(adapter, "call-c1", { path: ".env" });
+     await productionOrder(adapter, "call-c1", { path: OUTSIDE_PATH });
 
      const ignored = payloadsOf(adapter, "TOOL_EXECUTION_IGNORED");
      assert.equal(ignored.length, 0, "no execution_start was ignored: the guard never fired");
@@ -257,7 +286,7 @@
      // prevent, and on the sibling path it used to be exactly that.
      const continued = payloadsOf(adapter, "SOFT_REFUSAL_CONTINUED");
      assert.equal(continued.length, 1, "the sibling-settled refusal is classified, not silently dropped");
-     assert.equal(continued[0].denialReason, REAL_REASON,
+     assert.ok(isRealReason(continued[0].denialReason),
        "and it carries the policy's own words verbatim, so the operator learns WHICH rule refused it");
      assert.equal(adapter.currentTask!.retryCount, 0, "and it books no retry budget");
      assert.equal(adapter.currentTask!.replanCount, 0,
@@ -270,7 +299,7 @@
 
    test("CERT.1 the refusal record matches the real shape end to end", async () => {
      const adapter = await trustedAdapter();
-     await productionOrder(adapter, "call-1", { path: ".env" });
+     await productionOrder(adapter, "call-1", { path: OUTSIDE_PATH });
 
      const records = payloadsOf(adapter, "SOFT_REFUSAL_CONTINUED");
      assert.equal(records.length, 1, "a survivable refusal is recorded exactly once");
@@ -288,13 +317,13 @@
      assert.equal(record.strategy, "CONTINUE", "the strategy is the one the table actually chose");
      assert.equal(record.reason, "POLICY_SOFT_REFUSED", "and the reason is the refusal, never a budget");
      assert.equal(record.failure, "POLICY_DENIED", "the category is carried under its own name");
-     assert.equal(record.denialReason, REAL_REASON, "and the policy's own words arrive verbatim");
+     assert.ok(isRealReason(record.denialReason), "and the policy's own words arrive verbatim");
      assert.equal(typeof record.recoveryDepth, "number", "the depth is a position, and it is recorded");
    });
 
    test("CERT.2 the strategy reason is never confused with the failure category", async () => {
      const adapter = await trustedAdapter();
-     await productionOrder(adapter, "call-2", { path: ".env" });
+     await productionOrder(adapter, "call-2", { path: OUTSIDE_PATH });
      const record = lastPayload(adapter, "SOFT_REFUSAL_CONTINUED")!;
 
      // Both fields name the same event and neither may stand in for the other.
@@ -308,26 +337,34 @@
 
    test("CERT.3 the reason is delivered ONCE, whole, and only in its own field", async () => {
      const adapter = await trustedAdapter();
-     await productionOrder(adapter, "call-3", { path: ".env" });
+     const realReason = await productionOrder(adapter, "call-3", { path: OUTSIDE_PATH });
      const record = lastPayload(adapter, "SOFT_REFUSAL_CONTINUED")!;
 
+     assert.ok(realReason, "precondition: a reason in the policy's own words was delivered");
      assert.equal(
        record.denialReason,
-       REAL_REASON,
+       realReason,
        "the reason sits whole in its own contracted field, not spliced into prose",
      );
      // A reason duplicated across fields, or echoed into a summary, would still
      // satisfy every substring pin this file used to carry. Counting deliveries is
      // the only assertion that notices.
-     const serialized = JSON.stringify(record);
+     //
+     // Counted over the FIELD VALUES, not over `JSON.stringify(record)`: the real
+     // reason names a Windows path, whose separators JSON escapes, so a text
+     // search over the serialised record would report zero and pass for the wrong
+     // reason. The thing being counted is "how many fields carry this reason",
+     // and that is a property of the object.
+     const deliveries = Object.values(record)
+       .filter((value) => typeof value === "string" && value.includes(realReason)).length;
      assert.equal(
-       serialized.split(REAL_REASON).length - 1,
+       deliveries,
        1,
        "exactly one delivery of the reason: never duplicated, never elided",
      );
      assert.doesNotMatch(
        String(record.failure),
-       new RegExp(lit(REAL_REASON)),
+       new RegExp(lit(realReason)),
        "and it never leaks into the category field, where it would read as a category name",
      );
    });
@@ -339,7 +376,7 @@
      // bridge could be deleted with every pin still green.
      const adapter = await trustedAdapter();
      await adapter.beginToolExecution("call-4", "read", { toolCallId: "call-4" });
-     const { decision } = await adapter.precheckToolCall("read", "execute", { path: ".env" }, undefined, "call-4");
+     const { decision } = await adapter.precheckToolCall("read", "execute", { path: OUTSIDE_PATH }, undefined, "call-4");
 	 assert.equal(decision.decision, "DENY");
      await adapter.recordToolResult("call-4", "read", undefined, true, undefined, undefined);
 
@@ -364,14 +401,21 @@
      // preflight ADMITTED. Two paths means the attribution cannot rest on a single
      // call site being correct.
      const adapter = await trustedAdapter();
+     // This call is ADMITTED: the point of the second path is that a refusal can
+     // still arrive on a call the preflight allowed, so the reason has to travel
+     // on the result with no decision object behind it.
      await adapter.precheckToolCall("read", "execute", { path: "notes.md" }, undefined, "call-5");
      const bound = await adapter.beginToolExecution("call-5", "read", { toolCallId: "call-5" });
      assert.ok(bound);
-     await adapter.recordToolResult("call-5", "read", undefined, true, undefined, REAL_REASON);
+     // A reason in the policy's own words, delivered on a call the preflight
+     // ADMITTED: the refusal has to survive without a decision object, which is
+     // exactly what this second path exists to prove.
+     const realReason = "Neurofebric policy: path boundary violation: a path outside the allowed roots";
+     await adapter.recordToolResult("call-5", "read", undefined, true, undefined, realReason);
 
      assert.notEqual(adapter.currentTask!.status, "FAILED", "a bound call refused on its result still survives");
      const record = lastPayload(adapter, "SOFT_REFUSAL_CONTINUED");
      assert.ok(record, "and is reported, not swallowed");
-     assert.equal(record!.denialReason, REAL_REASON, "with the policy's own words");
+     assert.ok(isRealReason(record!.denialReason), "with the policy's own words");
      assert.equal(record!.failure, "POLICY_DENIED", "and its category intact on this second path too");
    });

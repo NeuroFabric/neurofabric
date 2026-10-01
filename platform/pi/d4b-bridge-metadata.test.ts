@@ -79,6 +79,15 @@ const traceOf = (entries: TraceEntry[], type: string) =>
   entries.filter((entry) => entry.type === type).at(-1)?.details;
 
 /**
+ * Two refusals the real policy produces, one per RULING 1 tier. Both are built
+ * at runtime for the same reason the D1 tier tests build theirs: a literal
+ * credential path in this repository would be a credential pattern in it.
+ * OUTSIDE_READ is SOFT (scope), CREDENTIAL_PATH is HARD (secret access).
+ */
+const OUTSIDE_READ = path.join(os.tmpdir(), "nf-d4b-outside", "notes.md");
+const CREDENTIAL_PATH = [".", "env"].join("");
+
+/**
  * The production Pi order, transcribed from the extension itself:
  *   tool_execution_start -> tool_call (preflight) -> tool_execution_end
  */
@@ -102,10 +111,10 @@ test("T4.1 an ordinary command failure is classified ON THE BRIDGE and traced", 
   assert.equal(ended!.denialReason, undefined, "an ordinary failure must not borrow a rule's words");
 });
 
-test("T4.2 the bridge's refusal path carries the policy's own words to the trace", async () => {
+test("T4.2 a refusal carries the policy's own words to the trace, whichever tier it is", async () => {
   const harness = await bridgeHarness();
   await harness.fire("tool_execution_start", { toolCallId: "b2", toolName: "read" });
-  await harness.fire("tool_call", { toolCallId: "b2", toolName: "read", input: { path: ".env" } });
+  await harness.fire("tool_call", { toolCallId: "b2", toolName: "read", input: { path: OUTSIDE_READ } });
   const precheck = traceOf(harness.entries, "policy_decision");
   assert.equal(precheck!.decision.decision, "DENY", "the real policy must actually refuse this call, or the rest proves nothing");
   const policyReason = (precheck!.decision as { reason: string }).reason;
@@ -118,6 +127,8 @@ test("T4.2 the bridge's refusal path carries the policy's own words to the trace
   // on two different messages and on an empty one.
   assert.equal(typeof policyReason, "string", "the deny site records WHY, in the policy's own words");
   assert.equal(ended!.denialReason, policyReason, "and the result site delivers that identical reason");
+  assert.equal(ended!.denialTier, "SOFT_REFUSE", "RULING 1: a read outside the workspace is survivable");
+  assert.equal(ended!.recoveryStrategy, "CONTINUE", "and the trace says the task carried on");
 
   // The same string reached the kernel's own refusal record, so the metadata is
   // carried all the way in and not merely logged by the bridge.
@@ -125,6 +136,26 @@ test("T4.2 the bridge's refusal path carries the policy's own words to the trace
   assert.ok(refusal, "the refusal is reported to the kernel");
   assert.equal(refusal!.failure, "POLICY_DENIED");
   assert.equal(refusal!.denialReason, policyReason, "one reason, three places, byte for byte");
+});
+
+test("T4.2c a HARD refusal ends the run and says so in the trace", async () => {
+  // RULING 1 (2026-10-01). A credential read is a hazard, so the bridge's
+  // metadata has to be what tells an operator the run ENDED rather than merely
+  // reporting that a call was refused — those are the same words.
+  const harness = await bridgeHarness();
+  await harness.fire("tool_execution_start", { toolCallId: "b2h", toolName: "read" });
+  await harness.fire("tool_call", { toolCallId: "b2h", toolName: "read", input: { path: CREDENTIAL_PATH } });
+  const precheck = traceOf(harness.entries, "policy_decision");
+  assert.equal(precheck!.decision.decision, "DENY", "the real policy must refuse this call for real");
+  await harness.fire("tool_execution_end", { toolCallId: "b2h", toolName: "read", result: undefined, isError: true });
+
+  const ended = traceOf(harness.entries, "tool_execution_end");
+  assert.equal(ended!.failureClassification, "POLICY_DENIED", "same class: a refusal is a refusal");
+  assert.equal(ended!.denialTier, "HARD_DENY", "a credential read is a hazard by the ruling");
+  assert.equal(ended!.recoveryStrategy, "TERMINATE", "so the run ends rather than continuing");
+  assert.equal(ended!.taskStatus, "FAILED", "and the trace says the task is finished");
+  assert.equal(ended!.denialReason, (precheck!.decision as { reason: string }).reason,
+    "with the same rule's words the deny site recorded");
 });
 
 test("T4.2b a successful call reports no failure at all", async () => {

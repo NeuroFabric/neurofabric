@@ -200,9 +200,34 @@ export interface PolicyRequest {
  */
 export type DenialRefusal = "task_terminal" | "stale_task" | "out_of_scope_discovery";
 
+/**
+ * RULING 1 (2026-10-01): which kind of refusal this is.
+ *
+ *   SOFT_REFUSE - the call was refused because of WHERE it pointed or WHICH tool
+ *     asked, not because anything dangerous was attempted. A read outside the
+ *     workspace, a tool that is not on the allow list. The agent can adapt or
+ *     ask the user, so the task lives.
+ *
+ *   HARD_DENY - the call was refused because it was a hazard in itself: a
+ *     destructive command, a secret, a workspace escape, a scan that could not
+ *     complete. No different next move makes those permitted, so the run ends.
+ *
+ * BOTH tiers are non-retryable, non-replan-worthy and reason-preserving. Only
+ * the task's fate differs.
+ *
+ * ABSENT MEANS SOFT. Every engine that does not classify its refusals -
+ * TrustedProjectPolicy, DefaultPolicy, and any embedder's own engine - keeps
+ * exactly the behaviour the D1 reversal gave it, so adding a tier cannot
+ * silently move a call from survivable to terminal. The fail-closed direction
+ * is enforced at the rule site instead: every site in ConfiguredPolicy sets a
+ * tier EXPLICITLY, and a site that forgets is caught by test rather than
+ * inheriting a default.
+ */
+export type DenialTier = "SOFT_REFUSE" | "HARD_DENY";
+
 export type PolicyDecision =
   | { decision: "ALLOW" }
-  | { decision: "DENY"; reason: string; violation?: ViolationAction; refusal?: DenialRefusal }
+  | { decision: "DENY"; reason: string; violation?: ViolationAction; refusal?: DenialRefusal; tier?: DenialTier }
   | { decision: "REQUIRE_APPROVAL"; reason: string };
 
 /**

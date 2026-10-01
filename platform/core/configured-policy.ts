@@ -8,6 +8,7 @@ import { callSignature } from "./call-signature.ts";
 import type {
   BudgetLevel,
   DenialRefusal,
+  DenialTier,
   PolicyDecision,
   PolicyEngine,
   PolicyMode,
@@ -271,6 +272,26 @@ export class ConfiguredPolicy implements PolicyEngine {
    */
   private scopeRefusal: DenialRefusal | undefined;
 
+  /**
+   * RULING 1 (2026-10-01): the tier decided by the LAST evaluation, set at the
+   * same moment and by the same discipline as `scopeRefusal` above — cleared
+   * before anything can set it, read once, never awaited between.
+   *
+   * Every rule site sets it EXPLICITLY. That is the whole fail-closed story for
+   * this field: a site added later and not taught about tiers leaves the
+   * decision TIERLESS, and a tierless denial is a SOFT refusal — so forgetting
+   * is survivable-but-wrong rather than silently fatal. `policy-port.test.ts`
+   * pins that every rule site is classified, which is what turns "forgot" from a
+   * silent hole into a red test.
+   */
+  private denialTier: DenialTier | undefined;
+
+  /** Record the tier for the denial this evaluation is about to return. */
+  private deny(reason: string, tier: DenialTier): string {
+    this.denialTier = tier;
+    return reason;
+  }
+
   constructor(config: PolicyConfig, options: { mode: PolicyMode; base: PolicyEngine; allowedRoots: string[] }) {
     this.config = config;
     this.mode = options.mode;
@@ -313,15 +334,50 @@ export class ConfiguredPolicy implements PolicyEngine {
     // Cleared before anything can set it, so a stale class can never leak into
     // this call's decision. See the field's own note for why it is safe.
     this.scopeRefusal = undefined;
+    this.denialTier = undefined;
     const denial = this.evaluateRules(request);
     if (denial) {
+      // RULING 3: A REFUSAL IS COUNTED, AND IT IS NOT PAID FOR.
+      //
+      // The hole this closes, measured by ruling3-refusal-budget.test.ts: the
+      // budget increment below is only reached when a call is ALLOWED, so a
+      // refused call cost nothing and the same refused call could be proposed
+      // forever. A refusal books no retry and no replan either (D1), so nothing
+      // bounded that loop at all — the policy would be refusing correctly and
+      // the task would never end.
+      //
+      // What is added is COUNTABILITY, not cost. The refusal increments the
+      // repeat map — the same per-(task, signature) map the allowed-call
+      // telemetry already used — and touches no counter. The budget therefore
+      // still cannot be exhausted purely by being refused, which is the failure
+      // mode a naive fix would have introduced.
+      //
+      // `countsFor` is called for its side effect of materialising the task's
+      // telemetry entry. It creates a zeroed record and increments nothing, so
+      // `toolBudget` can answer for a task whose every call so far was refused
+      // instead of reporting "nothing known" for a task it knows plenty about.
+      this.countsFor(request.taskId);
+      const repeats = this.repeatsFor(request.taskId);
+      const signature = callSignature(request);
+      repeats.set(signature, (repeats.get(signature) ?? 0) + 1);
       // D5 / §2.4(b): a scope refusal is still a DENY -- nothing is read and
       // nothing executes -- but it is marked, and the mark is what lets the
       // adapter carry "refused, not violated" to the result instead of
       // terminating the task on it.
-      return this.scopeRefusal === undefined
+      //
+      // RULING 1: `tier` is the OTHER mark, and it answers a different
+      // question. `refusal` says this denial was not a rule breach; `tier` says
+      // what kind of rule it was. They are independent: an out-of-scope
+      // enumeration is a refusal AND a soft one, and a destructive command is
+      // neither a refusal nor soft.
+      //
+      // `tier` is absent only if a rule site did not set one, and an absent tier
+      // is read as SOFT by recovery — so a site that forgets degrades to the
+      // pre-ruling behaviour rather than to a hard denial nobody asked for.
+      const decision: PolicyDecision = this.scopeRefusal === undefined
         ? { decision: "DENY", reason: denial, violation: this.config.onViolation }
         : { decision: "DENY", reason: denial, violation: this.config.onViolation, refusal: this.scopeRefusal };
+      return this.denialTier === undefined ? decision : { ...decision, tier: this.denialTier };
     }
 
     const counts = this.countsFor(request.taskId);
@@ -371,23 +427,30 @@ export class ConfiguredPolicy implements PolicyEngine {
     const { tool, input, taskId } = request;
     const where = `policy ${path.basename(this.config.source)}`;
 
-    // 1. Deny list always wins.
+    // 1. Deny list always wins. SOFT: which tool may be used is a question of
+    //    authority the agent or the user can answer; nothing about the call is
+    //    dangerous, only unwanted.
     if (this.config.deniedTools.includes(tool.name)) {
-      return `${where}: '${tool.name}' is in deniedTools`;
+      return this.deny(`${where}: '${tool.name}' is in deniedTools`, "SOFT_REFUSE");
     }
 
     // 2. An empty allow list means "no name-based gating", not "allow all".
     if (this.config.allowedTools.length > 0 && !this.config.allowedTools.includes(tool.name)) {
-      return `${where}: '${tool.name}' is not in allowedTools`;
+      return this.deny(`${where}: '${tool.name}' is not in allowedTools`, "SOFT_REFUSE");
     }
 
     // 3. Limits, checked before the call is counted.
+    //
+    //    SOFT, and deliberately so: an exhausted budget is not a hazard, it is
+    //    the end of the road. The task is still a task that can report what it
+    //    accomplished, and terminating here would replace a truthful "out of
+    //    budget" certificate with a death that names no budget at all.
     const counts = this.countsFor(taskId);
     if (counts.toolCalls >= this.config.limits.maxToolCallsPerTask) {
-      return `${where}: maxToolCallsPerTask exceeded (${this.config.limits.maxToolCallsPerTask})`;
+      return this.deny(`${where}: maxToolCallsPerTask exceeded (${this.config.limits.maxToolCallsPerTask})`, "SOFT_REFUSE");
     }
     if (tool.riskLevel === "WRITE" && counts.fileWrites >= this.config.limits.maxFileWritesPerTask) {
-      return `${where}: maxFileWritesPerTask exceeded (${this.config.limits.maxFileWritesPerTask})`;
+      return this.deny(`${where}: maxFileWritesPerTask exceeded (${this.config.limits.maxFileWritesPerTask})`, "SOFT_REFUSE");
     }
 
     // 4. Content patterns, each scoped to the payload it is actually about.
@@ -430,7 +493,7 @@ export class ConfiguredPolicy implements PolicyEngine {
       //     depend on finding a pattern at the bottom.
       const depth = maxWritePayloadDepth(input);
       if (depth > MAX_WRITE_PAYLOAD_DEPTH) {
-        return `${where}: write payload nesting depth ${depth} exceeds the limit of ${MAX_WRITE_PAYLOAD_DEPTH}`;
+        return this.deny(`${where}: write payload nesting depth ${depth} exceeds the limit of ${MAX_WRITE_PAYLOAD_DEPTH}`, "HARD_DENY");
       }
     }
 
@@ -440,7 +503,7 @@ export class ConfiguredPolicy implements PolicyEngine {
     //     covers the tiers D-027 deliberately never reached: reads, controlled
     //     calls, and anything else that was previously uninspected-but-allowed.
     if (commandScan.truncated || commandScope.truncated) {
-      return `${where}: ${truncatedScanReason(tool.name)}`;
+      return this.deny(`${where}: ${truncatedScanReason(tool.name)}`, "HARD_DENY");
     }
 
     if (tool.riskLevel === "WRITE" && !SCAN_EXEMPT_TOOLS.has(tool.name)) {
@@ -462,7 +525,7 @@ export class ConfiguredPolicy implements PolicyEngine {
     if (tool.riskLevel === "WRITE") {
       const bytes = this.payloadBytes(request);
       if (bytes > this.config.limits.maxBytesPerWrite) {
-        return `${where}: maxBytesPerWrite exceeded (${bytes} > ${this.config.limits.maxBytesPerWrite})`;
+        return this.deny(`${where}: maxBytesPerWrite exceeded (${bytes} > ${this.config.limits.maxBytesPerWrite})`, "SOFT_REFUSE");
       }
     }
 
@@ -474,7 +537,7 @@ export class ConfiguredPolicy implements PolicyEngine {
     // Checked before the empty-list shortcut below. "No candidates" and "the
     // walk stopped before it could find any" both present as an empty list, and
     // only one of them means the boundary has actually cleared the payload.
-    if (scan.truncated) return `${where}: ${truncatedScanReason(request.tool.name)}`;
+    if (scan.truncated) return this.deny(`${where}: ${truncatedScanReason(request.tool.name)}`, "HARD_DENY");
     const candidates = scan.candidates;
     if (candidates.length === 0) return undefined;
 
@@ -482,7 +545,13 @@ export class ConfiguredPolicy implements PolicyEngine {
     for (const candidate of candidates) {
       const verdict = this.boundary.check(candidate);
       if (!verdict.allowed) {
-        const denial = `${where}: path boundary violation: ${candidate}: ${verdict.reason}`;
+        const denial = this.deny(
+          `${where}: path boundary violation: ${candidate}: ${verdict.reason}`,
+          // RULING 1: a WRITE that escapes the workspace is an escape. A READ
+          // that points outside it is a scope question, and is D1.1's SOFT case:
+          // the agent can be told "that is outside the workspace" and ask.
+          writing ? "HARD_DENY" : "SOFT_REFUSE",
+        );
         // §2.4(b): a refusal of SCOPE rather than a violation. A glob is not a
         // location -- it names no file, it asks the shell to enumerate a span --
         // so an out-of-root one is a refusal of scope and nothing more.
@@ -520,7 +589,11 @@ export class ConfiguredPolicy implements PolicyEngine {
         const prefix = literalPatternPrefix(relative);
         const scoped = this.matchRule(normalizeForMatch(prefix), writing);
         if (scoped?.verdict === "deny") {
-          return `${where}: path rule '${scoped.pattern}' denies ${writing ? "write" : "read"} of '${prefix}'`;
+          return this.deny(`${where}: path rule '${scoped.pattern}' denies ${writing ? "write" : "read"} of '${prefix}'`,
+          // A rule that denies a WRITE is a hazard class: the location is one
+          // the operator has singled out. The same rule on a READ is a scope
+          // question, and the agent can be redirected in-root.
+          writing ? "HARD_DENY" : "SOFT_REFUSE");
         }
         continue;
       }
@@ -528,10 +601,11 @@ export class ConfiguredPolicy implements PolicyEngine {
       const matched = this.matchRule(normalizeForMatch(relative), writing);
       if (matched === undefined) {
         // Default deny, exactly as the legacy engine's unmatched branch did.
-        return `${where}: no matching file rule for '${relative}' (default deny)`;
+        return this.deny(`${where}: no matching file rule for '${relative}' (default deny)`, "SOFT_REFUSE");
       }
       if (matched.verdict === "deny") {
-        return `${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'`;
+        return this.deny(`${where}: path rule '${matched.pattern}' denies ${writing ? "write" : "read"} of '${relative}'`,
+          writing ? "HARD_DENY" : "SOFT_REFUSE");
       }
     }
     return undefined;
@@ -588,7 +662,8 @@ export class ConfiguredPolicy implements PolicyEngine {
       for (const candidate of commandTokens(text)) {
         if (exempt.has(candidate)) continue;
         if (wanted.has(candidate.toLowerCase())) {
-          return `${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`;
+          return this.deny(`${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`,
+            "HARD_DENY");
         }
       }
     }
@@ -606,7 +681,7 @@ export class ConfiguredPolicy implements PolicyEngine {
       const needle = pattern.toLowerCase();
       for (const text of texts) {
         if (text.toLowerCase().includes(needle)) {
-          return `${where}: ${label}: '${pattern}'`;
+          return this.deny(`${where}: ${label}: '${pattern}'`, "HARD_DENY");
         }
       }
     }

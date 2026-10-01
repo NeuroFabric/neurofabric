@@ -26,15 +26,40 @@ export function callSignature(request: PolicyRequest): string {
 }
 
 /**
+ * How deep the normalizer descends before it stops.
+ *
+ * RULING 3 (2026-10-01) added a reason for this bound to exist. Counting a
+ * REFUSED call means hashing a call the policy has just rejected — and one of
+ * the reasons a call is rejected is that its payload is nested far too deep for
+ * the scanners to walk (`bounded-scan-truncation.test.ts`, D-027). Hashing that
+ * payload recursed to a stack overflow and took the process down, which is the
+ * exact failure a bounded scanner exists to prevent: the guard was fine and the
+ * bookkeeping beside it was not.
+ *
+ * The bound is deliberately generous — deeper than any payload the scanners
+ * will walk — so every real call is still identified exactly. Past the bound the
+ * walk stops and records a marker, which means an over-deep call still lands in
+ * ONE repeatable bucket instead of being uncountable. That is the property that
+ * matters for the refusal loop this count exists to expose: five identical
+ * refusals must still look like five.
+ */
+const MAX_SIGNATURE_DEPTH = 64;
+
+/**
  * Deterministic JSON with sorted object keys, so structural equality decides
  * string equality. Arrays keep their order, because `[a, b]` and `[b, a]` are
  * different calls.
  */
 export function stableStringify(value: unknown): string {
+  return render(value, 0);
+}
+
+function render(value: unknown, depth: number): string {
+  if (depth > MAX_SIGNATURE_DEPTH) return '"<depth-exceeded>"';
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map((item) => render(item, depth + 1)).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
+    .map(([key, item]) => `${JSON.stringify(key)}:${render(item, depth + 1)}`);
   return `{${entries.join(",")}}`;
 }

@@ -32,7 +32,7 @@ import {
   type ToolResult,
   type ValidationResult,
 } from "../core/index.ts";
-import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type FailureCategory, type RecoveryLimits, type RecoveryReason, type RecoveryStrategy } from "../core/index.ts";
+import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type DenialTier, type FailureCategory, type RecoveryLimits, type RecoveryReason, type RecoveryStrategy } from "../core/index.ts";
 import { callSignature } from "../core/call-signature.ts";
 import { commandNameFrom, exitStatusFrom } from "../core/benign-exit.ts";
 import { vaultToolDescriptors, vaultToolsEnabled, type VaultWiring } from "./vault-tools.ts";
@@ -200,6 +200,14 @@ export interface FailureReport {
   denialReason?: string;
   /** The `onViolation` the policy put on the decision, when it carried one. */
   violation?: "block" | "abort";
+  /**
+   * RULING 1: which kind of refusal this was. Absent means SOFT — see the type.
+   *
+   * Carried here so a caller reporting the refusal outward can say whether the
+   * task survived it or was ended by it, which is the one fact a trace reader
+   * cannot infer from the words of the reason.
+   */
+  tier?: DenialTier;
 }
 
 /**
@@ -1258,7 +1266,7 @@ export class KernelAdapter {
   // EXECUTION END  (Pi `tool_execution_end` — observation and validation)
   // ---------------------------------------------------------------------------
 
-  async observeToolResult(result: ToolResult, error?: unknown, options?: { violation?: "block" | "abort" }): Promise<ValidationResult> {
+  async observeToolResult(result: ToolResult, error?: unknown, options?: { violation?: "block" | "abort"; tier?: DenialTier }): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active tool step");
     const taskId = this.task.taskId;
     const executionId = result.execution.executionId;
@@ -1473,6 +1481,7 @@ export class KernelAdapter {
         // result. Without it recovery cannot tell a survivable refusal from a
         // terminating one and terminates on both.
         violation: options?.violation,
+        tier: options?.tier,
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
@@ -1486,6 +1495,7 @@ export class KernelAdapter {
         reason: decision.reason,
         denialReason,
         violation: options?.violation,
+        tier: options?.tier,
       };
             // §2.3: a refusal is an answer, not a spend. CONTINUE books nothing --
       // not retry, not replan, and not recovery depth. Charging depth for a
@@ -1652,6 +1662,16 @@ export class KernelAdapter {
      * behaviour until it supplies the field deliberately.
      */
     violation?: "block" | "abort",
+    /**
+     * RULING 1, eighth parameter: WHICH KIND of refusal produced this result.
+     *
+     * Threaded to recovery, which is the single place the task's fate is
+     * decided: `HARD_DENY` TERMINATEs and `SOFT_REFUSE` continues. Optional and
+     * fail-safe in the same direction as every other added argument here —
+     * absent means SOFT, so a caller that does not supply it keeps exactly the
+     * D1-reversal behaviour and cannot accidentally end a task.
+     */
+    tier?: DenialTier,
   ): Promise<ValidationResult> {
     if (!this.task) throw new Error("No active task");
     const bound = this.activeExecutions.get(toolCallId);
@@ -1773,7 +1793,7 @@ export class KernelAdapter {
           ? new CoreError("POLICY_DENIED", actualDenialReason!, { retryable: false, taskId, stepId, executionId: toolCallId })
           : new CoreError("TOOL_ERROR", `Tool ${toolName} failed`, { retryable, taskId, stepId, executionId: toolCallId, exitStatus, commandName })
         : undefined,
-      { violation },
+      { violation, tier },
     );
   }
 

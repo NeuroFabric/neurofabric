@@ -43,3 +43,17 @@ coverage/
 .session-archive/
 OmniRoute/
 .pi-tools/
+
+# Spent probe/epitaph files. These were kept because the deletion guard refused
+# their removal, and docs/POLICY_PORT.md is explicit that the correct response to
+# a refused deletion is to leave the file, not work around the guard. They are
+# kept as history and are deliberately NOT part of the test run: a dot-prefixed
+# `*.test.ts` under platform/pi is inert to the runner's glob, and leaving them
+# tracked would put a dead test-shaped file in the suite's blast radius.
+platform/pi/.c1-probe.test.ts
+platform/pi/.s8-probe.test.ts
+
+# Verification scratch. `*.tmp` does not match these: the suffix is `-patch.txt`
+# on a dot-prefixed basename, which is exactly the shape the old rule missed.
+verification/.tmp-*.txt
+verification/.tmp-*

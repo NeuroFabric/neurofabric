@@ -7,6 +7,7 @@ import { toolDescriptorFromPi } from "../../platform/pi/tool-adapter.ts";
 import { buildPolicy, loadProjectPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../../platform/pi/project-config.ts";
 import { WorkspaceBoundary } from "../../platform/core/workspace.ts";
 import { createRedactingSink, redactPreview } from "../../platform/core/redaction.ts";
+import type { DenialTier } from "../../platform/core/types.ts";
 
 type TraceEntry = {
   type: string;
@@ -48,7 +49,7 @@ function record(type: string, details?: Record<string, unknown>): void {
 // recovery an UNLABELLED denial. That is the FORWARD VIOLATION found
 // 2026-10-01 — one missing argument here, which made the committed
 // `onViolation: block` unreachosable from the result path.
-const pendingDenials = new Map<string, { reason: string; violation?: "block" | "abort" }>();
+const pendingDenials = new Map<string, { reason: string; violation?: "block" | "abort"; tier?: DenialTier }>();
 
 
 export default function platformOrchestrator(pi: ExtensionAPI): void {
@@ -140,6 +141,9 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
       // nothing was evaluated, so no rule was broken. The two must never be
       // conflated, and there is deliberately no `?? "block"` fallback.
       violation: decision.decision.decision === "DENY" ? decision.decision.violation : undefined,
+      // RULING 1: the tier, recorded at the deny site so the trace says which
+      // kind of refusal this was without anyone having to infer it later.
+      tier: decision.decision.decision === "DENY" ? decision.decision.tier : undefined,
       refusal: decision.decision.decision === "DENY" ? decision.decision.refusal : undefined,
       declaredOutputs: declared.length,
       taskStatus: kernel.currentTask.status,
@@ -156,6 +160,12 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
       pendingDenials.set(event.toolCallId, {
         reason: decision.decision.reason,
         violation: decision.decision.decision === "DENY" ? decision.decision.violation : undefined,
+        // RULING 1: the tier is known ONLY here, at the preflight, for the same
+        // reason the reason and the label are: by `tool_execution_end` the
+        // decision object is gone. It travels in the same map so all three
+        // arrive together, and a denial that carried two of them is never
+        // delivered with the third missing.
+        tier: decision.decision.decision === "DENY" ? decision.decision.tier : undefined,
       });
       return { block: true, reason: decision.decision.reason };
     }
@@ -209,7 +219,7 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     // ordinary failure its own retry path precisely because that flag cannot be
     // supplied. A caller that DOES know the answer supplies it and gets
     // `TRANSIENT` on top.
-    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denial?.reason, denial?.violation);
+    await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denial?.reason, denial?.violation, denial?.tier);
     // D4B R5. Pi reports an OUTCOME (`isError`) and an opaque payload. Which
     // class the failure was, whether a rule refused it, and what recovery did
     // are reconstructed inside the kernel, and until this line they stayed
@@ -236,6 +246,9 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
       recoveryStrategy: failure?.strategy,
       recoveryReason: failure?.reason,
       denialReason: failure?.denialReason,
+      // RULING 1: the tier is what makes a refusal legible in a log - "refused"
+      // and "run ended" are the same words with opposite meanings.
+      denialTier: failure?.tier,
     });
   });
 

@@ -544,7 +544,7 @@ test("7. the committed project policy file is valid and loadable", async () => {
 
   assert.ok(config, ".pi/neurofebric-policy.json must exist and parse");
   assert.equal(config!.version, 1);
-  assert.equal(config!.limits.maxToolCallsPerTask, 120, "the operator-raised harness budget");
+  assert.equal(config!.limits.maxToolCallsPerTask, 200, "the operator-raised harness budget");
   assert.equal(config!.limits.maxFileWritesPerTask, 30);
   assert.equal(config!.limits.maxBytesPerWrite, 2_000_000);
   assert.deepEqual(config!.destructiveCommandPatterns, ["rm -rf", "format c:"]);
