@@ -115,6 +115,33 @@ const PATTERN_COMMAND_HEADS: ReadonlySet<string> = new Set(["grep", "egrep", "fg
 /** `sh`/`bash` become nested command lines through `-c`. */
 const PAYLOAD_WRAPPERS: ReadonlySet<string> = new Set(["sh", "bash"]);
 
+/**
+ * Commands that EXECUTE their payload, across shell families.
+ *
+ * R7. Distinct from `PAYLOAD_WRAPPERS`, which is the two wrappers this module
+ * already recursed through structurally. This set is what an UNMEASURED wrapper
+ * delegates to, and delegating to one of these means the payload is not inert
+ * text: something will run it.
+ */
+const SHELL_EXECUTING: ReadonlySet<string> = new Set([
+  "sh", "bash", "dash", "zsh", "ksh", "ash", "busybox",
+  "cmd", "powershell", "pwsh",
+]);
+
+/**
+ * The flags each family takes its payload after. Matched case-sensitively for
+ * `-Command`, because PowerShell accepts both spellings and they are not the
+ * same token on a case-insensitive filesystem.
+ *
+ * Combined forms (`sh -lc "..."`) are NOT read: `-lc` is neither flag, so its
+ * payload is not recognised and the token inside it is not seen as command
+ * position. That is a gap, recorded here rather than left to be discovered, and
+ * it fails toward SOFT rather than toward HARD.
+ */
+const SHELL_PAYLOAD_FLAGS: ReadonlySet<string> = new Set([
+  "-c", "/c", "-command", "-Command",
+]);
+
 /** The `find` options whose body is a nested command line. */
 const FIND_EXEC_OPTIONS: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok"]);
 
@@ -427,6 +454,19 @@ function parseTokens(
     // include its commit message, and claiming those would undo tiering.
     const delegated = delegatedOperand(tokens, index + 1);
     if (delegated !== undefined) delegatedTokens.add(delegated);
+    // R7: delegating to a shell-executing command means the payload behind it
+    // will RUN, so it is command position and has to be parsed as one. Without
+    // this the token inside `sudo sh -c "..."` is reached by no rule at all --
+    // not by delegation (which names the shell) and not by the parse (which
+    // stopped here).
+    if (delegated !== undefined && SHELL_EXECUTING.has(delegated)) {
+      const flagIndex = tokens.findIndex(
+        (t, i) => i > index && SHELL_PAYLOAD_FLAGS.has(t),
+      );
+      if (flagIndex !== -1 && tokens[flagIndex + 1] !== undefined) {
+        parseCommandLine(tokens[flagIndex + 1], depth + 1, patternTokens, commandTokens, delegatedTokens);
+      }
+    }
     return { classified: false, reason: `'${command}' is not a measured command or wrapper`, commandTokens };
   }
   return { patternTokens, commandTokens, classified: true };

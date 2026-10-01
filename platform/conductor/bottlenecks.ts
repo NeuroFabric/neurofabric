@@ -133,7 +133,7 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
 
   let errorRows = 0;
 
-  csv.sample.forEach((row, index) => {
+  csv.rows.forEach((row, index) => {
     // +2: sample rows start after the header, and the row numbers a reader sees
     // are file line numbers. Getting this wrong would cite the wrong evidence.
     const rowNumber = index + 2;
@@ -168,7 +168,11 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     }
   });
 
-  const total = csv.sample.length;
+  // `rows`, NEVER `sample`. The sample is capped for charting; analysing it
+  // would report a confident answer about a fraction of the export, with
+  // nothing on the page to say so. A real 101-row export was half-analysed this
+  // way before a red test caught it.
+  const total = csv.rows.length;
   return {
     totalRows: total,
     errorRows,
