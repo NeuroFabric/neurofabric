@@ -59,3 +59,7 @@ verification/.tmp-*.txt
 verification/.tmp-*
 
 data/
+
+# The wedge launcher workspace: the owner drops CSVs in here and reports are
+# written beside them. Their files, not ours, so never a commit.
+ui-workspace/
