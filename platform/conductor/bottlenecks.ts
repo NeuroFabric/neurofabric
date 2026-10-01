@@ -128,7 +128,8 @@ export interface BottleneckAnalysis {
   /** Roles with no credible column. The report must say so, not degrade. */
   readonly missing: readonly string[];
   /** Where the role mapping came from. Absent when everything was inferred. */
-  readonly schemaSource?: "SESSION_ARCHIVE" | "DEFAULT";
+  /** "GENERIC" means inferred from values, never checked by a person. */
+  readonly schemaSource?: "SESSION_ARCHIVE" | "DEFAULT" | "GENERIC";
   /** Roles whose column came from a stored schema rather than from name inference. */
   readonly verifiedRoles?: readonly string[];
   /** Which column supplied the category ranking. */
@@ -256,12 +257,24 @@ function resolveMappings(csv: CsvReadResult, schema?: ResolvedSchema): {
     // A column that came from a stored schema is VERIFIED: someone checked it
     // against a real export of this shape. Everything else is still a
     // hypothesis, and is still printed as one.
-    const fromStore = pick === stored && stored !== undefined;
+    //
+    // "CAME FROM A STORE" IS NOT THE SAME AS "WAS VERIFIED", AND THE GENERIC
+    // PROFILER IS WHY. It fills `roles` too, so a naive equality test would mark
+    // a regex's guess over column values as ESTABLISHED -- giving the report a
+    // green badge that a person never earned. Inference from values is better
+    // informed than inference from a name, but it is still inference, so it is
+    // still printed as a hypothesis.
+    const fromStore = pick === stored && stored !== undefined && schema?.source !== "GENERIC";
     if (fromStore) verified.push(role);
     const hypothesis = !fromStore;
     const note = fromStore
       ? `verified schema "${schema?.id}"`
-      : role === "duration"
+      : schema?.source === "GENERIC"
+        // The note must describe HOW this was guessed, because "inferred from
+        // name" is now only half true and an inaccurate note about evidence is
+        // worse than no note.
+        ? `inferred from name and a profile of ${distinct} sampled value(s)`
+        : role === "duration"
         // R10 superseded the old wording on this branch. It used to say the unit
         // was not stated in the export, which was true of the file and false of
         // the decision: the owner has ruled the elapsed column to be

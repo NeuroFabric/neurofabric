@@ -239,6 +239,14 @@ function markdownDivergenceBanner(a: BottleneckAnalysis): string {
  */
 function provenanceNote(a: BottleneckAnalysis): string {
   const verifiedCount = a.verifiedRoles?.length ?? 0;
+  if (a.schemaSource === "GENERIC") {
+    // The honest sentence for an inferred profile. "Inferred from the column
+    // NAME alone" would be wrong the moment a profiler has read the values, and
+    // a report that mislabels its own evidence is worse than one that admits
+    // what it does not know -- but the reverse mistake is just as bad, letting
+    // an inference from a regex pass as a checked mapping.
+    return `<p class="none">No stored schema matched this file, so every column reading below was <strong>inferred</strong> from the column names and from a statistical profile of the values themselves. None of it has been checked by a person: treat it as a first reading, not a verified mapping.</p>`;
+  }
   if (verifiedCount === 0) {
     return `<p class="none">No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>`;
   }
@@ -332,7 +340,9 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
   if (analysis.mappings.length > 0 || analysis.missing.length > 0) {
     const verifiedCount = analysis.verifiedRoles?.length ?? 0;
     out.push("## How this report was read", "");
-    out.push(verifiedCount === 0
+    out.push(analysis.schemaSource === "GENERIC"
+      ? "_No stored schema matched this file, so every column reading below was **inferred** from the column names and from a statistical profile of the values. None of it has been checked by a person: treat it as a first reading, not a verified mapping._"
+      : verifiedCount === 0
       ? "_No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation._"
       : `_${verifiedCount} of ${analysis.mappings.length} column reading(s) come from ${analysis.schemaSource === "SESSION_ARCHIVE" ? "this checkout's own learned schema" : "a core schema shipped with the product"}, verified against a real export of this shape._`);
     out.push("");
@@ -410,7 +420,7 @@ export async function renderBottleneckReport(input: {
   format?: "html" | "markdown";
 }): Promise<{ path: string; bytes: number; rendered: boolean; problems: readonly string[]; markdown?: string }> {
   const schema = input.schema ?? (input.workspaceCwd === undefined ? undefined : await resolveSchemaMemory({
-    cwd: input.workspaceCwd, headers: input.csv.headers, defaultsRoot: input.defaultsRoot,
+    cwd: input.workspaceCwd, headers: input.csv.headers, rows: input.csv.rows, defaultsRoot: input.defaultsRoot,
   }));
   const analysis = analyseBottlenecks(input.csv, schema);
   const title = String(input.title ?? "Bottleneck report");
