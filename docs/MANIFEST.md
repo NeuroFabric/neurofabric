@@ -62,20 +62,24 @@ give. `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4` — th
 invariant is pinned, and `C1.3` guards the terminal replay so the closure
 cannot later be satisfied by deleting the attribution.
 
-**Operator blockers, restated:** push pending; **restart pending (blocks C2)**;
-item-1 MR merge outstanding; the Docker gate run on Track B item 1 outstanding.
-Roadmap §"Operator blockers" is the table of record.
+**Operator blockers, restated:** **restart pending (blocks C2)**; the Docker
+gate run on Track B item 1 outstanding. Push and the item-1 MR merge are both
+cleared as of 2026-10-01. Roadmap §"Operator blockers" is the table of record.
 
-**One leftover for the operator to delete.**
-`platform/pi/.c1-probe.test.ts` — an untracked, throwaway probe from earlier in
-this session, carrying its own header ("TEMPORARY PROBE. Not a pin. Deleted
-after the C1 read"). It is inert: dot-prefixed, so the suite glob
-`platform/pi/*.test.ts` does not match it (measured: 0 occurrences of its text
-in the suite output), and it is untracked so it is in no commit and no MR. It
-could not be removed from here because the deletion guard denied the operation
-and routing around that guard is precisely what it exists to prevent. **It needs
-one operator delete.** Its findings are recorded in F006 §5 item 7 and pinned in
-`platform/pi/c1-replanning-stored-failure.test.ts`, so nothing depends on it.
+**Two leftovers for the operator to delete.** Both are untracked, dot-prefixed
+scratch, so the suite glob `platform/pi/*.test.ts` matches neither and neither is
+in any commit or MR. Neither could be removed from here because the deletion
+guard denied the operation, and routing around that guard is precisely what it
+exists to prevent.
+
+- `platform/pi/.c1-probe.test.ts` — a throwaway probe. Its header now reads
+  **"SPENT PROBE — kept rather than deleted, on purpose"**; the earlier quote in
+  this manifest ("TEMPORARY PROBE. Not a pin. Deleted after the C1 read") was
+  stale and is corrected here. Its findings are pinned in
+  `platform/pi/c1-replanning-stored-failure.test.ts`.
+- `platform/pi/.s8-probe.test.ts` — a scratch probe used to measure the item 8
+  sibling path directly. Its findings are pinned in
+  `platform/pi/f006-sibling-refusal-kill.test.ts`.
 
 ## §2.4(a) RE-FILED — the old mechanism was wrong, measured
 

@@ -8,11 +8,18 @@ and the operator rulings of 2026-10-01.
 Branch `fix/f006-policy-deny-not-fatal` is merged into `origin/main` at `fca77fc`
 (merge commit `066b2b4`, `gate recovery depth on non-CONTINUE strategies`).
 
+Work since then, 2026-10-01, on `fix/f006-post-reversal-ledger` (on origin at
+`54074db`) and `docker-ui-scaffold` (on origin at `6098e8e`). Suite measured on
+`fix/f006-post-reversal-ledger`:
+
 | Suite | Result |
 |---|---|
-| `platform/pi` | 336 pass / 0 fail |
+| `platform/pi` | 347 pass / 0 fail |
 | `platform/core` | 189 pass / 0 fail / 2 skipped |
 | `platform/*.test.mjs` | 22 pass / 0 fail |
+| typecheck (`tsc --noEmit`) | clean |
+
+The 2 skips are pre-existing Windows vault permission-bit cases, not new.
 
 ## Operator blockers — restated at every status report
 
@@ -20,10 +27,10 @@ None of these are agent-resolvable. Each one is a person pressing a key.
 
 | # | Blocker | What it holds |
 |---|---|---|
-| 1 | **Push pending** | Branch `fix/f006-post-reversal-ledger` is local only. Nothing on it is visible to CI or to the MR. |
-| 2 | **Restart pending — now blocking C2** | The operator's restart confirmation does not exist in `docs/MANIFEST.md`. Until it does, C2 cannot start and the merge stays un-ratified. |
-| 3 | **Item-1 MR merge** | Awaiting operator merge. A merge in the tree is not a ratified checklist item. |
-| 4 | **Docker gate run on B1** | The container suite gate is `UNVERIFIED` — Docker is not installed in the authoring environment. It must be run by the operator, and no UI work starts before it is green. |
+| 1 | ~~Push pending~~ — **CLEARED 2026-10-01** | `fix/f006-post-reversal-ledger` and `docker-ui-scaffold` are both on origin. Blocker 5 is closed and the MRs can be opened. |
+| 2 | **Restart pending — still blocks C2** | The operator's restart confirmation does not exist in `docs/MANIFEST.md`. Until it does, C2 cannot start and the merge stays un-ratified. |
+| 3 | ~~Item-1 MR merge~~ — **CLEARED 2026-10-01** | Merged. Operator ruling 3. The stale "awaiting merge" rows have been corrected throughout. |
+| 4 | **Docker gate run on B1** | `UNVERIFIED`, unchanged. The B1 defect that would have made this run fail is fixed (`6098e8e`), but fixing it is not running it. Docker is not installed here. Executor: OPERATOR. |
 
 ## Operator rulings, 2026-10-01
 
@@ -64,6 +71,17 @@ unfixed) and item 9 (the `REPLANNING` refusal text tells a live task it
 terminated). Neither is a reason to reopen the question above.
 
 ## P1 — caller-boundary fix: a refusal is indistinguishable from a tool fault
+
+**STILL DEFERRED, and the gate that was to promote it did not open. Measured
+2026-10-01 — see F006 §5 item 10.** The promotion rested on the premise that the
+2026-10-01 session death was caused by two deletion-guard denials collapsing to
+`TOOL_FAILURE` here. Measured against the transcript: **it was not.** All three
+denials in that session were classified `POLICY_DENIED`, answered
+`CONTINUE`/`POLICY_SOFT_REFUSED`, and left every counter at zero. The collapse is
+real and is exactly where this section says it is; it simply did not kill
+anything, because recovery reads the `CoreError` rather than the returned
+`ValidationResult`. **P1 is a genuine latent boundary defect and is not urgent.**
+It should be taken as its own review cycle on its own merits.
 
 Measured on `fca77fc`. `recordToolResult` returns to its caller:
 
@@ -185,13 +203,14 @@ design; these interfaces are scaffolding, not a contract.
 |---|---|---|
 | 1 | This roadmap | done |
 | 2 | Stale comment, `kernel-adapter.ts:1620-1623` | done (`d25ee8e`) |
-| 3 | Documenting pin D1.1c | **blocked — awaiting operator paste** |
-| 4 | Ledger reversal entry | pending, diff first |
-| 5 | Caller-boundary fix (validator threading) | deferred — own review cycle |
+| 3 | Documenting pin D1.1c | **done** — landed at `a69be20`, green by design |
+| 4 | Ledger reversal entry | **done** — landed at `927fdb1e` |
+| 5 | Caller-boundary fix (validator threading) | **still deferred.** Promotion gate **failed** on measurement — F006 §5 item 10. Real defect, confirmed latent, no longer justified by a death it did not cause. |
 | C1 | Echoed refusal: `REPLANNING` stored-failure replay | **CLOSED** — unreachable by construction; green pin `C1.1`–`C1.4` |
-| 8 | Sibling refusal fails the task, reason names no rule | **FILED** — F006 §5 item 8, measured, live, unfixed |
-| 9 | `REPLANNING` refusal text claims the task terminated | **FILED** — F006 §5 item 9, wording, unfixed |
-| B1 | Dockerfile + compose, green baseline | authored, **`UNVERIFIED`** — operator's Docker run |
+| 8 | Sibling refusal fails the task, reason names no rule | **FIXED 2026-10-01** — `54074db`. Red-first: `platform/pi/f006-sibling-refusal-kill.test.ts` (`S8.1`–`S8.3`). `BRIDGE.C2` inverted — it had been asserting the defect as a precondition. |
+| 9 | `REPLANNING` refusal text claims the task terminated | **FILED** — F006 §5 item 9, wording, still deferred (public string) |
+| 10 | The 2026-10-01 death: premise refuted, and an artifact race filed | **FILED** — F006 §5 item 10. New sub-defect: the harness marked its own just-written file `INVALID` (transcript line 711). Single sample, cause not isolated. **This is the one worth chasing.** |
+| B1 | Dockerfile + compose, green baseline | authored; **COPY defect FIXED** at `6098e8e` (`.pi`, `skills`, `reports` were missing and the suite reads all three). Gate still **`UNVERIFIED`** — operator's Docker run. |
 | B2 | Frontend shell, mock data | pending B1 |
 | B3 | Typed wire points for State + Observability | pending B2 |
 
