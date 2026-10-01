@@ -1359,7 +1359,12 @@ export class KernelAdapter {
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
-      this.recoveryDepth += 1;
+            // §2.3: a refusal is an answer, not a spend. CONTINUE books nothing --
+      // not retry, not replan, and not recovery depth. Charging depth for a
+      // refusal would let repeated denials starve the task without it ever
+      // spending a budget of its own. Every other strategy still pays the
+      // depth it always paid.
+      if (strategy !== "CONTINUE") this.recoveryDepth += 1;
       await this.events.emit(event("RECOVERY_STARTED", this.task.taskId, {
         strategy,
         reason: decision.reason,
