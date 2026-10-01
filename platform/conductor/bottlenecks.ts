@@ -30,6 +30,42 @@ export interface Bottleneck {
   readonly rows: readonly number[];
 }
 
+/**
+ * A column read for a role, and how much of that reading is a guess.
+ *
+ * R9: column NAMES are evidence. They are not proof, and this carries the
+ * difference explicitly so the report can print it rather than the reader having
+ * to guess which numbers were inferred.
+ *
+ * `hypothesis: true` means the name was the only thing that decided it. The
+ * elapse column of a Pega export is named for a duration and holds a duration,
+ * but states no unit anywhere, so the reading is sound and the UNIT is not.
+ */
+export interface ColumnMapping {
+  readonly role: string;
+  readonly column: string;
+  readonly hypothesis: boolean;
+  readonly note: string;
+}
+
+/** A column that was available but carries no ranking information. */
+export interface DegenerateColumn {
+  readonly column: string;
+  readonly distinctValues: number;
+  readonly note: string;
+}
+
+/** A ranked alert category, with the elapsed time it cost. */
+export interface CategoryStat {
+  readonly key: string;
+  readonly count: number;
+  /** Sum of the duration column, or null when there is no credible one. */
+  readonly totalElapsed: number | null;
+  /** Rows over the threshold. Zero when there is no threshold column. */
+  readonly breachCount: number;
+  readonly rows: readonly number[];
+}
+
 export interface LatencyBand {
   readonly label: string;
   readonly count: number;
@@ -51,9 +87,107 @@ export interface BottleneckAnalysis {
   readonly unreadableTimestamps: readonly number[];
   /** Structural problems carried through from the reader. Never exceptions. */
   readonly problems: readonly string[];
+  /** Every column read for a role, and whether that reading was a hypothesis. */
+  readonly mappings: readonly ColumnMapping[];
+  /** Columns that exist but carry no ranking information. */
+  readonly degenerateColumns: readonly DegenerateColumn[];
+  /** Roles with no credible column. The report must say so, not degrade. */
+  readonly missing: readonly string[];
+  /** Which column supplied the category ranking. */
+  readonly categoryColumn: string | null;
+  /** Categories by frequency, and by total elapsed -- which are not the same order. */
+  readonly categories: readonly CategoryStat[];
+  readonly categoriesByElapsed: readonly CategoryStat[];
+  /**
+   * True when the time column carries no zone, so the instants are host-relative.
+   *
+   * This is not pedantry. Bucketing a naive timestamp under a heading that says
+   * UTC is only true on a host whose zone IS UTC. On a half-hour-offset host
+   * every bucket is silently shifted by thirty minutes, and the report looks
+   * entirely normal while being wrong.
+   */
+  readonly timestampsAreNaive: boolean;
 }
 
 const ERROR_STATUSES = new Set(["4", "5"]);
+
+/**
+ * R9: CANDIDATE COLUMNS PER ROLE, most specific first.
+ *
+ * Every entry is a name that DESCRIBES the role. None of it is proof, which is
+ * why each candidate is reported as a hypothesis and why the category role is
+ * additionally checked for cardinality below.
+ */
+const ROLE_CANDIDATES: Record<string, readonly string[]> = {
+  time: ["_time", "timestamp", "time"],
+  source: ["source", "source_host", "sourcetype", "host", "host_name"],
+  // Most specific first: a code discriminates better than a type.
+  category: ["alert_code", "alertcode", "alert_type", "alertType", "category", "event_type", "type"],
+  message: ["_raw", "message", "msg", "description", "details"],
+  status: ["status", "code", "http_status"],
+  duration: ["elapsed_time", "elapsed_ms", "duration_ms", "duration", "elapsed"],
+  threshold: ["threshold", "limit", "threshold_ms"],
+};
+
+/**
+ * Resolve roles from column NAMES, then REJECT a degenerate category.
+ *
+ * The rejection is the whole point of this function. alertType is named exactly
+ * like a category column and holds ONE distinct value across the entire export,
+ * so ranking by it yields one bucket containing everything: a table that looks
+ * like an answer and is not one. A name describes intent; it says nothing about
+ * cardinality, and the reader would have learned the hard way that the two
+ * diverge.
+ *
+ * So a candidate with a single distinct value is demoted -- reported, never used.
+ */
+function resolveMappings(csv: CsvReadResult): {
+  mappings: ColumnMapping[];
+  degenerate: DegenerateColumn[];
+  chosen: Record<string, string | undefined>;
+} {
+  const mappings: ColumnMapping[] = [];
+  const degenerate: DegenerateColumn[] = [];
+  const chosen: Record<string, string | undefined> = {};
+  const used = new Set<string>();
+
+  const distinctOf = (column: string): number => {
+    const values = new Set<string>();
+    for (const row of csv.rows) values.add(String(row[column] ?? ""));
+    return values.size;
+  };
+
+  for (const [role, candidates] of Object.entries(ROLE_CANDIDATES)) {
+    const present = candidates.filter((c) => csv.headers.includes(c));
+    // EVERY present candidate is checked for degeneracy, not only the ones
+    // reached before a choice is made. Checking lazily would report a
+    // single-valued column as healthy simply because a better candidate was
+    // found first, which hides exactly the trap this exists to catch.
+    const usable = present.filter((c) => {
+      const distinct = distinctOf(c);
+      if (role === "category" && distinct <= 1) {
+        degenerate.push({
+          column: c,
+          distinctValues: distinct,
+          note: "single distinct value; cannot rank",
+        });
+        return false;
+      }
+      return true;
+    });
+    const pick = usable.find((c) => !used.has(c)) ?? usable[0];
+    if (pick === undefined) { chosen[role] = undefined; continue; }
+    chosen[role] = pick;
+    used.add(pick);
+    const distinct = distinctOf(pick);
+    const hypothesis = true;
+    const note = role === "duration"
+      ? "unit not stated in export"
+      : `inferred from name; ${distinct} distinct`;
+    mappings.push({ role, column: pick, hypothesis, note });
+  }
+  return { mappings, degenerate, chosen };
+}
 
 /**
  * The signature of a failure: the leading status word and the first clause of
@@ -112,13 +246,15 @@ function bucket(map: Map<string, { error: number; rows: number[] }>, key: string
 
 /** Turn a parsed CSV into the ranked bottleneck view. Never throws. */
 export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
-  const column = (...names: string[]) => names.find((n) => csv.headers.includes(n));
+  const { mappings, degenerate, chosen } = resolveMappings(csv);
 
-  const timeCol = column("_time", "timestamp", "time");
-  const sourceCol = column("source", "sourcetype", "host");
-  const statusCol = column("status", "code", "http_status");
-  const rawCol = column("_raw", "message", "msg");
-  const latencyCol = column("duration_ms", "duration", "elapsed_ms");
+  const timeCol = chosen.time;
+  const sourceCol = chosen.source;
+  const statusCol = chosen.status;
+  const rawCol = chosen.message;
+  const latencyCol = chosen.duration;
+  const categoryCol = chosen.category;
+  const thresholdCol = chosen.threshold;
 
   const sources = new Map<string, { error: number; rows: number[] }>();
   const signatures = new Map<string, { error: number; rows: number[] }>();
@@ -132,6 +268,16 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
   ];
 
   let errorRows = 0;
+
+  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[] }>();
+
+  let naiveTimestamps = 0;
+  let timestampRows = 0;
+  const NAIVE_TIME = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
+  // A zone suffix makes the instant unambiguous. Without this check the shape
+  // regex matches the PREFIX of a Z-suffixed timestamp and reports a UTC instant
+  // as host-relative, which is the opposite error and just as misleading.
+  const HAS_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
   csv.rows.forEach((row, index) => {
     // +2: sample rows start after the header, and the row numbers a reader sees
@@ -149,7 +295,10 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     }
 
     if (timeCol !== undefined) {
-      const instant = parseInstant(String(row[timeCol] ?? ""));
+      const raw = String(row[timeCol] ?? "");
+      timestampRows += 1;
+      if (NAIVE_TIME.test(raw.trim()) && !HAS_ZONE.test(raw.trim())) naiveTimestamps += 1;
+      const instant = parseInstant(raw);
       if (instant === undefined) {
         unreadable.push(rowNumber);
       } else {
@@ -166,12 +315,47 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
         }
       }
     }
+
+    // Categories: counted by frequency, and independently accumulated by elapsed
+    // time, because the two orderings routinely disagree and the owner's
+    // question asks for both.
+    if (categoryCol !== undefined) {
+      const key = String(row[categoryCol] ?? "(none)");
+      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [] };
+      const rawDuration = latencyCol === undefined ? Number.NaN : Number(String(row[latencyCol] ?? ""));
+      if (entry.elapsed !== null && Number.isFinite(rawDuration)) entry.elapsed += rawDuration;
+      if (thresholdCol !== undefined && Number.isFinite(rawDuration)
+        && Number(String(row[thresholdCol] ?? Number.NaN)) < rawDuration) {
+        entry.breach += 1;
+      }
+      entry.count += 1;
+      entry.rows.push(rowNumber);
+      categories.set(key, entry);
+    }
   });
 
   // `rows`, NEVER `sample`. The sample is capped for charting; analysing it
   // would report a confident answer about a fraction of the export, with
   // nothing on the page to say so. A real 101-row export was half-analysed this
   // way before a red test caught it.
+  const categoryStats: CategoryStat[] = [...categories.entries()].map(([key, v]) => ({
+    key,
+    count: v.count,
+    totalElapsed: v.elapsed,
+    breachCount: v.breach,
+    rows: [...v.rows].sort((a, b) => a - b),
+  }));
+  const byFrequency = [...categoryStats].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  const byElapsed = [...categoryStats].sort(
+    (a, b) => (b.totalElapsed ?? -1) - (a.totalElapsed ?? -1) || b.count - a.count,
+  );
+
+  // A required role with no credible column is NAMED. An empty table reads as
+  // "nothing recurred", which is the opposite of "this file cannot say".
+  const missing = (["category", "time", "source", "message", "duration"] as const)
+    .filter((role) => chosen[role] === undefined)
+    .map((role) => (role === "message" ? "message" : role));
+
   const total = csv.rows.length;
   return {
     totalRows: total,
@@ -183,5 +367,12 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     latency: bands.filter((b) => b.rows.length > 0).map((b) => ({ label: b.label, count: b.rows.length, rows: b.rows })),
     unreadableTimestamps: unreadable,
     problems: csv.problems,
+    mappings,
+    degenerateColumns: degenerate,
+    missing,
+    categoryColumn: categoryCol ?? null,
+    categories: byFrequency,
+    categoriesByElapsed: byElapsed,
+    timestampsAreNaive: timestampRows > 0 && naiveTimestamps === timestampRows,
   };
 }

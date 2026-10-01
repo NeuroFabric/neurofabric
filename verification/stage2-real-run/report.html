@@ -4,39 +4,164 @@
 <meta charset="utf-8">
 <title>Bottleneck report</title>
 <style>
-  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem; color: #16181d; background: #fff; max-width: 60rem; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem; color: #16181d; background: #fff; max-width: 62rem; }
   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
-  .meta { color: #5b616e; margin: 0 0 1.5rem; }
+  .meta { color: #5b616e; margin: 0 0 1.25rem; }
   h2 { font-size: 1rem; margin: 2rem 0 .5rem; padding-bottom: .25rem; border-bottom: 1px solid #d8dbe2; }
   table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
   th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #eef0f4; vertical-align: top; }
   th { font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .rank { color: #8a909c; width: 2rem; }
+  .rank { color: #8a909c; width: 2.5rem; }
   .cite { color: #5b616e; font-size: .8rem; font-variant-numeric: tabular-nums; }
-  .none { color: #8a909c; }
-  .lead { border-left: 3px solid #16181d; padding: .1rem 0 .1rem .75rem; margin: 0 0 1.5rem; }
+  .none { color: #5b616e; }
+  .lead { border-left: 3px solid #16181d; padding: .35rem 0 .35rem .75rem; margin: 0 0 1.25rem; }
+  .gap { border-left: 3px solid #b23c17; padding: .35rem 0 .35rem .75rem; background: #fdf6f3; }
+  tr.top td { font-weight: 600; }
+  .lead-key { font-weight: 700; }
 </style>
 </head>
 <body>
 <h1>Bottleneck report</h1>
-<p class="meta">100 row(s) &middot; 0 error(s) &middot; overall error rate 0.0%</p>
-
-<h2>Bottlenecks by source</h2>
-<p class="none">Nothing to rank.</p>
-<h2>Recurring error signatures</h2>
-<p class="none">Nothing to rank.</p>
-<h2>Errors by hour</h2>
+<p class="meta">24 row(s) &middot; ranked by <strong>alert_code</strong> &middot; no status column, so no error rate is claimed</p>
+<p class="lead"><strong>#1 by frequency:</strong> PEGA0001 &mdash; 13 alert(s), 13 over threshold, rows 2, 4, 5, 7, 8 (+8 more). <strong>#1 by total elapsed:</strong> PEGA0005 (3,405,355).</p>
+<h2>How this page was read</h2>
+<p class="none">Every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>
 <table>
-  <thead><tr><th>#</th><th>hour (UTC)</th><th>errors</th><th>total</th><th>rate</th><th>evidence</th></tr></thead>
+  <thead><tr><th>role</th><th>column</th><th>basis</th><th>note</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>time</td>
+      <td>_time</td>
+      <td>hypothesis</td>
+      <td class="cite">inferred from name; 24 distinct</td>
+    </tr>
+    <tr>
+      <td>source</td>
+      <td>source_host</td>
+      <td>hypothesis</td>
+      <td class="cite">inferred from name; 4 distinct</td>
+    </tr>
+    <tr>
+      <td>category</td>
+      <td>alert_code</td>
+      <td>hypothesis</td>
+      <td class="cite">inferred from name; 4 distinct</td>
+    </tr>
+    <tr>
+      <td>duration</td>
+      <td>elapsed_time</td>
+      <td>hypothesis</td>
+      <td class="cite">unit not stated in export</td>
+    </tr>
+    <tr>
+      <td>threshold</td>
+      <td>threshold</td>
+      <td>hypothesis</td>
+      <td class="cite">inferred from name; 5 distinct</td>
+    </tr>
+  </tbody>
+</table>
+<h2>Columns deliberately not ranked on</h2>
+<ul class="none">
+    <li><strong>alertType</strong> &mdash; single distinct value; cannot rank (1 distinct value(s)).</li>
+</ul>
+<p class="gap"><strong>This page cannot answer anything requiring:</strong> message. No credible column for it exists in this export, so nothing below is substituted for it.</p>
+<h2>Alert categories by frequency</h2>
+<table>
+  <thead><tr><th>#</th><th>category (by frequency)</th><th>rows</th><th>over threshold</th><th>evidence</th></tr></thead>
+  <tbody>
+    <tr class="top">
+      <td class="rank"><strong>1</strong></td>
+      <td class="lead-key">PEGA0001</td>
+      <td class="num">13</td>
+      
+      <td class="num">13</td>
+      <td class="cite">rows 2, 4, 5, 7, 8 (+8 more)</td>
+    </tr>
+    <tr>
+      <td class="rank">2</td>
+      <td>PEGA0028</td>
+      <td class="num">5</td>
+      
+      <td class="num">5</td>
+      <td class="cite">rows 15, 19, 20, 23, 25</td>
+    </tr>
+    <tr>
+      <td class="rank">3</td>
+      <td>PEGA0005</td>
+      <td class="num">4</td>
+      
+      <td class="num">4</td>
+      <td class="cite">rows 3, 6, 12, 18</td>
+    </tr>
+    <tr>
+      <td class="rank">4</td>
+      <td>PEGA0011</td>
+      <td class="num">2</td>
+      
+      <td class="num">2</td>
+      <td class="cite">rows 10, 17</td>
+    </tr>
+  </tbody>
+</table>
+<h2>Alert categories by total elapsed time</h2>
+<table>
+  <thead><tr><th>#</th><th>category (by total elapsed)</th><th>rows</th><th>total elapsed</th><th>over threshold</th><th>evidence</th></tr></thead>
+  <tbody>
+    <tr class="top">
+      <td class="rank"><strong>1</strong></td>
+      <td class="lead-key">PEGA0005</td>
+      <td class="num">4</td>
+      <td class="num">3,405,355</td>
+      <td class="num">4</td>
+      <td class="cite">rows 3, 6, 12, 18</td>
+    </tr>
+    <tr>
+      <td class="rank">2</td>
+      <td>PEGA0011</td>
+      <td class="num">2</td>
+      <td class="num">22,114</td>
+      <td class="num">2</td>
+      <td class="cite">rows 10, 17</td>
+    </tr>
+    <tr>
+      <td class="rank">3</td>
+      <td>PEGA0001</td>
+      <td class="num">13</td>
+      <td class="num">21,543</td>
+      <td class="num">13</td>
+      <td class="cite">rows 2, 4, 5, 7, 8 (+8 more)</td>
+    </tr>
+    <tr>
+      <td class="rank">4</td>
+      <td>PEGA0028</td>
+      <td class="num">5</td>
+      <td class="num">5,278</td>
+      <td class="num">5</td>
+      <td class="cite">rows 15, 19, 20, 23, 25</td>
+    </tr>
+  </tbody>
+</table>
+<h2>Rows by hour (host-local -- these timestamps carry no zone)</h2>
+<table>
+  <thead><tr><th>#</th><th>hour</th><th>errors</th><th>total</th><th>rate</th><th>evidence</th></tr></thead>
   <tbody>
     <tr>
       <td class="rank">1</td>
-      <td>2026-09-30T00</td>
+      <td>2026-09-30T06</td>
       <td class="num">0</td>
-      <td class="num">100</td>
+      <td class="num">15</td>
       <td class="num">0.0%</td>
-      <td class="cite">rows 2, 3, 4, 5, 6, 7, 8, 9 (+92 more)</td>
+      <td class="cite">rows 11, 12, 13, 14, 15 (+10 more)</td>
+    </tr>
+    <tr>
+      <td class="rank">2</td>
+      <td>2026-09-30T07</td>
+      <td class="num">0</td>
+      <td class="num">9</td>
+      <td class="num">0.0%</td>
+      <td class="cite">rows 2, 3, 4, 5, 6 (+4 more)</td>
     </tr>
   </tbody>
 </table>
@@ -46,8 +171,18 @@
   <tbody>
     <tr>
       <td>&lt;50ms</td>
-      <td class="num">100</td>
-      <td class="cite">rows 2, 3, 4, 5, 6, 7, 8, 9 (+92 more)</td>
+      <td class="num">2</td>
+      <td class="cite">rows 3, 12</td>
+    </tr>
+    <tr>
+      <td>200ms-1s</td>
+      <td class="num">1</td>
+      <td class="cite">rows 6</td>
+    </tr>
+    <tr>
+      <td>&gt;1s</td>
+      <td class="num">21</td>
+      <td class="cite">rows 2, 4, 5, 7, 8 (+16 more)</td>
     </tr>
   </tbody>
 </table>

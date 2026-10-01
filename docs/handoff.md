@@ -497,6 +497,20 @@ local for a session is indistinguishable, to everyone including the agent, from
 work that was never done: the branch is behind, CI is measuring an older commit,
 and the loss is discovered only at the end. One commit, one push, immediately.
 
+**R8: no backticks in commit messages — plain words only.** A commit message is
+written inside double quotes in a shell, so a backtick is not punctuation, it is
+**command substitution**, and the shell runs whatever is between the backticks.
+The words vanish from the message and their standard output is committed in their
+place. This happened: a message reading "carries rows alongside sample" was
+committed as "carries ␣alongside ␣", and the words only exist now because a later
+document had to supply them.
+
+It is also a control-adjacent hazard rather than a cosmetic one. A message whose
+backtick content happens to name a guarded verb does not merely look wrong, it
+can be **refused outright**, and a refusal on commit is a dead end at exactly the
+moment you most need the work saved. Write plain words. If code needs quoting,
+use single quotes inside the message, which the shell does not interpret.
+
 **A running session does not pick up a change to this control.** The policy is
 loaded at session start, so a tiering fix committed mid-session governs the
 *next* session, not the current one. After landing such a fix, expect the

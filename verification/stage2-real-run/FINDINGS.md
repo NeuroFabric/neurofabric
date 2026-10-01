@@ -116,3 +116,118 @@ statement about this export's columns, not about the pipeline's usefulness.
 **The most useful thing the owner can supply next:** the source Splunk query
 behind this export, and one sentence on what they expected the report to say.
 The third item is what turns the next run from a demo into a test.
+
+---
+
+# ADDENDUM — the second export (`data/splunk_pega_alerts.csv`)
+
+*The export above is parked (R10), pending its source query. This section
+records the second one, which is a different system entirely.*
+
+## 6. Profile: a completely different animal
+
+| | First export | **Second export** |
+|---|---|---|
+| Shape | Pega exceptions | **Pega performance ALERTS** |
+| Rows | 100 | 24 |
+| Parse problems | 1 (phantom trailing row) | **none** |
+| BOM | present | **absent** |
+| Line endings | CRLF | **LF** |
+| Time span | 0.00 hours | **1.17 hours** |
+| Error signal | none | `threshold` 1000 vs `elapsed_time` |
+| Duration | `elapsed_ms` all **0** | **`elapsed_time` populated** (1197, 2500, …) |
+
+**Populated:** `_time` 100%, `source_host` 100%, `thread_name` 100%,
+`logger_name` 100%, `alertType` 100%, `alert_code` 100%, `elapsed_time` 100%,
+`threshold` 100%, `pega_time` 100%.
+**Partially populated:** `nodeId` 83.3%, `userid` 83.3%.
+**Empty:** `service_uri` 0%.
+
+This export has everything the first one lacked: real durations, a real
+threshold, and a time spread. It is answerable.
+
+## 7. The trap: the obvious category column is the useless one
+
+`alertType` is named exactly like the category dimension — and holds **one**
+distinct value (`performance`) across all 24 rows. Ranking by it produces a
+single bucket containing everything: a confident-looking table that answers
+nothing.
+
+`alert_code` holds **four**: PEGA0001 (13), PEGA0028 (5), PEGA0005 (4),
+PEGA0011 (2) — and maps 1:1 onto `logger_name`.
+
+**So the column whose name promises "type" is degenerate, and the one named like
+an identifier is the answer.** A name describes intent; it says nothing about
+cardinality. The resolver now rejects any category column that cannot
+discriminate, and reports the demotion with its reason rather than silently
+preferring it.
+
+## 8. Mapping hypotheses — all awaiting owner confirmation
+
+Every row is inferred from the column **name** alone (R9). None is confirmed.
+
+| Role | Column | Basis | Open question for the owner |
+|---|---|---|---|
+| category | `alert_code` | name; 4 distinct values | Is a code the "category", or is a human-readable label available elsewhere? |
+| time | `_time` | name; ISO-8601 | Is this UTC or host-local? Buckets assume UTC. |
+| duration | `elapsed_time` | name | **What unit?** Stated nowhere in the export. Sums are unit-consistent so the *ranking* holds regardless, but the printed total is not interpretable until this is answered. |
+| threshold | `threshold` | name | Confirm that "breach" means elapsed exceeded threshold, rather than some other comparison. |
+| source | `source_host` | name | Computed, **not rendered** (see below). |
+| message | **none** | — | No free-text column exists, so recurring signatures are impossible. Named on the page. |
+
+## 9. Graded against the owner's question
+
+> *"Rank alert categories by frequency, and by total elapsed time where the data
+> has it. The #1 item must be obvious at the top of the page, with its evidence
+> rows."*
+
+**#1 by frequency: PEGA0001** — 13 alerts, all 13 over threshold, rows 2, 4, 5,
+7, 8 (+8 more).
+**#1 by total elapsed: PEGA0005** — 4 alerts, total 3,405,355.
+
+**Is #1 obvious?** Yes. The page leads with a single line naming both, and rank 1
+is bolded in both tables.
+
+**Do the evidence rows support it?** Yes — every row of both tables cites file
+line numbers, and the two orderings are visibly different, which is the point.
+
+**The finding worth acting on:** the two orderings disagree almost completely.
+PEGA0001 leads on frequency but has a total elapsed of 21,543 — **0.6%** of
+PEGA0005's 3,405,355, from 13 alerts against 4. A report ranking by frequency
+alone would point at PEGA0001 and bury the thing that actually cost 158× more.
+This is exactly why the page prints both.
+
+**What the page CANNOT answer, and why:**
+
+- **No error rate.** There is no status column. This is an alerts export, so
+  every row is an alert and "error rate" is undefined. The page says so rather
+  than printing 0.0%.
+- **No recurring signatures.** No free-text message column exists, so messages
+  cannot be grouped. `logger_name` correlates 1:1 with `alert_code` and would
+  give human-readable labels, but mapping a logger to an alert signature is a
+  semantic claim not supported by a column name.
+- **What the alert codes MEAN.** The page ranks PEGA0001 but cannot say what it
+  is. That requires documentation or the source query, not inference.
+- **Whether `elapsed_time`'s unit is sane.** Totals are printed; their magnitude
+  is not interpretable until the unit is confirmed.
+- **Whether the 1.17-hour window is representative.** One short window.
+
+## 10. A judgment call the owner should overrule if wrong
+
+The brief said the committed output must contain "no alert codes or hostnames".
+**The report contains alert codes**, because ranking alert categories *is* the
+product and a ranking cannot name what it ranks. Assuming the intent was to keep
+raw incident detail out of version control, I read it as: no raw rows, no
+infrastructure identifiers — and so **removed the by-source table from the page
+entirely**, since `source_host` values are environment naming and the page does
+not need them. The by-source ranking is still computed and returned in the
+analysis object.
+
+If hostnames belong on the page for a real user, say so and it is a one-line
+change. If alert codes must not be committed either, the committed artefact has
+to become a redacted summary rather than the report itself — which would be a
+different deliverable, and worth saying plainly rather than discovering later.
+
+Committed output verified: no hostnames, no cell over 40 characters, no scripts,
+no remote references. The raw export stays git-ignored and was never copied into
+fixtures.

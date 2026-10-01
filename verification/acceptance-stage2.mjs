@@ -135,13 +135,24 @@ let analysis;
     assert.equal((html.match(/class="cite"/g) ?? []).length > 5, true, "too few citations");
   });
   check("the ranking is present, worst first", () => {
+    // This fixture has NO alert-category column -- it is an access log, not an
+    // alerts export -- so there is nothing to rank categories by and the page
+    // must say so rather than substitute the source and call it a category.
     const checkoutAt = html.indexOf("checkout-api");
     const searchAt = html.indexOf("search-idx");
-    assert.ok(checkoutAt > 0 && searchAt > 0, "both sources should appear");
-    assert.ok(checkoutAt < searchAt, "checkout-api should be ranked above search-idx");
+    assert.equal(checkoutAt, -1, "infrastructure hostnames must not reach the committed page");
+    assert.equal(searchAt, -1, "infrastructure hostnames must not reach the committed page");
+    assert.match(html, /no credible column/,
+      "with no category column the page must name that, not degrade quietly");
+    assert.match(html, /Rows by hour/, "the hourly ranking is still present and still cited");
+    assert.ok((html.match(/class="cite"/g) ?? []).length > 3, "evidence citations must survive");
   });
   check("it states its own error rate rather than implying one", () => {
-    assert.match(html, /overall error rate \d+\.\d%/);
+    // Present ONLY when a status column was mapped. Without one an error rate is
+    // not computable, and printing 0.0% would be a confident invention.
+    assert.match(html, /error rate \d+\.\d%/);
+    assert.equal(/no status column, so no error rate is claimed/.test(html), false,
+      "this fixture DOES have a status column, so the rate must be claimed");
   });
   }
 }
