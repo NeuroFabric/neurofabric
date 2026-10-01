@@ -1,6 +1,7 @@
 import path from "node:path";
 import { scanStrings, truncatedScanReason } from "./policy.ts";
 import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
+import { parseCommandLine } from "./command-position.ts";
 import { globToRegExp, normalizeForMatch, type PolicyConfig, type RuleVerdict } from "./policy-config.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
 import { callSignature } from "./call-signature.ts";
@@ -576,7 +577,16 @@ export class ConfiguredPolicy implements PolicyEngine {
     const wanted = new Set(tokens.map((token) => token.toLowerCase()));
 
     for (const text of texts) {
+      // A token is exempt ONLY when the parser positively placed it in a
+      // pattern position. When the parser could not classify the command at all
+      // -- unbalanced quote, unknown wrapper, truncated form, nesting past the
+      // depth cap -- NOTHING is exempt and the old whole-text rule applies, so
+      // this can only ever keep a denial that would otherwise have been lost.
+      const parsed = parseCommandLine(text);
+      const exempt = parsed.classified ? parsed.patternTokens : new Set<string>();
+
       for (const candidate of commandTokens(text)) {
+        if (exempt.has(candidate)) continue;
         if (wanted.has(candidate.toLowerCase())) {
           return `${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`;
         }

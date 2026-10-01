@@ -121,13 +121,13 @@ const PERCENT_ENCODED = /%[0-9A-Fa-f]{2}/;
  * below are pattern positions; every other operand of the same command is
  * still checked, so `grep pattern /etc/passwd` remains a violation.
  */
-const PATTERN_COMMANDS: ReadonlySet<string> = new Set(["grep", "egrep", "fgrep", "rg", "sed", "awk", "tr"]);
+export const PATTERN_COMMANDS: ReadonlySet<string> = new Set(["grep", "egrep", "fgrep", "rg", "sed", "awk", "tr"]);
 
 /** The grep family takes its pattern after `-e`; `sed`/`awk` do not. */
-const GREP_FAMILY: ReadonlySet<string> = new Set(["grep", "egrep", "fgrep", "rg"]);
+export const GREP_FAMILY: ReadonlySet<string> = new Set(["grep", "egrep", "fgrep", "rg"]);
 
 /** What is known about the command segment currently being classified. */
-interface PatternSegment {
+export interface PatternSegment {
   /** The pattern-taking command of this segment, once one has been seen. */
   head: string | null;
   /** True once `-f` was seen: the pattern is a file, so every operand is one. */
@@ -140,7 +140,7 @@ interface PatternSegment {
   positionalSeen: boolean;
 }
 
-function newSegment(): PatternSegment {
+export function newSegment(): PatternSegment {
   return {
     head: null,
     patternFromFile: false,
@@ -155,7 +155,7 @@ function newSegment(): PatternSegment {
  * never be treated as a path operand. A pattern is a string, whatever it
  * contains, so this is decided by position and never by token shape.
  */
-function isPatternPosition(segment: PatternSegment, token: string): boolean {
+export function isPatternPosition(segment: PatternSegment, token: string): boolean {
   if (segment.head === null) return false;
   /** `tr` has no file operand: every non-option token is a character set. */
   if (segment.head === "tr") return true;
