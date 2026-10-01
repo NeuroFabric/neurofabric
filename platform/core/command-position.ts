@@ -135,16 +135,43 @@ export interface CommandPositionResult {
    * token anywhere else is data. Recorded even when `classified` is false,
    * because `rm notes.txt` is unclassified by design (the module's job is to
    * find PATTERN positions, not to bless commands) and is still a deletion.
+   *
+   * Collected across EVERY segment of a compound command, which is what makes
+   * the floor hold when a later segment sits behind an unclassifiable earlier
+   * one.
    */
   readonly commandTokens: ReadonlySet<string>;
-  /** False when the parser cannot understand the input. The caller must fall
-   *  back to today's whole-text rule. Never means "allow". */
+  /**
+   * Per-segment exemptions. A compound command is several command lines joined
+   * by `;`, `|` or `&&`, and each is judged on its own: a segment that could
+   * not be understood forfeits only its OWN exemptions, never a sibling's.
+   */
+  readonly segments: readonly SegmentExemption[];
+  /** False when ANY segment could not be understood. Never means "allow". */
   readonly classified: boolean;
   /** Present when `classified` is false, for the denial reason. */
   readonly reason?: string;
 }
 
+/** One compound-command segment and the exemptions it has earned. */
+export interface SegmentExemption {
+  /** The segment text, exactly as `splitSegments` produced it. */
+  readonly text: string;
+  /**
+   * Tokens this segment may not be denied for. EMPTY when the segment could not
+   * be understood -- fail closed for that segment alone.
+   */
+  readonly exempt: ReadonlySet<string>;
+}
+
 type Unclassified = { classified: false; reason: string; commandTokens: ReadonlySet<string> };
+
+/**
+ * What one segment's parse produces. `segments` belongs to the whole command
+ * line, so it is built once in `parseCommandLine` and is deliberately absent
+ * from every recursive step below it.
+ */
+type SegmentParse = { patternTokens: Set<string>; commandTokens: Set<string>; classified: true };
 
 /** Split on the operators that separate one command from the next. */
 function splitSegments(text: string): string[] {
@@ -274,7 +301,7 @@ function parseTokens(
   depth: number,
   patternTokens: Set<string>,
   commandTokens: Set<string>,
-): CommandPositionResult | Unclassified {
+): SegmentParse | Unclassified {
   if (depth > MAX_SECURITY_SCAN_DEPTH) {
     return { classified: false, reason: `command nesting exceeds the depth cap of ${MAX_SECURITY_SCAN_DEPTH}`, commandTokens };
   }
@@ -291,7 +318,12 @@ function parseTokens(
     }
     const payload = tokens[cIndex + 1];
     if (payload === undefined) return { classified: false, reason: `-c carries no payload`, commandTokens };
-    return parseCommandLine(payload, depth + 1, patternTokens, commandTokens);
+    // The payload's own segments are not surfaced here: only the shared union
+    // accumulators matter to this step, and the top-level `parseCommandLine`
+    // owns the per-segment view.
+    const nested = parseCommandLine(payload, depth + 1, patternTokens, commandTokens);
+    if (!nested.classified) return { classified: false, reason: nested.reason ?? "unclassified payload", commandTokens };
+    return { patternTokens, commandTokens, classified: true };
   }
 
   // `find`'s exec options carry a nested command line as their body.
@@ -350,7 +382,20 @@ function parseTokens(
   return { patternTokens, commandTokens, classified: true };
 }
 
-/** Parse one command line, recursing through payloads and `-exec` bodies. */
+/**
+ * Parse one command line, recursing through payloads and `-exec` bodies.
+ *
+ * PER SEGMENT, and never short-circuiting. An earlier version returned at the
+ * first segment it could not classify, which cost two things at once: the
+ * exemptions already earned by earlier segments were discarded, so one unrelated
+ * `echo` voided a legitimate grep exemption in the same line; and every LATER
+ * segment went unparsed, so a deletion behind an unclassifiable segment was
+ * never identified as an operation and was softened to the survivable tier.
+ *
+ * Now every segment is parsed, `commandTokens` accumulates across all of them so
+ * the floor holds wherever the deletion sits, and each segment carries its own
+ * exemptions -- empty when that segment alone could not be understood.
+ */
 export function parseCommandLine(
   text: string,
   depth = 0,
@@ -358,14 +403,30 @@ export function parseCommandLine(
   commandTokens: Set<string> = new Set(),
 ): CommandPositionResult {
   if (hasUnbalancedQuote(text)) {
-    return { patternTokens, commandTokens, classified: false, reason: "unbalanced quote" };
+    // No segment can be trusted, so none is offered. The caller falls back to
+    // scanning the whole text, which is strictly MORE aggressive.
+    return { patternTokens, commandTokens, segments: [], classified: false, reason: "unbalanced quote" };
   }
+  const segments: SegmentExemption[] = [];
+  let firstReason: string | undefined;
   for (const segment of splitSegments(text)) {
+    // Snapshot first: whatever the parser adds for THIS segment, including via a
+    // nested payload, is what this segment may be exempt for.
+    const before = new Set(patternTokens);
     const tokens = tokenizeShell(segment).map((token) => token.text.trim()).filter((token) => token !== "");
     const parsed = parseTokens(tokens, depth, patternTokens, commandTokens);
-    if (!parsed.classified) {
-      return { patternTokens, commandTokens, classified: false, reason: parsed.reason };
-    }
+    const earned = [...patternTokens].filter((token) => !before.has(token));
+    segments.push({
+      text: segment,
+      exempt: parsed.classified ? new Set(earned) : new Set<string>(),
+    });
+    if (!parsed.classified && firstReason === undefined) firstReason = parsed.reason;
   }
-  return { patternTokens, commandTokens, classified: true };
+  return {
+    patternTokens,
+    commandTokens,
+    segments,
+    classified: firstReason === undefined,
+    reason: firstReason,
+  };
 }

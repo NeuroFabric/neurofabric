@@ -235,8 +235,13 @@ test("P3d an unclassifiable segment is SOFT_REFUSE and the run continues", async
 test("P3e a pipeline is judged segment by segment too", async () => {
   const grepSide = await governed();
   const commandSide = await governed();
-  const soft = await tierOf(grepSide.adapter, `cat notes | grep -n "${TOKEN}"`, "p3e-soft");
+  // Per R2 a pattern position is exempt outright, so this is ALLOW rather than
+  // a soft refusal -- and the exemption still has to survive the pipe, which is
+  // the whole point of this section.
+  const { decision } = await grepSide.adapter.precheckToolCall(
+    "bash", "execute", { command: `cat notes | grep -n "${TOKEN}"` }, undefined, "p3e-soft",
+  );
+  assert.equal(decision.decision, "ALLOW", "the pattern exemption survives a pipeline sibling");
   const hard = await tierOf(commandSide.adapter, `echo done | ${TOKEN} notes.txt`, "p3e-hard");
-  assert.equal(soft, "SOFT_REFUSE", "the token is the pattern here, so it is data");
-  assert.equal(hard, "HARD_DENY", "and the operation here, so it is a hazard");
+  assert.equal(hard, "HARD_DENY", "and the operation behind the pipe is still the operation");
 });
