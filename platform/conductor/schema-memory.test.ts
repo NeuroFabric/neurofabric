@@ -1,127 +1,114 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-
-import { loadSchemaMemory, recallMapping, rememberMapping, type SchemaMemory } from "./schema-memory.ts";
-import { makeTempWorkspace, pathExists } from "../test-support/temp-workspace.ts";
+import { fileURLToPath } from "node:url";
+import { makeTempWorkspace, writeFixture } from "../test-support/temp-workspace.ts";
+import { resolveSchemaMemory } from "./schema-memory.ts";
 
 /**
- * SCHEMA MEMORY — so a schema that was worked out once is not worked out again.
+ * TASK 1 — SCHEMA MEMORY. Red first.
  *
- * A memory keyed on the exact column set would miss the moment an export gains a
- * column, which is exactly when the Conductor most needs to recognise the file
- * as the one it already understands. So an entry matches when every column of
- * its signature is PRESENT, not when the sets are equal.
+ * The ruling: USER-LEARNED schemas are per-checkout and stay in
+ * `.session-archive` (never committed). CORE VERIFIED schemas ship with the
+ * product in `configs/default-schemas.json`, tracked in git, because the Pega
+ * mapping was established against a real export and a customer who drops a
+ * second Pega export must not have to re-earn it.
  *
- * Two properties this file exists to hold:
- *
- *   1. A remembered mapping is a CANDIDATE, never an authority. It is consulted
- *      before profiling, but it cannot silently override what the file actually
- *      contains -- if the remembered category column is absent, the memory is
- *      stale and says so rather than producing an empty ranking.
- *   2. Owner RULINGS are memory too. R10 and R11 were established by a person,
- *      not inferred from a column name, and re-deriving them from a header on
- *      every run would quietly discard the ruling the first time it was needed.
+ * So there are two stores and an order between them, and these tests pin the
+ * order as well as the fallback. A "fallback" that wins when both are present
+ * would silently discard what this checkout has learned, which is the one thing
+ * per-checkout memory exists to keep.
  */
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const PEGA_HEADERS = [
   "_time", "source_host", "nodeId", "userid", "thread_name", "logger_name",
   "alertType", "alert_code", "elapsed_time", "threshold", "pega_time", "service_uri",
 ];
 
-function memoryWithPega(): SchemaMemory {
-  return {
-    version: 1,
-    rulings: { durationUnit: "ms", timeZone: "UTC" },
-    entries: [{
-      signature: PEGA_HEADERS,
-      marker: ["alertType", "pega_time", "alert_code"],
-      roles: { category: "alert_code", duration: "elapsed_time", time: "_time" },
-      learnedFrom: "data/splunk_pega_alerts.csv",
-      confirmedByOwner: false,
-    }],
-  };
-}
-
-test("M1 a remembered schema is recalled from its marker columns", () => {
-  const found = recallMapping(memoryWithPega(), PEGA_HEADERS);
-  assert.ok(found, "the remembered schema must be found");
-  assert.equal(found.roles.category, "alert_code");
-  assert.equal(found.roles.duration, "elapsed_time");
+/** The shipped core schema must exist in git-tracked configs/, not in the archive. */
+test("the core Pega schema ships with the product, in git-tracked configs/", async () => {
+  const shipped = path.join(REPO_ROOT, "configs", "default-schemas.json");
+  const text = await readFile(shipped, "utf8");
+  const parsed = JSON.parse(text) as { schemas: { id: string; roles: Record<string, string> }[] };
+  const pega = parsed.schemas.find((s) => s.id === "pega-alert-export");
+  assert.ok(pega, "the verified Pega mapping must be in the shipped defaults");
+  // The mapping !48 established against the real export.
+  assert.equal(pega.roles.category, "alert_code", "category is alert_code, NOT alertType");
+  assert.equal(pega.roles.duration, "elapsed_time");
+  assert.equal(pega.roles.threshold, "threshold");
+  assert.equal(pega.roles.source, "source_host");
+  // alertType is the trap from R9 and must be recorded as rejected, not just absent.
+  assert.ok(
+    JSON.stringify(pega).includes("alertType"),
+    "the rejected alertType column must be recorded, so the reason travels with the mapping",
+  );
 });
 
-test("M2 a schema with EXTRA columns is still recognised", () => {
-  // The common real case: one new field appears and the tool must not forget
-  // everything it knew.
-  const found = recallMapping(memoryWithPega(), [...PEGA_HEADERS, "new_field"]);
-  assert.ok(found, "an added column must not invalidate a remembered schema");
+test("an empty .session-archive falls back to the shipped core schema", async () => {
+  const cwd = await makeTempWorkspace("nf-schema-fallback-");
+  // Present but EMPTY is the case the task names, and it is not the same as
+  // absent: an empty archive is what a fresh checkout of a configured project
+  // looks like after someone deletes their learned overrides.
+  await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
+  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), "[]", "utf8");
+
+  // `defaultsRoot` points at the repo: the temp workspace has no configs/ of its
+  // own, and without this the assertion below would hold whether or not the
+  // fallback works.
+  const resolved = await resolveSchemaMemory({ cwd, headers: PEGA_HEADERS, defaultsRoot: REPO_ROOT });
+  assert.equal(resolved?.roles.category, "alert_code");
+  assert.equal(resolved?.source, "DEFAULT", "an empty archive must fall back to the shipped default");
 });
 
-test("M3 an unrelated schema is NOT recalled", () => {
-  const found = recallMapping(memoryWithPega(), ["date", "amount", "merchant", "note"]);
-  assert.equal(found, null, "a different file must not inherit another file's mapping");
+test("a user-learned schema in .session-archive WINS over the shipped default", async () => {
+  const cwd = await makeTempWorkspace("nf-schema-learned-");
+  await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
+  // This checkout learned that alertType is the discriminating column. It is
+  // right HERE and wrong in general, which is exactly why it is per-checkout.
+  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), JSON.stringify([
+    { id: "pega-alert-export", roles: { category: "alertType" } },
+  ]), "utf8");
+
+  const resolved = await resolveSchemaMemory({ cwd, headers: PEGA_HEADERS, defaultsRoot: REPO_ROOT });
+  assert.equal(resolved?.roles.category, "alertType", "per-checkout learning must not be discarded");
+  assert.equal(resolved?.source, "SESSION_ARCHIVE");
 });
 
-test("M4 a STALE memory is rejected, not obeyed", () => {
-  // The remembered category column is gone. Obeying the memory would rank by a
-  // column that does not exist and print an empty table that looks like a result.
-  const memory = memoryWithPega();
-  const found = recallMapping(memory, PEGA_HEADERS.filter((h) => h !== "alert_code"));
-  assert.equal(found, null, "a memory naming an absent column is stale and must not be applied");
-});
+test("a remembered schema is only used when the file still has its columns", async () => {
+  const cwd = await makeTempWorkspace("nf-schema-stale-");
+  await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
+  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), JSON.stringify([
+    { id: "pega-alert-export", roles: { category: "alert_code", duration: "elapsed_ms" } },
+  ]), "utf8");
 
-test("M5 owner rulings survive with the memory", () => {
-  const memory = memoryWithPega();
-  assert.equal(memory.rulings.durationUnit, "ms");
-  assert.equal(memory.rulings.timeZone, "UTC");
-});
-
-test("M6 a missing memory file is an empty memory, not an error", async () => {
-  const cwd = await makeTempWorkspace("nf-mem-");
-  const file = path.join(cwd, ".session-archive", "schema-memory.json");
-  const memory = await loadSchemaMemory(file);
-  assert.equal(memory.entries.length, 0);
-  assert.equal(recallMapping(memory, PEGA_HEADERS), null);
-});
-
-test("M7 a written mapping is recalled on the next run", async () => {
-  const cwd = await makeTempWorkspace("nf-mem2-");
-  const file = path.join(cwd, ".session-archive", "schema-memory.json");
-  await rememberMapping(file, {
-    signature: PEGA_HEADERS,
-    marker: ["alertType", "alert_code"],
-    roles: { category: "alert_code", duration: "elapsed_time", time: "_time" },
-    learnedFrom: "data/example.csv",
+  // A different export: no alert_code, no elapsed_ms. Applying the memory
+  // anyway would rank on undefined columns and report a confident empty answer.
+  // `defaultsRoot` is set so that undefined here means "nothing matched", not
+  // "there was nothing to match against" -- those two look identical otherwise.
+  const resolved = await resolveSchemaMemory({
+    cwd, headers: ["_time", "service", "millis", "alertType"], defaultsRoot: REPO_ROOT,
   });
-  assert.equal(await pathExists(file), true, "the memory file must be created, parents and all");
-  const reloaded = await loadSchemaMemory(file);
-  const found = recallMapping(reloaded, PEGA_HEADERS);
-  assert.ok(found);
-  assert.equal(found.roles.category, "alert_code");
+  assert.equal(resolved, undefined, "a schema whose columns are absent must not be applied");
+  // The control: the same cwd and the same resolver DO resolve when the columns
+  // are present, so the negative above is caused by the header set and not by a
+  // resolver that matches nothing. (Source is SESSION_ARCHIVE here, because this
+  // cwd does have an archive -- the control is about capability, not provenance.)
+  const control = await resolveSchemaMemory({ cwd, headers: PEGA_HEADERS, defaultsRoot: REPO_ROOT });
+  assert.ok(control !== undefined, "the same resolver resolves when the columns are there");
+  assert.equal(control?.roles.category, "alert_code");
+  // The default still supplies the roles the stale archive could not.
+  assert.equal(control?.roles.duration, "elapsed_time", "shipped defaults fill gaps the archive left");
 });
 
-test("M8 remembering the same schema twice does not duplicate it", async () => {
-  const cwd = await makeTempWorkspace("nf-mem3-");
-  const file = path.join(cwd, ".session-archive", "schema-memory.json");
-  const entry = {
-    signature: PEGA_HEADERS, marker: ["alert_code"],
-    roles: { category: "alert_code" }, learnedFrom: "a.csv",
-  };
-  await rememberMapping(file, entry);
-  await rememberMapping(file, entry);
-  const memory = await loadSchemaMemory(file);
-  assert.equal(memory.entries.length, 1, "a repeated schema must update, not accumulate");
-});
+test("an unparseable .session-archive degrades to the shipped default, it does not throw", async () => {
+  const cwd = await makeTempWorkspace("nf-schema-corrupt-");
+  await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
+  await writeFixture(cwd, "x.txt", "");
+  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), "{ not json", "utf8");
 
-test("M9 a CORRUPT memory file is reported, not silently ignored", async () => {
-  const cwd = await makeTempWorkspace("nf-mem4-");
-  const file = path.join(cwd, ".session-archive", "schema-memory.json");
-  await rememberMapping(file, {
-    signature: PEGA_HEADERS, marker: ["alert_code"], roles: { category: "alert_code" }, learnedFrom: "a.csv",
-  });
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(file, "{ this is not json", "utf8");
-  const memory = await loadSchemaMemory(file);
-  assert.equal(memory.corrupt, true, "silently treating unreadable memory as empty loses the rulings");
-  assert.equal(memory.entries.length, 0);
+  const resolved = await resolveSchemaMemory({ cwd, headers: PEGA_HEADERS, defaultsRoot: REPO_ROOT });
+  assert.equal(resolved?.source, "DEFAULT", "a corrupt archive must not take the product down");
 });

@@ -1,0 +1,40 @@
+{
+  "$comment": "CORE VERIFIED SCHEMAS. Tracked in git on purpose: these were established against real exports, and a customer dropping a second export of the same shape must not have to re-earn them. User-LEARNED schemas are a different thing and are NOT here - they live in .session-archive/ (per-checkout, gitignored). See memory/decisions.md.",
+  "version": 1,
+  "schemas": [
+    {
+      "id": "pega-alert-export",
+      "title": "Pega / Splunk alert export",
+      "verifiedAgainst": "data/splunk_pega_alerts.csv (Stage 2, !48)",
+      "match": {
+        "allOf": [
+          "alert_code",
+          "elapsed_time",
+          "threshold",
+          "pega_time"
+        ]
+      },
+      "roles": {
+        "time": "_time",
+        "source": "source_host",
+        "category": "alert_code",
+        "duration": "elapsed_time",
+        "threshold": "threshold",
+        "status": null,
+        "message": null
+      },
+      "rejected": [
+        {
+          "column": "alertType",
+          "role": "category",
+          "reason": "named exactly like a category column and holds ONE distinct value across the entire export; ranking by it yields a single bucket containing every row, which reads as an answer and is not one"
+        }
+      ],
+      "notes": [
+        "elapsed_time states no unit anywhere in the export. The reading is sound; the UNIT is a hypothesis and is reported as one.",
+        "_time arrives as epoch seconds in some searches and ISO-8601 in others. Both are read.",
+        "There is no status column, so this export can say nothing about an error rate. The report must not print 0 percent."
+      ]
+    }
+  ]
+}

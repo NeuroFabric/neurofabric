@@ -1,4 +1,5 @@
 import type { CsvReadResult } from "./capabilities.ts";
+import type { ResolvedSchema } from "./schema-memory.ts";
 
 /**
  * BOTTLENECK ANALYSIS for Stage 2.
@@ -112,6 +113,10 @@ export interface BottleneckAnalysis {
   readonly degenerateColumns: readonly DegenerateColumn[];
   /** Roles with no credible column. The report must say so, not degrade. */
   readonly missing: readonly string[];
+  /** Where the role mapping came from. Absent when everything was inferred. */
+  readonly schemaSource?: "SESSION_ARCHIVE" | "DEFAULT";
+  /** Roles whose column came from a stored schema rather than from name inference. */
+  readonly verifiedRoles?: readonly string[];
   /** Which column supplied the category ranking. */
   readonly categoryColumn: string | null;
   /** Categories by frequency, and by total elapsed -- which are not the same order. */
@@ -185,15 +190,17 @@ const ROLE_CANDIDATES: Record<string, readonly string[]> = {
  *
  * So a candidate with a single distinct value is demoted -- reported, never used.
  */
-function resolveMappings(csv: CsvReadResult): {
+function resolveMappings(csv: CsvReadResult, schema?: ResolvedSchema): {
   mappings: ColumnMapping[];
   degenerate: DegenerateColumn[];
   chosen: Record<string, string | undefined>;
+  verified: string[];
 } {
   const mappings: ColumnMapping[] = [];
   const degenerate: DegenerateColumn[] = [];
   const chosen: Record<string, string | undefined> = {};
   const used = new Set<string>();
+  const verified: string[] = [];
 
   const distinctOf = (column: string): number => {
     const values = new Set<string>();
@@ -202,7 +209,15 @@ function resolveMappings(csv: CsvReadResult): {
   };
 
   for (const [role, candidates] of Object.entries(ROLE_CANDIDATES)) {
-    const present = candidates.filter((c) => csv.headers.includes(c));
+    // A stored schema's column is tried FIRST, ahead of every name candidate.
+    // That is the whole point of shipping one: on a second Pega export the
+    // verified mapping is used, instead of re-running name inference and hoping
+    // the candidates still describe the columns.
+    const stored = schema?.roles[role];
+    const ordered = (stored !== undefined && csv.headers.includes(stored))
+      ? [stored, ...candidates.filter((c) => c !== stored)]
+      : [...candidates];
+    const present = ordered.filter((c) => csv.headers.includes(c));
     // EVERY present candidate is checked for degeneracy, not only the ones
     // reached before a choice is made. Checking lazily would report a
     // single-valued column as healthy simply because a better candidate was
@@ -224,15 +239,27 @@ function resolveMappings(csv: CsvReadResult): {
     chosen[role] = pick;
     used.add(pick);
     const distinct = distinctOf(pick);
-    const hypothesis = true;
-    const note = role === "duration"
-      ? "ms by owner ruling R10"
-      : role === "time"
-        ? "UTC by owner ruling R11"
-        : `inferred from name; ${distinct} distinct`;
+    // A column that came from a stored schema is VERIFIED: someone checked it
+    // against a real export of this shape. Everything else is still a
+    // hypothesis, and is still printed as one.
+    const fromStore = pick === stored && stored !== undefined;
+    if (fromStore) verified.push(role);
+    const hypothesis = !fromStore;
+    const note = fromStore
+      ? `verified schema "${schema?.id}"`
+      : role === "duration"
+        // R10 superseded the old wording on this branch. It used to say the unit
+        // was not stated in the export, which was true of the file and false of
+        // the decision: the owner has ruled the elapsed column to be
+        // milliseconds, so the note names the ruling instead of the gap. The
+        // merge had dropped it, and a test asserting the ruling went red.
+        ? "ms by owner ruling R10"
+        : role === "time"
+          ? "UTC by owner ruling R11"
+          : `inferred from name; ${distinct} distinct`;
     mappings.push({ role, column: pick, hypothesis, note });
   }
-  return { mappings, degenerate, chosen };
+  return { mappings, degenerate, chosen, verified };
 }
 
 /**
@@ -309,8 +336,16 @@ function bucket(map: Map<string, { error: number; rows: number[] }>, key: string
 }
 
 /** Turn a parsed CSV into the ranked bottleneck view. Never throws. */
-export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
-  const { mappings, degenerate, chosen } = resolveMappings(csv);
+export function analyseBottlenecks(
+  csv: CsvReadResult,
+  /**
+   * A stored mapping for THIS file, when one resolved. Its roles are taken as
+   * verified rather than inferred -- including the cardinality rejection, which
+   * is a property of the data and is re-checked below either way.
+   */
+  schema?: ResolvedSchema,
+): BottleneckAnalysis {
+  const { mappings, degenerate, chosen, verified } = resolveMappings(csv, schema);
 
   const timeCol = chosen.time;
   const sourceCol = chosen.source;
@@ -464,6 +499,8 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     mappings,
     degenerateColumns: degenerate,
     missing,
+    schemaSource: schema?.source,
+    verifiedRoles: verified,
     categoryColumn: categoryCol ?? null,
     categories: byFrequency,
     categoriesByElapsed: byElapsed,

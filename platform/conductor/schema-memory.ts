@@ -1,141 +1,157 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
- * SCHEMA MEMORY.
+ * SCHEMA MEMORY (Task 1 ruling).
  *
- * The Conductor worked out how to read the Pega alerts export once, by hand,
- * with the owner's rulings attached. Nothing about that should have to be
- * rediscovered on the next run — and more to the point, nothing about it should
- * have to be re-GUESSED. A guess that lands differently next time is worse than
- * no memory at all, because it looks like knowledge.
+ * Two stores, one order, and the order is the decision:
  *
- * Three rules, each of which is a pin in schema-memory.test.ts:
+ *   1. `.session-archive/schemas.json` — what THIS checkout has learned. Per
+ *      checkout, gitignored, never shipped. A user's own correction outranks
+ *      anything we ship, because it is the only one of the two that was
+ *      checked against the file in front of them.
+ *   2. `configs/default-schemas.json` — core VERIFIED schemas, tracked in git,
+ *      shipped with the product. The Pega mapping was established against a real
+ *      export in Stage 2; re-deriving it by name-matching on every install would
+ *      throw away a verified result and, worse, would re-run the R9 trap on a
+ *      customer instead of on a fixture.
  *
- *   1. MATCH BY CONTAINMENT. An entry matches when every column of its signature
- *      is present. Keying on set equality would break the first time an export
- *      gains a column, which is exactly when recognition is worth having.
+ * So: archive first, defaults as the fallback. "Fallback" in that sentence means
+ * it applies only when the archive yields nothing usable for THIS file.
  *
- *   2. A MEMORY IS A CANDIDATE, NOT AN AUTHORITY. Before it is applied, every
- *      column it names must actually be present. A memory naming a column the
- *      file no longer has is STALE, and obeying it would rank by a column that
- *      does not exist and print an empty table that looks like a finding.
+ * A remembered schema is applied only when the columns it names are actually
+ * present. A stored mapping is a claim about a shape; applying it to a different
+ * shape would rank on `undefined` and print a confident empty table, which is
+ * the specific failure mode the whole R9 work exists to prevent.
  *
- *   3. OWNER RULINGS LIVE HERE TOO. R10 and R11 were established by a person,
- *      not inferred from a header. Re-deriving them on every run would quietly
- *      discard a ruling the first time the file was needed.
- *
- * The file lives under .session-archive, which is GIT-IGNORED. That is correct
- * for a cache — it must never be a second source of truth that disagrees with
- * the code — but it also means the memory is per-checkout and does not travel
- * with the repository. A fresh clone starts knowing nothing, which is a real
- * limitation of this design and not a rounding error.
+ * Never throws. A corrupt or absent archive degrades to the shipped defaults,
+ * because a memory subsystem that can take the product down is worse than one
+ * that forgets.
  */
 
-export interface MemoryEntry {
-  /** Columns whose presence together identify this schema. */
-  readonly signature: readonly string[];
-  /** The few columns worth printing when this entry is recalled. */
-  readonly marker: readonly string[];
-  /** role -> column, as resolved once and confirmed by testing. */
-  readonly roles: Readonly<Record<string, string>>;
-  /** Where it was learned. Provenance, for the human who reads this file. */
-  readonly learnedFrom: string;
-  /** False until a person has said the roles are right. */
-  confirmedByOwner?: boolean;
+export type SchemaSource = "SESSION_ARCHIVE" | "DEFAULT";
+
+export interface ResolvedSchema {
+  readonly id: string;
+  readonly roles: Record<string, string>;
+  /** Which store answered. Reported, never hidden: a mapping is only as good as its provenance. */
+  readonly source: SchemaSource;
+  /** Roles whose column came from the per-checkout archive. The override list. */
+  readonly learnedRoles: readonly string[];
+  /** Columns a store named but this file does not have. Dropped, not applied. */
+  readonly absent: readonly string[];
+  /** Roles the store had no column for. Named rather than left to look complete. */
+  readonly unresolved: readonly string[];
 }
 
-export interface SchemaMemory {
-  version: 1;
-  rulings: { durationUnit?: string; timeZone?: string };
-  entries: MemoryEntry[];
-  /** True when the file existed but could not be read. Never silently empty. */
-  corrupt?: boolean;
+interface StoredSchema {
+  id: string;
+  roles: Record<string, string | null>;
+  match?: { allOf?: string[] };
 }
 
-const EMPTY: SchemaMemory = { version: 1, rulings: {}, entries: [] };
-
-export function schemaMemoryPath(root: string): string {
-  return path.join(root, ".session-archive", "schema-memory.json");
+interface SchemaFile {
+  schemas: StoredSchema[];
 }
 
-export async function loadSchemaMemory(file: string): Promise<SchemaMemory> {
-  let text: string;
-  try {
-    text = await readFile(file, "utf8");
-  } catch {
-    // Absent is the normal first-run case, not a problem.
-    return { ...EMPTY, entries: [] };
+const ARCHIVE_RELATIVE = path.join(".session-archive", "schemas.json");
+const DEFAULT_RELATIVE = path.join("configs", "default-schemas.json");
+
+/** Roles the product actually asks for. A schema that cannot fill these is not a match. */
+const REQUIRED_ROLES = ["category", "time", "source"] as const;
+
+function readJsonFile(file: string): Promise<SchemaFile | undefined> {
+  // Synchronous-by-promise is the honest shape: an absent or malformed store is
+  // a fact, not an error, and returning undefined is what makes the fallback work.
+  return import("node:fs/promises")
+    .then((fs) => fs.readFile(file, "utf8"))
+    .then((text): SchemaFile | undefined => {
+      const parsed = JSON.parse(text) as SchemaFile | StoredSchema[];
+      // BOTH shapes are accepted on purpose. The shipped config is an object so
+      // it can carry a version and a comment; `.session-archive/schemas.json` is
+      // a file a person edits by hand, and the shortest thing that works is a
+      // bare array. Rejecting the short form would teach people that memory
+      // "did not work" rather than that they used the wrong shape.
+      const schemas = Array.isArray(parsed) ? parsed : parsed.schemas;
+      return Array.isArray(schemas) ? { schemas } : undefined;
+    })
+    .catch(() => undefined);
+}
+
+/** The first stored schema whose declared columns are all present, else the best partial one. */
+function select(schemas: StoredSchema[], headers: readonly string[]): StoredSchema | undefined {
+  const present = new Set(headers);
+  const declared = schemas.filter((s) => typeof s.id === "string" && typeof s.roles === "object" && s.roles !== null);
+  const matched = declared.filter((s) => (s.match?.allOf ?? []).every((c) => present.has(c)));
+  if (matched.length > 0) return matched[0];
+  // No declared match. Fall back to the schema with the most of its roles
+  // actually present, and only if that is enough to be worth applying.
+  const scored = declared
+    .map((s) => ({ s, hits: Object.values(s.roles).filter((c): c is string => typeof c === "string" && present.has(c)).length }))
+    .filter((e) => e.hits > 0)
+    .sort((a, b) => b.hits - a.hits);
+  return scored[0]?.s;
+}
+
+/** The roles one store can supply for this file, and the columns it named in vain. */
+function rolesFrom(schema: StoredSchema, headers: readonly string[]): { roles: Record<string, string>; absent: string[] } {
+  const present = new Set(headers);
+  const roles: Record<string, string> = {};
+  const absent: string[] = [];
+  for (const [role, column] of Object.entries(schema.roles)) {
+    if (typeof column !== "string" || column.length === 0) continue;
+    if (!present.has(column)) { absent.push(column); continue; }
+    roles[role] = column;
   }
-  try {
-    const parsed = JSON.parse(text) as Partial<SchemaMemory>;
-    if (typeof parsed !== "object" || parsed === null || !Array.isArray(parsed.entries)) {
-      return { version: 1, rulings: {}, entries: [], corrupt: true };
-    }
-    return {
-      version: 1,
-      rulings: parsed.rulings ?? {},
-      entries: parsed.entries,
-      ...(parsed.corrupt === true ? { corrupt: true } : {}),
-    };
-  } catch {
-    // Corrupt is reported rather than swallowed. Treating unreadable memory as
-    // empty would silently discard the rulings stored beside it.
-    return { version: 1, rulings: {}, entries: [], corrupt: true };
-  }
+  return { roles, absent };
+}
+
+export interface ResolveOptions {
+  /** The project root. `.session-archive` is read from here. */
+  cwd: string;
+  /** The header row of the file being analysed. */
+  headers: readonly string[];
+  /**
+   * Where the shipped defaults live. Defaults to `<cwd>/configs`, which is the
+   * product layout; tests and the web server override it so a temporary
+   * workspace does not have to carry a copy of the product's configs.
+   */
+  defaultsRoot?: string;
 }
 
 /**
- * Find a remembered mapping for these headers, or null.
+ * Merge the two stores role by role: the archive first, the shipped defaults
+ * filling only what the archive left empty.
  *
- * Every column named by the entry must be present in the file. That single check
- * is what keeps a stale memory from being obeyed.
+ * Merging rather than choosing is what makes both halves of the ruling true at
+ * once. A checkout that corrected ONE role keeps that correction and still gets
+ * the verified mapping for the other five; picking a whole store or the other
+ * would mean either losing the correction or losing the shipped schema.
  */
-export function recallMapping(memory: SchemaMemory, headers: readonly string[]): MemoryEntry | null {
-  const present = new Set(headers);
-  let best: MemoryEntry | null = null;
-  for (const entry of memory.entries) {
-    if (!entry.signature.every((column) => present.has(column))) continue;
-    if (entry.roles === undefined) continue;
-    // Every ROLE must resolve to a column that is actually there.
-    const rolesResolve = Object.values(entry.roles).every((column) => present.has(column));
-    if (!rolesResolve) continue;
-    if (best === null || entry.signature.length > best.signature.length) best = entry;
-  }
-  return best;
-}
+export async function resolveSchemaMemory(options: ResolveOptions): Promise<ResolvedSchema | undefined> {
+  const headers = options.headers;
 
-export interface RememberInput {
-  signature: readonly string[];
-  marker: readonly string[];
-  roles: Readonly<Record<string, string>>;
-  learnedFrom: string;
-  /** Owner rulings to persist alongside. R10 and R11 came from a person. */
-  rulings?: { durationUnit?: string; timeZone?: string };
-}
+  const archive = await readJsonFile(path.resolve(options.cwd, ARCHIVE_RELATIVE));
+  const learned = archive === undefined ? undefined : select(archive.schemas, headers);
+  const defaults = await readJsonFile(path.resolve(options.defaultsRoot ?? options.cwd, DEFAULT_RELATIVE));
+  const core = defaults === undefined ? undefined : select(defaults.schemas, headers);
 
-/** Persist a mapping, replacing any entry with the same signature. */
-export async function rememberMapping(file: string, input: RememberInput): Promise<SchemaMemory> {
-  const memory = await loadSchemaMemory(file);
-  const entry: MemoryEntry = {
-    signature: [...input.signature],
-    marker: [...input.marker],
-    roles: { ...input.roles },
-    learnedFrom: input.learnedFrom,
-    confirmedByOwner: false,
+  const fromArchive = learned === undefined ? { roles: {}, absent: [] } : rolesFrom(learned, headers);
+  const fromCore = core === undefined ? { roles: {}, absent: [] } : rolesFrom(core, headers);
+
+  const roles = { ...fromCore.roles, ...fromArchive.roles };
+  // A schema that cannot fill a REQUIRED role is not applied. Half a mapping is
+  // not a schema; it is a report with holes that nobody labelled.
+  const unresolved = REQUIRED_ROLES.filter((role) => roles[role] === undefined);
+  if (unresolved.length > 0) return undefined;
+
+  const learnedRoles = Object.keys(fromArchive.roles);
+  return {
+    id: learned?.id ?? core?.id ?? "unresolved",
+    roles,
+    source: learnedRoles.length > 0 ? "SESSION_ARCHIVE" : "DEFAULT",
+    learnedRoles,
+    absent: [...fromArchive.absent, ...fromCore.absent],
+    unresolved,
   };
-  const entries = memory.entries.filter(
-    (e) => !(e.signature.length === entry.signature.length
-      && e.signature.every((c, i) => c === entry.signature[i])),
-  );
-  const next: SchemaMemory = {
-    ...memory,
-    version: 1,
-    // Rulings accumulate and are never overwritten by a later, weaker write.
-    rulings: { ...(input.rulings ?? {}), ...memory.rulings },
-    entries: [...entries, entry],
-  };
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-  return next;
 }

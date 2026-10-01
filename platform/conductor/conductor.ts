@@ -3,6 +3,9 @@ import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
 import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
+import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
+import { resolveSchemaMemory, type ResolvedSchema } from "./schema-memory.ts";
 import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
 
 /**
@@ -18,6 +21,13 @@ import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
 
 /** The product's clarify budget, from PRODUCT.md. Not a kernel limit. */
 export const MAX_CLARIFY_ROUNDS = 3;
+
+/**
+ * How much of the kernel's event history one run's stream is read back from.
+ * Matches the bus's own retention, so a reconstructed stream can never be
+ * shorter than the events the kernel retained for this task.
+ */
+const EVENT_HISTORY_LIMIT = 500;
 
 /**
  * Ruling 3's escalation threshold. Also a product rule, not a kernel control: the
@@ -60,6 +70,8 @@ export interface ConductorResult {
   clarifyRounds: number;
   /** Produced artifacts, referenced by path. */
   artifacts: string[];
+  /** The Markdown report, when the run was asked for one. Never a guess at one. */
+  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema };
   /** Set when the run did not deliver. Never a bare string: always structured. */
   failure?: { code: string; reason: string; kernelReasonCode?: string };
   /** Every kernel event the run produced, in order. */
@@ -73,6 +85,12 @@ export interface ConductorOptions {
   policyConfig?: PolicyConfig;
   /** Injected for tests; defaults to the project's own policy composition. */
   policy?: PolicyEngine;
+  /**
+   * Where `configs/default-schemas.json` lives. Defaults to `cwd`, which is the
+   * product layout; the web server passes the install root so a data workspace
+   * does not have to carry a copy of the schemas.
+   */
+  defaultsRoot?: string;
 }
 
 export class Conductor {
@@ -94,7 +112,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools(STAGE1_CAPABILITIES);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
@@ -118,13 +136,43 @@ export class Conductor {
       resolve?: (question: ClarifyQuestion) => string | undefined;
       /** Where the dashboard is written, when the request implies one. */
       output?: string;
+      /**
+       * `dashboard` (default) is the Stage 1 pair. `bottleneck` is the Stage 2
+       * report: the same governed read, then the analysis, then a governed
+       * WRITE of the report itself.
+       */
+      mode?: "dashboard" | "bottleneck";
+      /** Report title, and the rendering the caller wants back. */
+      title?: string;
+      format?: "html" | "markdown";
     } = {},
   ): Promise<ConductorResult> {
-    this.emit("ASK", request);
-    const kernelEvents: { type: string; payload: Record<string, unknown> }[] = [];
-    const off = this.kernel.events.subscribe((event) => {
-      kernelEvents.push({ type: event.type, payload: event.payload as Record<string, unknown> });
-    });
+    // The request text is NOT recorded here. This progress list travels to a
+    // browser in the response body, and a request carries whatever filename a
+    // person typed, so recording it verbatim hands that string back inside the
+    // JSON the page renders. The resolved path is recorded at PLAN instead,
+    // which is safe precisely because a name that survived locating is one the
+    // filesystem could actually have.
+    this.emit("ASK");
+    // THE STREAM IS READ BACK FROM THE KERNEL, NOT FROM A SUBSCRIPTION.
+    //
+    // A subscription here silently lost the second half of every run. The
+    // kernel emitted all fifteen records -- verified against the bus's own
+    // history -- while this sink held eight, so a caller received a truncated
+    // stream for a run that had in fact completed, and TASK_COMPLETED was
+    // simply absent. The bus is not the kernel's stable identity across a run,
+    // so a handle taken before `beginTask` is not a handle on the bus that
+    // served it.
+    //
+    // The kernel's own history is the authoritative record: it is written
+    // before delivery, it survives the bus being replaced, and scoping it to
+    // this run's task id keeps it about THIS run. A stream reconstructed from
+    // history cannot be missing an event the kernel recorded.
+    let taskId = "";
+    const taskEvents = (): { type: string; payload: Record<string, unknown> }[] =>
+      taskId === "" ? [] : this.kernel.events.recent(EVENT_HISTORY_LIMIT)
+        .filter((event) => event.taskId === taskId)
+        .map((event) => ({ type: event.type, payload: event.payload as Record<string, unknown> }));
 
     try {
       // --- CLARIFY (bounded, and never silent) ---
@@ -134,7 +182,11 @@ export class Conductor {
       let input = this.locateInput(request);
       while (input === undefined && rounds < MAX_CLARIFY_ROUNDS) {
         rounds += 1;
-        const question: ClarifyQuestion = { code: "MISSING_INPUT_FILE", question: "Which CSV file should I read?", detail: { request } };
+        // The raw request is NOT echoed here. This detail travels back to a
+        // browser in the response body, and a request can carry any filename a
+        // person typed, so reflecting it verbatim hands an attacker's string
+        // back inside the JSON the page renders.
+        const question: ClarifyQuestion = { code: "MISSING_INPUT_FILE", question: "Which CSV file should I read?", detail: { requestLength: request.length } };
         questions.push(question);
         const answer = options.resolve?.(question);
         if (answer === undefined) {
@@ -152,7 +204,7 @@ export class Conductor {
         return {
           status: "CLARIFY_EXHAUSTED",
           state: "CLARIFY_EXHAUSTED",
-          questions, clarifyRounds: rounds, artifacts: [], kernelEvents, progress: this.progress,
+          questions, clarifyRounds: rounds, artifacts: [], kernelEvents: taskEvents(), progress: this.progress,
           failure: {
             code: "CLARIFY_EXHAUSTED",
             reason: `No CSV input after ${rounds} clarify round(s); the last question was: "${questions.at(-1)?.question ?? "none asked"}"`,
@@ -163,11 +215,12 @@ export class Conductor {
       // --- PLAN (the kernel takes over here) ---
       this.emit("PLAN", input);
       await this.kernel.beginTask(request, request, { input });
+      taskId = this.kernel.currentTask?.taskId ?? taskId;
 
       // --- EXECUTE: two governed calls, through the real bridge sequence ---
       this.emit("EXECUTE", "csv_read");
       const read = await this.callTool("csv-read-1", "csv_read", { path: input });
-      if (!read.ok) return this.failed(read.failure, questions, rounds, kernelEvents);
+      if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
 
       // A malformed file is a QUESTION, not a crash. The run stops and asks.
       const csv = read.value as CsvReadResult;
@@ -184,13 +237,16 @@ export class Conductor {
           return {
             status: "CLARIFY_EXHAUSTED",
             state: "CLARIFY_EXHAUSTED",
-            questions, clarifyRounds: rounds + 1, artifacts: [], kernelEvents, progress: this.progress,
+            questions, clarifyRounds: rounds + 1, artifacts: [], kernelEvents: taskEvents(), progress: this.progress,
             failure: { code: "MALFORMED_CSV", reason: question.question, },
           };
         }
       }
 
       this.emit("EXECUTE", "render_page");
+      if (options.mode === "bottleneck") {
+        return this.bottleneck(csv, input, options, questions, rounds, taskEvents);
+      }
       const rendered = await this.callTool("render-1", "render_page", {
         path: options.output ?? path.join(this.cwd, "workspace", "dashboard.html"),
         title: "Sales dashboard",
@@ -198,23 +254,89 @@ export class Conductor {
         sample: csv.sample,
         rowCount: csv.rowCount,
       });
-      if (!rendered.ok) return this.failed(rendered.failure, questions, rounds, kernelEvents);
+      if (!rendered.ok) return this.failed(rendered.failure, questions, rounds, taskEvents());
 
       // --- DELIVER ---
       const task = await this.kernel.finishTask({ ok: true });
       this.emit("DELIVER", task.status);
       const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
       if (task.status !== "COMPLETED") {
-        return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, kernelEvents);
+        return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
       }
-      return { status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, kernelEvents, progress: this.progress };
+      return { status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, kernelEvents: taskEvents(), progress: this.progress };
     } finally {
-      off();
+      // Nothing to release: the stream is read from the kernel's history, so
+      // there is no subscription to take down, and no handle for a slow sink to
+      // outlive the run.
     }
   }
 
+  /**
+   * STAGE 2, THROUGH THE SAME LOOP: read (governed) -> analyse -> write
+   * (governed).
+   *
+   * The analysis is a PURE function of the rows the governed read returned, so
+   * it runs in process and is not dressed up as a tool call. Putting a
+   * computation with no I/O and no policy surface through the kernel would
+   * manufacture the appearance of governance rather than the substance of it.
+   * Everything that touches the filesystem is a real governed call.
+   */
+  private async bottleneck(
+    csv: CsvReadResult, input: string,
+    options: { output?: string; title?: string; format?: "html" | "markdown" },
+    questions: ClarifyQuestion[], rounds: number,
+    /**
+     * Read the stream when the result is built, not once up front: the report
+     * write is the second half of this run's events and they do not exist
+     * until it has happened.
+     */
+    taskEvents: () => { type: string; payload: Record<string, unknown> }[],
+  ): Promise<ConductorResult> {
+    // Schema memory is consulted HERE, after the read, because it matches on the
+    // header row the read actually produced.
+    const schema = await resolveSchemaMemory({
+      cwd: this.cwd, headers: csv.headers, defaultsRoot: this.options.defaultsRoot,
+    });
+    if (schema !== undefined) {
+      this.emit("EXECUTE", `schema memory: ${schema.source} (${schema.id})`);
+    } else {
+      this.emit("EXECUTE", "no stored schema matched; inferring from column names");
+    }
+    const analysis = analyseBottlenecks(csv, schema);
+
+    this.emit("EXECUTE", "render_bottleneck_report");
+    const written = await this.callTool("report-1", "render_bottleneck_report", {
+      path: options.output ?? path.join(this.cwd, "workspace", "bottleneck-report.md"),
+      title: options.title ?? `Bottleneck report: ${path.basename(input)}`,
+      csv, workspaceCwd: this.cwd, defaultsRoot: this.options.defaultsRoot,
+      format: options.format ?? "markdown",
+    });
+    if (!written.ok) return this.failed(written.failure, questions, rounds, taskEvents());
+    if (!written.value || (written.value as { rendered?: boolean }).rendered !== true) {
+      return this.failed({
+        code: "REPORT_NOT_RENDERED",
+        reason: `the renderer declined the file: ${((written.value as { problems?: string[] })?.problems ?? []).join("; ") || "no reason given"}`,
+      }, questions, rounds, taskEvents());
+    }
+
+    const task = await this.kernel.finishTask({ ok: true });
+    this.emit("DELIVER", task.status);
+    const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+    if (task.status !== "COMPLETED") {
+      return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+    }
+    // The Markdown is produced from the SAME analysis object the artifact was
+    // rendered from, so the text in the response and the file on disk cannot
+    // disagree about what was found.
+    const markdown = toBottleneckMarkdown(analysis, options.title ?? `Bottleneck report: ${path.basename(input)}`);
+    return {
+      status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
+      report: { markdown, analysis, schema }, kernelEvents: taskEvents(), progress: this.progress,
+    };
+  }
+
   private failed(
-    failure: { code: string; reason: string },
+    failure: { code: string; reason: string; kernelReasonCode?: string },
     questions: ClarifyQuestion[], rounds: number,
     kernelEvents: { type: string; payload: Record<string, unknown> }[],
   ): ConductorResult {
@@ -232,7 +354,7 @@ export class Conductor {
    */
   private async callTool(
     callId: string, tool: string, input: Record<string, unknown>,
-  ): Promise<{ ok: true; value: unknown } | { ok: false; failure: { code: string; reason: string } }> {
+  ): Promise<{ ok: true; value: unknown } | { ok: false; failure: { code: string; reason: string; kernelReasonCode?: string } }> {
     const bound = await this.kernel.beginToolExecution(callId, tool, { toolCallId: callId });
     if (bound === undefined) {
       return { ok: false, failure: { code: "CALL_NOT_BOUND", reason: `the kernel refused to bind ${tool} (task is ${this.kernel.currentTask?.status})` } };
@@ -244,7 +366,11 @@ export class Conductor {
       // artifact is verified once it exists rather than assumed.
       await this.kernel.declareToolOutputs(callId, tool, input);
       await this.kernel.recordToolResult(callId, tool, undefined, true, undefined, decision.reason, decision.violation, decision.tier);
-      return { ok: false, failure: { code: `POLICY_${decision.tier ?? "SOFT_REFUSE"}`, reason: decision.reason } };
+      // The kernel's own tier travels out. A caller that has to guess whether
+      // this was a boundary question or a hazard cannot report it honestly, and
+      // the wedge's whole security claim rests on this being the kernel's
+      // refusal rather than the UI's.
+      return { ok: false, failure: { code: `POLICY_${decision.tier ?? "SOFT_REFUSE"}`, reason: decision.reason, kernelReasonCode: decision.tier ?? "SOFT_REFUSE" } };
     }
     if (decision.decision === "REQUIRE_APPROVAL") {
       // An approval gate that survived precheck authorises nothing, so the tool
@@ -257,9 +383,24 @@ export class Conductor {
     }
     await this.kernel.declareToolOutputs(callId, tool, input);
     try {
-      const value = tool === "csv_read"
-        ? await csvRead({ path: String(input.path) }, { boundary: this.boundary })
-        : await renderPage(input as Parameters<typeof renderPage>[0]);
+      // An explicit dispatch, not a default branch. A tool this Conductor does
+      // not implement must FAIL CLOSED rather than fall through to whichever
+      // capability happened to be written last.
+      let value: unknown;
+      switch (tool) {
+        case "csv_read":
+          value = await csvRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
+        case "render_page":
+          value = await renderPage(input as Parameters<typeof renderPage>[0]);
+          break;
+        case "render_bottleneck_report":
+          value = await renderBottleneckReport(input as Parameters<typeof renderBottleneckReport>[0]);
+          break;
+        default:
+          await this.kernel.recordToolResult(callId, tool, undefined, true);
+          return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
+      }
       await this.kernel.recordToolResult(callId, tool, value, false);
       return { ok: true, value };
     } catch (error) {
@@ -273,12 +414,35 @@ export class Conductor {
 
   /**
    * The one input this conductor understands. Anything that does not resolve to
-   * a CSV inside the workspace becomes a clarify question rather than a guess.
+   * a CSV becomes a clarify question rather than a guess.
+   *
+   * THE BOUNDARY IS NOT CHECKED HERE. That check used to live in this method,
+   * and it was a control in the wrong place: it turned a path outside the
+   * workspace into a clarifying QUESTION ("which CSV should I read?"), so the
+   * kernel never saw the attempt and nothing was recorded. A refusal the user
+   * cannot see is not a control, it is a shrug.
+   *
+   * So the path is resolved and handed to the governed `csv_read`, and the
+   * kernel's policy classifier refuses it (SOFT_REFUSE for out of bounds, a
+   * higher tier for a hazard) with a real event in the stream. Same decision,
+   * same tier, and now it is visible and counted.
    */
   private locateInput(text: string): string | undefined {
-    const match = /[\w./\\-]+\.csv\b/i.exec(text);
-    if (match === null) return undefined;
-    const resolved = path.resolve(this.cwd, match[0]);
-    return this.boundary.check(resolved).allowed ? resolved : undefined;
+    // An explicitly framed input is taken verbatim to its end, so a name that
+    // contains spaces survives intact. Guessing backwards out of the prose
+    // around it is what truncated `rm -rf.csv` to `-rf.csv` and hid a
+    // destructive payload from the kernel entirely.
+    const framed = /(?:^|[;\s])input=(.*)$/s.exec(text);
+    const named = framed?.[1].trim();
+    const raw = named !== undefined && named !== ""
+      ? named
+      : /[\w./\\-]+\.csv\b/i.exec(text)?.[0];
+    if (raw === undefined) return undefined;
+    // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
+    // speaking, not a security control: `<`, `>` and a NUL cannot appear in a
+    // filename on the supported platforms, so there is nothing there for the
+    // kernel to rule on. Anything the kernel COULD rule on is passed on.
+    if (/[<>:"|?*\u0000-\u001f]/.test(raw.replace(/^[A-Za-z]:/, ""))) return undefined;
+    return path.resolve(this.cwd, raw);
   }
 }
