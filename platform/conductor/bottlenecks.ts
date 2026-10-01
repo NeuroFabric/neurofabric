@@ -138,6 +138,20 @@ export interface BottleneckAnalysis {
   readonly divergence: Divergence | null;
 }
 
+/**
+ * RULINGS BY A PERSON, not inferences from a column name.
+ *
+ * R10: the Pega elapsed column is milliseconds. R11: its timestamps are UTC.
+ * Both were open questions in the first real-data findings and both are now
+ * settled. They live here, in ONE place, and the schema memory persists them --
+ * because re-deriving a ruling from a header on every run would quietly discard
+ * it the first time the file was needed.
+ *
+ * R12 (hostnames stay out of generated artefacts) is NOT here: it is a rendering
+ * control, not a fact about a schema, and it is enforced in the renderer.
+ */
+export const OWNER_RULINGS = { durationUnit: "ms", timeZone: "UTC" } as const;
+
 const ERROR_STATUSES = new Set(["4", "5"]);
 
 /**
@@ -454,7 +468,7 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     categories: byFrequency,
     categoriesByElapsed: byElapsed,
     timestampsAreNaive: timestampRows > 0 && naiveTimestamps === timestampRows,
-    durationUnit: "ms",
+    durationUnit: OWNER_RULINGS.durationUnit,
     durationUnitIsRuled: true,
     timeZoneIsRuled: true,
     ambiguousAliases: [...new Set(ambiguousAliases)],

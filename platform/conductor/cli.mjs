@@ -23,8 +23,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { governedIngest, projectPolicyConfig } from "./ingest.ts";
-import { analyseBottlenecks } from "./bottlenecks.ts";
+import { analyseBottlenecks, OWNER_RULINGS } from "./bottlenecks.ts";
 import { renderBottleneckReport } from "./bottleneck-report.ts";
+import { loadSchemaMemory, recallMapping, rememberMapping, schemaMemoryPath } from "./schema-memory.ts";
 
 function usage() {
   console.error("usage: cli.mjs --file <path.csv> [--out <report.html>] [--root <workspace>]");
@@ -75,6 +76,23 @@ if (ingest.refused) {
 
 console.log(`\nrows    ${ingest.rowCount.toLocaleString()}`);
 
+// Consult the memory BEFORE profiling. A remembered mapping is a CANDIDATE:
+// recallMapping drops any entry naming a column this file does not have, so a
+// stale memory is rejected rather than obeyed.
+const memoryFile = schemaMemoryPath(root);
+const memory = await loadSchemaMemory(memoryFile);
+if (memory.corrupt) {
+  console.log("memory  UNREADABLE - proceeding without it (rulings carried in it are lost)");
+}
+const recalled = recallMapping(memory, ingest.csv.headers);
+if (recalled !== null) {
+  console.log(`memory  recalled schema learned from ${recalled.learnedFrom}`
+    + `${recalled.confirmedByOwner === true ? " (owner-confirmed)" : " (unconfirmed)"}`);
+  console.log(`        category=${recalled.roles.category ?? "?"} duration=${recalled.roles.duration ?? "?"} time=${recalled.roles.time ?? "?"}`);
+} else {
+  console.log("memory  no remembered schema for these columns");
+}
+
 const analysis = analyseBottlenecks(ingest.csv);
 console.log(`leader  ${analysis.categoryColumn ?? "no credible category column"}`);
 
@@ -89,6 +107,23 @@ if (!rendered.rendered) {
 }
 
 console.log(`report  ${rendered.path} (${rendered.bytes.toLocaleString()} bytes)`);
+
+// Learn this schema only from a run that actually produced a report. Remembering
+// a mapping from a file that was refused or unreadable would teach the next run
+// something that was never established.
+if (analysis.categoryColumn !== null) {
+  const roles = {};
+  for (const m of analysis.mappings) roles[m.role] = m.column;
+  await rememberMapping(memoryFile, {
+    signature: ingest.csv.headers,
+    marker: ingest.csv.headers.filter((h) => ["alertType", "alert_code", "elapsed_time", "_time", "pega_time", "logger_name"].includes(h)),
+    roles,
+    learnedFrom: path.relative(root, ingest.path) || path.basename(ingest.path),
+    rulings: { durationUnit: OWNER_RULINGS.durationUnit, timeZone: OWNER_RULINGS.timeZone },
+  });
+  console.log(`memory  recorded this schema for next time`);
+}
+
 if (analysis.divergence !== null) {
   const d = analysis.divergence;
   console.log(`\nDIVERGENCE: ${d.byElapsed.label} carries ${d.byElapsed.count} alerts and ` +
