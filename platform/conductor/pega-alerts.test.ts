@@ -101,14 +101,17 @@ test("G5 every category cites its evidence rows", async () => {
   assert.equal(analysis.categories[0].rows[0], 2, "row numbering must be file lines, header excluded");
 });
 
-test("G6 elapsed time sums without claiming a unit", async () => {
+test("G6 elapsed time sums, and the unit is now RULED rather than guessed", async () => {
   const csv = await pegaExport(realShape);
   const analysis = analyseBottlenecks(csv);
   const mapping = analysis.mappings.find((m) => m.role === "duration");
   assert.ok(mapping, "elapsed_time must be recognised as a duration");
   assert.equal(mapping.column, "elapsed_time");
-  assert.equal(mapping.hypothesis, true, "the unit is not stated anywhere in the export, so the reading is a hypothesis");
-  assert.match(mapping.note, /unit/i, "the missing unit must be said out loud");
+  // R10 supersedes this pin. It used to assert the unit was a HYPOTHESIS,
+  // because no export stated one. The owner has now ruled it to milliseconds,
+  // so it is established fact and the page may print ms.
+  assert.match(mapping.note, /ruling R10/i, "the note must name the ruling, not a guess");
+  assert.equal(analysis.durationUnit, "ms");
 });
 
 test("G7 a threshold comparison is a breach count, flagged as inferred", async () => {
@@ -228,14 +231,24 @@ test("R13b an alias is only appended when it is unambiguous", async () => {
 });
 
 test("D1 a divergence between the two rankings is measured, not just noticed", async () => {
-  const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  // Shaped like the REAL export, where the two orderings disagree at the top:
+  // a noisy category that fires constantly and costs almost nothing, and a rare
+  // one that costs a thousand times more. The synthetic Pega fixture above does
+  // NOT diverge at the top -- both orderings lead with PEGA0001 there -- which is
+  // why this needs its own data rather than borrowing that one.
+  const cwd = await makeTempWorkspace("nf-diverge-");
+  const header = "_time,alertType,alert_code,logger_name,elapsed_time,threshold";
+  const rows = [];
+  for (let i = 0; i < 20; i += 1) rows.push(`2026-09-30T12:00:00Z,performance,PEGA_NOISY,logger-noisy,100,1000`);
+  for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:00:00Z,performance,PEGA_MEGA,logger-mega,1000000,1000`);
+  await writeFixture(cwd, "diverge.csv", `${header}\n${rows.join("\n")}\n`);
+
+  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "diverge.csv") }));
   assert.ok(analysis.divergence !== null, "the orderings disagree, so divergence must be reported");
-  assert.equal(analysis.divergence.byFrequency.key, "PEGA0001");
-  assert.equal(analysis.divergence.byElapsed.key, "PEGA0005");
-  // 10000 / 21543*... compute from the fixture: 13x1200=15600? no - real shape
-  assert.equal(analysis.divergence.totalRatio, 10_000 / 15_600);
-  assert.equal(analysis.divergence.alertRatio, 4 / 13);
+  assert.equal(analysis.divergence.byFrequency.key, "PEGA_NOISY");
+  assert.equal(analysis.divergence.byElapsed.key, "PEGA_MEGA");
+  assert.equal(analysis.divergence.totalRatio, 1000, "2,000,000 over 2,000");
+  assert.equal(analysis.divergence.alertRatio, 0.1, "a tenth of the alerts");
 });
 
 test("D2 no divergence is reported when both rankings agree", async () => {

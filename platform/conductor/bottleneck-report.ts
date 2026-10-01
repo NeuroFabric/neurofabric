@@ -85,7 +85,7 @@ function categoryTable(rows: readonly CategoryStat[], title: string, order: "fre
   if (rows.length === 0) return "";
   const body = rows.map((c, i) => `    <tr${i === 0 ? ' class="top"' : ""}>
       <td class="rank">${i === 0 ? "<strong>1</strong>" : i + 1}</td>
-      <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.key)}</td>
+      <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.label)}</td>
       <td class="num">${c.count}</td>
       ${order === "elapsed" ? `<td class="num">${c.totalElapsed === null ? "&mdash;" : c.totalElapsed.toLocaleString()}</td>` : ""}
       <td class="num">${c.breachCount}</td>
@@ -131,6 +131,37 @@ ${dropped}
 ${absent}`;
 }
 
+/**
+ * THE HEADLINE. The divergence between ranking by frequency and ranking by
+ * elapsed time is the finding this product exists to surface, so it is stated
+ * above every table, in plain numbers, with nothing required to read it.
+ *
+ * When both orderings agree this renders nothing at all. A banner that always
+ * shouts is a banner nobody reads, and D2 pins that.
+ */
+function divergenceBanner(a: BottleneckAnalysis): string {
+  const d = a.divergence;
+  if (d === null) return "";
+  const elapsed = d.byElapsed.totalElapsed;
+  const freq = d.byFrequency.totalElapsed;
+  const ratio = d.totalRatio === null ? null : d.totalRatio;
+  const pctOfCost = elapsed !== null && elapsed + (freq ?? 0) > 0 && elapsed > 0
+    ? (elapsed / (elapsed + (freq ?? 0))) * 100 : null;
+
+  const multiple = ratio === null ? null
+    : ratio >= 10 ? Math.round(ratio) : Number(ratio.toFixed(1));
+  const comparison = ratio === null ? "" : ratio >= 1
+    ? `${multiple}x the total elapsed time`
+    : `${(1 / ratio).toFixed(1)}x LESS total elapsed time`;
+
+  return `<div class="banner">
+  <p class="banner-title">The two rankings disagree. That is the finding.</p>
+  <p><strong>Most frequent:</strong> ${escapeHtml(d.byFrequency.label)} &mdash; ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.</p>
+  <p><strong>Most expensive:</strong> ${escapeHtml(d.byElapsed.label)} &mdash; ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}, with ${comparison}${pctOfCost === null ? "" : ` and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.</p>
+  <p class="banner-note">Ranking by frequency alone would have pointed at ${escapeHtml(d.byFrequency.key)} and buried ${escapeHtml(d.byElapsed.key)}. Evidence rows are in the tables below.</p>
+</div>`;
+}
+
 /** Render the report. Writes nothing when the CSV reported structural problems. */
 export async function renderBottleneckReport(input: {
   path: string;
@@ -170,6 +201,10 @@ export async function renderBottleneckReport(input: {
   .none { color: #5b616e; }
   .lead { border-left: 3px solid #16181d; padding: .35rem 0 .35rem .75rem; margin: 0 0 1.25rem; }
   .gap { border-left: 3px solid #b23c17; padding: .35rem 0 .35rem .75rem; background: #fdf6f3; }
+  .banner { border: 2px solid #16181d; padding: .75rem 1rem; margin: 0 0 1.5rem; }
+  .banner p { margin: .3rem 0; }
+  .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
+  .banner-note { color: #5b616e; font-size: .85rem; }
   tr.top td { font-weight: 600; }
   .lead-key { font-weight: 700; }
 </style>
@@ -180,6 +215,7 @@ export async function renderBottleneckReport(input: {
     ? ` &middot; ${analysis.errorRows} error(s) &middot; error rate ${pct(analysis.errorRate)}`
     : " &middot; no status column, so no error rate is claimed"}</p>
 ${lead}
+${divergenceBanner(analysis)}
 ${mappingsSection(analysis)}
 ${categoryTable(analysis.categories, "Alert categories by frequency", "frequency")}
 ${categoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "elapsed")}

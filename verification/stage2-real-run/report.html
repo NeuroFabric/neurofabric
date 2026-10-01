@@ -17,6 +17,10 @@
   .none { color: #5b616e; }
   .lead { border-left: 3px solid #16181d; padding: .35rem 0 .35rem .75rem; margin: 0 0 1.25rem; }
   .gap { border-left: 3px solid #b23c17; padding: .35rem 0 .35rem .75rem; background: #fdf6f3; }
+  .banner { border: 2px solid #16181d; padding: .75rem 1rem; margin: 0 0 1.5rem; }
+  .banner p { margin: .3rem 0; }
+  .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
+  .banner-note { color: #5b616e; font-size: .85rem; }
   tr.top td { font-weight: 600; }
   .lead-key { font-weight: 700; }
 </style>
@@ -25,6 +29,12 @@
 <h1>Bottleneck report</h1>
 <p class="meta">24 row(s) &middot; ranked by <strong>alert_code</strong> &middot; no status column, so no error rate is claimed</p>
 <p class="lead"><strong>#1 by frequency:</strong> PEGA0001 &mdash; 13 alert(s), 13 over threshold, rows 2, 4, 5, 7, 8 (+8 more). <strong>#1 by total elapsed:</strong> PEGA0005 (3,405,355).</p>
+<div class="banner">
+  <p class="banner-title">The two rankings disagree. That is the finding.</p>
+  <p><strong>Most frequent:</strong> PEGA0001 (HttpAPI) &mdash; 13 alert(s), 21,543 ms total.</p>
+  <p><strong>Most expensive:</strong> PEGA0005 &mdash; 4 alert(s), 3,405,355 ms total, with 158x the total elapsed time and 99.4% of all elapsed time in this export.</p>
+  <p class="banner-note">Ranking by frequency alone would have pointed at PEGA0001 and buried PEGA0005. Evidence rows are in the tables below.</p>
+</div>
 <h2>How this page was read</h2>
 <p class="none">Every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>
 <table>
@@ -34,7 +44,7 @@
       <td>time</td>
       <td>_time</td>
       <td>hypothesis</td>
-      <td class="cite">inferred from name; 24 distinct</td>
+      <td class="cite">UTC by owner ruling R11</td>
     </tr>
     <tr>
       <td>source</td>
@@ -49,10 +59,16 @@
       <td class="cite">inferred from name; 4 distinct</td>
     </tr>
     <tr>
+      <td>alias</td>
+      <td>logger_name</td>
+      <td>hypothesis</td>
+      <td class="cite">inferred from name; 6 distinct</td>
+    </tr>
+    <tr>
       <td>duration</td>
       <td>elapsed_time</td>
       <td>hypothesis</td>
-      <td class="cite">unit not stated in export</td>
+      <td class="cite">ms by owner ruling R10</td>
     </tr>
     <tr>
       <td>threshold</td>
@@ -73,7 +89,7 @@
   <tbody>
     <tr class="top">
       <td class="rank"><strong>1</strong></td>
-      <td class="lead-key">PEGA0001</td>
+      <td class="lead-key">PEGA0001 (HttpAPI)</td>
       <td class="num">13</td>
       
       <td class="num">13</td>
@@ -81,7 +97,7 @@
     </tr>
     <tr>
       <td class="rank">2</td>
-      <td>PEGA0028</td>
+      <td>PEGA0028 (Executable)</td>
       <td class="num">5</td>
       
       <td class="num">5</td>
@@ -97,7 +113,7 @@
     </tr>
     <tr>
       <td class="rank">4</td>
-      <td>PEGA0011</td>
+      <td>PEGA0011 (QueueProcessorExecution)</td>
       <td class="num">2</td>
       
       <td class="num">2</td>
@@ -119,7 +135,7 @@
     </tr>
     <tr>
       <td class="rank">2</td>
-      <td>PEGA0011</td>
+      <td>PEGA0011 (QueueProcessorExecution)</td>
       <td class="num">2</td>
       <td class="num">22,114</td>
       <td class="num">2</td>
@@ -127,7 +143,7 @@
     </tr>
     <tr>
       <td class="rank">3</td>
-      <td>PEGA0001</td>
+      <td>PEGA0001 (HttpAPI)</td>
       <td class="num">13</td>
       <td class="num">21,543</td>
       <td class="num">13</td>
@@ -135,7 +151,7 @@
     </tr>
     <tr>
       <td class="rank">4</td>
-      <td>PEGA0028</td>
+      <td>PEGA0028 (Executable)</td>
       <td class="num">5</td>
       <td class="num">5,278</td>
       <td class="num">5</td>
