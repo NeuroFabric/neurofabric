@@ -199,6 +199,8 @@ export interface BottleneckAnalysis {
    * landmine. The RENDERER decides when to show it.
    */
   readonly numerical: NumericalProfile;
+  /** Dirty cells and outliers, across every numeric column. See `DataHealth`. */
+  readonly health: DataHealth;
   readonly latency: readonly LatencyBand[];
   /** Rows whose timestamp could not be read, so they are excluded from byHour. */
   readonly unreadableTimestamps: readonly number[];
@@ -549,6 +551,43 @@ export interface NumericalProfile {
   readonly rows: number;
 }
 
+/** What is wrong with ONE column, for the health section. */
+export interface ColumnHealth {
+  readonly column: string;
+  readonly dirty: number;
+  readonly empty: number;
+  readonly outliers: number;
+  /** The most extreme outlier value, so the warning carries a magnitude. */
+  readonly worstValue: number | null;
+  /** The fence that value cleared, so the claim can be checked. */
+  readonly fence: number | null;
+  /** Distinct offending values, for the type mismatch. */
+  readonly examples: readonly string[];
+}
+
+/**
+ * THE FILE'S HEALTH, IN SENTENCES RATHER THAN TABLE CELLS.
+ *
+ * Scoped to EVERY numeric column, not to the ten the summary displays. This is
+ * the detail that matters most and the easiest to get wrong: a health check that
+ * read only the visible ten would report "no dirty data" while a dirty column
+ * sat silently in the hidden ten, which is worse than no health check at all,
+ * because it issues a clean bill of health for a file that is not clean.
+ *
+ * `columns` lists only the columns that have something to report, so a reader is
+ * never scrolling a list of the well-behaved to find the two that are not.
+ */
+export interface DataHealth {
+  readonly columns: readonly ColumnHealth[];
+  readonly dirtyColumns: number;
+  readonly outlierColumns: number;
+  readonly dirtyCells: number;
+  readonly emptyCells: number;
+  readonly outlierCells: number;
+  /** No dirty cells and no outliers anywhere. A FINDING, not an absence. */
+  readonly clean: boolean;
+}
+
 /** Ten rows is a data dictionary; twenty is noise. The report says which. */
 const MAX_NUMERIC_COLUMNS = 10;
 
@@ -639,7 +678,7 @@ function detectOutliers(values: readonly number[]): { outliers: number; low: num
  * A cell that will not parse is EXCLUDED from min, max and mean, and counted in
  * `missing`. It is never treated as zero: zero is a value the file stated.
  */
-function numericalProfile(csv: CsvReadResult): NumericalProfile {
+function numericalProfile(csv: CsvReadResult): { numerical: NumericalProfile; health: DataHealth } {
   const numericColumns = profileGenericColumns(csv.headers, csv.rows).filter((c) => c.kind === "numeric");
   const stats = numericColumns.map((c): NumericColumnStat => {
     let measured = 0;
@@ -686,10 +725,47 @@ function numericalProfile(csv: CsvReadResult): NumericalProfile {
 
   const ordered = [...stats].sort((a, b) => (b.spread ?? -1) - (a.spread ?? -1) || a.column.localeCompare(b.column));
   return {
-    columns: ordered.slice(0, MAX_NUMERIC_COLUMNS),
-    numericColumns: stats.length,
-    truncated: stats.length > MAX_NUMERIC_COLUMNS,
-    rows: csv.rows.length,
+    numerical: {
+      columns: ordered.slice(0, MAX_NUMERIC_COLUMNS),
+      numericColumns: stats.length,
+      truncated: stats.length > MAX_NUMERIC_COLUMNS,
+      rows: csv.rows.length,
+    },
+    // Health is built from the FULL list, before the display cap. See DataHealth.
+    health: dataHealth(ordered),
+  };
+}
+
+/**
+ * TURN THE PER-COLUMN STATS INTO A VERDICT.
+ *
+ * Called with the FULL list, before the ten-column display cap, which is the
+ * whole point: health is not scoped to what the report chose to show.
+ */
+function dataHealth(all: readonly NumericColumnStat[]): DataHealth {
+  const columns = all
+    .filter((c) => c.dirty > 0 || c.empty > 0 || c.outliers > 0)
+    .map((c): ColumnHealth => ({
+      column: c.column,
+      dirty: c.dirty,
+      empty: c.empty,
+      outliers: c.outliers,
+      worstValue: c.outlierMax ?? c.outlierMin,
+      fence: c.outlierMax !== null ? c.fenceUpper : c.outlierMin !== null ? c.fenceLower : null,
+      examples: c.dirtyExamples,
+    }))
+    // Worst first: type mismatches above blank cells above outliers is NOT the
+    // order, because a broken producer outranks a null, and an absurd value
+    // outranks both. Sorting by severity keeps the top of the list actionable.
+    .sort((a, b) => b.dirty - a.dirty || b.outliers - a.outliers || a.column.localeCompare(b.column));
+  return {
+    columns,
+    dirtyColumns: columns.filter((c) => c.dirty > 0).length,
+    outlierColumns: columns.filter((c) => c.outliers > 0).length,
+    dirtyCells: columns.reduce((s, c) => s + c.dirty, 0),
+    emptyCells: columns.reduce((s, c) => s + c.empty, 0),
+    outlierCells: columns.reduce((s, c) => s + c.outliers, 0),
+    clean: columns.length === 0,
   };
 }
 
@@ -929,6 +1005,7 @@ export function analyseBottlenecks(
     }
     : null;
 
+  const numeric = numericalProfile(csv);
   const total = csv.rows.length;
   // PEGA VOCABULARY IS EARNED, NEVER DEFAULTED. "Alert" and "threshold" appear
   // only when a mapping a PERSON checked is actually being applied. Three states
@@ -961,7 +1038,8 @@ export function analyseBottlenecks(
     recurring: rank(signatures),
     byHour: rank(hours),
     hourly: hourlyProfile(hours),
-    numerical: numericalProfile(csv),
+    numerical: numeric.numerical,
+    health: numeric.health,
     latency: bands.filter((b) => b.rows.length > 0).map((b) => ({ label: b.label, count: b.rows.length, rows: b.rows })),
     unreadableTimestamps: unreadable,
     problems: csv.problems,
