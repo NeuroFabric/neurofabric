@@ -9,6 +9,7 @@
     "test:mjs": "node --test platform/*.test.mjs",
     "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts",
     "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
+    "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
