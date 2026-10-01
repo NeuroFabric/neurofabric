@@ -98,6 +98,15 @@ export interface BottleneckAnalysis {
   /** Categories by frequency, and by total elapsed -- which are not the same order. */
   readonly categories: readonly CategoryStat[];
   readonly categoriesByElapsed: readonly CategoryStat[];
+  /**
+   * True when the time column carries no zone, so the instants are host-relative.
+   *
+   * This is not pedantry. Bucketing a naive timestamp under a heading that says
+   * UTC is only true on a host whose zone IS UTC. On a half-hour-offset host
+   * every bucket is silently shifted by thirty minutes, and the report looks
+   * entirely normal while being wrong.
+   */
+  readonly timestampsAreNaive: boolean;
 }
 
 const ERROR_STATUSES = new Set(["4", "5"]);
@@ -262,6 +271,14 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
 
   const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[] }>();
 
+  let naiveTimestamps = 0;
+  let timestampRows = 0;
+  const NAIVE_TIME = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/;
+  // A zone suffix makes the instant unambiguous. Without this check the shape
+  // regex matches the PREFIX of a Z-suffixed timestamp and reports a UTC instant
+  // as host-relative, which is the opposite error and just as misleading.
+  const HAS_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
   csv.rows.forEach((row, index) => {
     // +2: sample rows start after the header, and the row numbers a reader sees
     // are file line numbers. Getting this wrong would cite the wrong evidence.
@@ -278,7 +295,10 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     }
 
     if (timeCol !== undefined) {
-      const instant = parseInstant(String(row[timeCol] ?? ""));
+      const raw = String(row[timeCol] ?? "");
+      timestampRows += 1;
+      if (NAIVE_TIME.test(raw.trim()) && !HAS_ZONE.test(raw.trim())) naiveTimestamps += 1;
+      const instant = parseInstant(raw);
       if (instant === undefined) {
         unreadable.push(rowNumber);
       } else {
@@ -353,5 +373,6 @@ export function analyseBottlenecks(csv: CsvReadResult): BottleneckAnalysis {
     categoryColumn: categoryCol ?? null,
     categories: byFrequency,
     categoriesByElapsed: byElapsed,
+    timestampsAreNaive: timestampRows > 0 && naiveTimestamps === timestampRows,
   };
 }

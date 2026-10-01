@@ -125,9 +125,44 @@ test("G7 a threshold comparison is a breach count, flagged as inferred", async (
 });
 
 test("G8 time buckets span the export, not one instant", async () => {
-  const csv = await pegaExport(realShape);
+  // Explicit UTC (trailing Z) on purpose. This fixture once used NAIVE
+  // timestamps and passed only because this host's timezone is Asia/Calcutta --
+  // a half-hour offset, which pushed 12:00 local into UTC hour 06 and 12:30 into
+  // hour 07, manufacturing two buckets. On a UTC runner the same data yields one
+  // and the test failed. A fixture that depends on the developer's timezone is a
+  // fixture that tests the developer.
+  const cwd = await makeTempWorkspace("nf-pega-tz-");
+  const header = "_time,alertType,alert_code,elapsed_time,threshold";
+  const rows = [
+    "2026-09-30T12:00:00.000Z,performance,PEGA0001,1200,1000",
+    "2026-09-30T13:10:00.000Z,performance,PEGA0028,800,1000",
+    "2026-09-30T14:20:00.000Z,performance,PEGA0005,2500,1000",
+    "2026-09-30T15:30:00.000Z,performance,PEGA0011,300,1000",
+  ];
+  await writeFixture(cwd, "tz.csv", `${header}\n${rows.join("\n")}\n`);
+  const csv = await csvRead({ path: path.join(cwd, "tz.csv") });
   const analysis = analyseBottlenecks(csv);
-  assert.ok(analysis.byHour.length >= 2, `expected multiple hours, got ${analysis.byHour.length}`);
+  assert.equal(analysis.byHour.length, 4, `expected four hourly buckets, got ${analysis.byHour.length}`);
+  assert.equal(analysis.byHour[0].key, "2026-09-30T12");
+  assert.equal(analysis.timestampsAreNaive, false, "a trailing Z makes them unambiguous");
+});
+
+test("G8b NAIVE timestamps are reported as ambiguous, not silently localised", async () => {
+  // The real Pega export carries timestamps with no zone. Bucketing those under
+  // a heading that says UTC is only true on a host whose zone IS UTC -- and this
+  // one is not, so the buckets would be silently shifted by half an hour.
+  const cwd = await makeTempWorkspace("nf-pega-naive-");
+  const header = "_time,alertType,alert_code,elapsed_time,threshold";
+  const rows = [
+    "2026-09-30 12:00:00.000,performance,PEGA0001,1200,1000",
+    "2026-09-30 13:00:00.000,performance,PEGA0028,800,1000",
+  ];
+  await writeFixture(cwd, "naive.csv", `${header}\n${rows.join("\n")}\n`);
+  const csv = await csvRead({ path: path.join(cwd, "naive.csv") });
+  const analysis = analyseBottlenecks(csv);
+  assert.equal(analysis.timestampsAreNaive, true,
+    "timestamps without a zone are host-relative, and the page must say so");
+  assert.ok(analysis.byHour.length >= 1, "they are still bucketed, just not claimed to be UTC");
 });
 
 test("G9 a missing field is named, not degraded silently", async () => {

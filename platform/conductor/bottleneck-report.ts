@@ -183,7 +183,9 @@ ${lead}
 ${mappingsSection(analysis)}
 ${categoryTable(analysis.categories, "Alert categories by frequency", "frequency")}
 ${categoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "elapsed")}
-${bottleneckTable(analysis.byHour, "Rows by hour", "hour (UTC)")}
+${bottleneckTable(analysis.byHour, analysis.timestampsAreNaive
+    ? "Rows by hour (host-local -- these timestamps carry no zone)"
+    : "Rows by hour (UTC)", "hour")}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>
 <p class="none">${analysis.unreadableTimestamps.length} row(s) carried an unreadable timestamp: rows ${escapeHtml(cite(analysis.unreadableTimestamps))}.</p>` : ""}
