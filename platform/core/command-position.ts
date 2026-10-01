@@ -133,14 +133,35 @@ const SHELL_EXECUTING: ReadonlySet<string> = new Set([
  * `-Command`, because PowerShell accepts both spellings and they are not the
  * same token on a case-insensitive filesystem.
  *
- * Combined forms (`sh -lc "..."`) are NOT read: `-lc` is neither flag, so its
- * payload is not recognised and the token inside it is not seen as command
- * position. That is a gap, recorded here rather than left to be discovered, and
- * it fails toward SOFT rather than toward HARD.
+ * Combined forms are read by `isShellPayloadFlag` below rather than listed here,
+ * because they are an infinite set: `-lc`, `-ic`, `-xc`, `-euxc` are all "the c
+ * flag with some friends" and enumerating them would be wrong the moment someone
+ * types a combination nobody thought of.
  */
 const SHELL_PAYLOAD_FLAGS: ReadonlySet<string> = new Set([
   "-c", "/c", "-command", "-Command",
 ]);
+
+/**
+ * Does this token take a command payload after it?
+ *
+ * The direct forms are the table. The CLUSTER form is the fix for gap 4 in
+ * handoff.md 10a: `sh -lc "<token> ..."` was not recognised at all, so the
+ * payload was never parsed and the token inside it sat in no position -- the
+ * guard was weaker than the rule it documents, and `-lc` is how people normally
+ * write `sh -c`.
+ *
+ * A cluster qualifies when it is a run of single letters CONTAINING c. Two
+ * exclusions matter: `--command` is rejected because the long form is spelled
+ * out, not clustered, and treating every `--word` as a cluster would make
+ * `--continue` a payload flag; and the letter must be a letter, so `-c2` and
+ * `-O3` do not match, because a cluster carrying an argument does not take its
+ * value from the next token.
+ */
+function isShellPayloadFlag(token: string): boolean {
+  if (SHELL_PAYLOAD_FLAGS.has(token)) return true;
+  return /^-[A-Za-z]+$/.test(token) && token.slice(1).includes("c");
+}
 
 /** The `find` options whose body is a nested command line. */
 const FIND_EXEC_OPTIONS: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok"]);
@@ -214,32 +235,51 @@ type Unclassified = { classified: false; reason: string; commandTokens: Readonly
 type SegmentParse = { patternTokens: Set<string>; commandTokens: Set<string>; classified: true };
 
 /**
- * The first bare operand after an unmeasured head: the program such a wrapper
- * would delegate to.
+ * Every token that COULD be the program an unmeasured head delegates to.
  *
- * Option values are skipped on the POSIX convention that `-X` consumes the next
- * token. That convention is NOT measured for an unmeasured program -- nothing
- * about it can be from this host -- so this is an approximation. It fails in the
- * safe direction in the case that matters: a wrapper given `-u root` skips the
- * value and still reaches its command. It UNDER-detects in the opposite case,
- * where an option genuinely takes no value and one operand too many is skipped.
- * That gap is recorded rather than papered over; closing it properly needs the
- * measurement host to move to Linux, which is Task 2.
+ * For a measured wrapper this is unambiguous, and the first bare operand is it.
+ * For an UNMEASURED program nothing on this host can say whether `-X` takes a
+ * value, so this does not guess which token is delegated -- it records every
+ * token whose role is genuinely ambiguous and lets the caller decide:
+ *
+ *   - the token after a bare option, which is either that option's value or the
+ *     delegated program, and
+ *   - the first bare token after them, which is certainly the delegated program.
+ *
+ * It stops at that first bare token. A VCS wrapper's operands include its
+ * commit message, and claiming those would undo tiering, so the rest of the
+ * segment belongs to the delegated program and not to the wrapper.
+ *
+ * This is the fix for gap 3 in handoff.md 10a. The previous version assumed
+ * `-X` consumes the next token, which happened to fail CLOSED where the option
+ * really did take a value -- and failed OPEN where it did not: `sudo -n <token>
+ * notes.txt` skipped the token along with the flag and named `notes.txt` as the
+ * delegated program, so the token was never reached. Recording both readings
+ * can only over-detect on an unmeasured head, which is the direction R6 already
+ * fails and the only direction that does not let something through.
  */
-function delegatedOperand(tokens: readonly string[], start: number): string | undefined {
+function delegatedOperands(tokens: readonly string[], start: number): ReadonlySet<string> {
+  const candidates = new Set<string>();
   let index = start;
   while (index < tokens.length) {
     const token = tokens[index];
-    if (token === "--") return tokens[index + 1];
+    if (token === "--") {
+      const next = tokens[index + 1];
+      if (next !== undefined) candidates.add(next);
+      break;
+    }
     if (token.startsWith("-")) {
       // An attached value (`-u=root`) has nothing after it to skip.
       if (token.includes("=")) { index += 1; continue; }
+      const next = tokens[index + 1];
+      if (next !== undefined && !next.startsWith("-")) candidates.add(next);
       index += 2;
       continue;
     }
-    return token;
+    candidates.add(token);
+    break;
   }
-  return undefined;
+  return candidates;
 }
 
 /** Split on the operators that separate one command from the next. */
@@ -365,6 +405,25 @@ function commandOperandIndex(
   return { index };
 }
 
+/**
+ * Parse whatever follows a shell's payload flag, as a command line in its own
+ * right. Shared by both R7 halves so they cannot drift apart again.
+ */
+function parseShellPayload(
+  tokens: readonly string[],
+  index: number,
+  depth: number,
+  patternTokens: Set<string>,
+  commandTokens: Set<string>,
+  delegatedTokens: Set<string>,
+): void {
+  const flagIndex = tokens.findIndex((t, i) => i > index && isShellPayloadFlag(t));
+  if (flagIndex === -1) return;
+  const payload = tokens[flagIndex + 1];
+  if (payload === undefined) return;
+  parseCommandLine(payload, depth + 1, patternTokens, commandTokens, delegatedTokens);
+}
+
 function parseTokens(
   tokens: readonly string[],
   depth: number,
@@ -379,19 +438,36 @@ function parseTokens(
 
   const head = tokens[0];
 
-  // `sh -c` / `bash -c`: the payload is a command line in its own right.
+  // `sh -c` / `bash -c`, AND THE COMBINED FORMS `sh -lc`, `bash -ic`.
+  //
+  // This used to be `tokens.indexOf("-c", 1)`, which found nothing in a cluster
+  // and returned "invoked without -c" -- so `sh -lc "<token> ..."` was not merely
+  // unparsed, it was actively declared unreadable, and every rule behind this
+  // branch was unreachable for it. Reading the cluster instead is the whole of
+  // the fix for gap 4 in handoff.md 10a.
   if (PAYLOAD_WRAPPERS.has(head)) {
-    const cIndex = tokens.indexOf("-c", 1);
+    const cIndex = tokens.findIndex((t, i) => i > 0 && isShellPayloadFlag(t));
     if (cIndex === -1) {
-      // `sh` with no `-c` reads a script from stdin, which is not knowable here.
-      return { classified: false, reason: `'${head}' invoked without -c`, commandTokens };
+      // `sh` with no payload flag reads a script from stdin, which is not knowable here.
+      return { classified: false, reason: `'${head}' invoked without a command payload flag`, commandTokens };
     }
     const payload = tokens[cIndex + 1];
     if (payload === undefined) return { classified: false, reason: `-c carries no payload`, commandTokens };
+    // TWO READINGS OF WHERE THE PAYLOAD IS, AND BOTH ARE PARSED. `sh -lc "..."`
+    // puts it directly after the flag, which is what POSIX says. `sh -c -l
+    // "..."` puts a further flag in between, which is what people who want a
+    // login shell type. Parsing only the first reading leaves the second one
+    // unread, and unread is the direction things get through -- so when the token
+    // after the flag is itself a flag, the first non-flag token after it is
+    // parsed as well. The accumulators are sets, so the overlap is free.
     // The payload's own segments are not surfaced here: only the shared union
     // accumulators matter to this step, and the top-level `parseCommandLine`
     // owns the per-segment view.
     const nested = parseCommandLine(payload, depth + 1, patternTokens, commandTokens, delegatedTokens);
+    if (payload.startsWith("-")) {
+      const later = tokens.slice(cIndex + 2).find((t) => !t.startsWith("-"));
+      if (later !== undefined) parseCommandLine(later, depth + 1, patternTokens, commandTokens, delegatedTokens);
+    }
     if (!nested.classified) return { classified: false, reason: nested.reason ?? "unclassified payload", commandTokens };
     return { patternTokens, commandTokens, classified: true };
   }
@@ -438,6 +514,15 @@ function parseTokens(
   // so a command found inside a wrapper or a payload lands here too.
   commandTokens.add(command);
 
+  // R7, FIRST HALF: A COMMAND THAT IS A SHELL takes its payload after a flag,
+  // and that payload will RUN, so it is command position and must be parsed as
+  // one. This has to happen BEFORE the wrapper recursion below, because `sh` is
+  // a PAYLOAD_WRAPPER and recursing into `-lc` puts a flag cluster where the
+  // command used to be -- by which point nothing knows a shell was ever
+  // involved. That ordering bug is exactly why `sh -lc` stayed unread while
+  // `sudo sh -c` worked.
+  if (SHELL_EXECUTING.has(command)) parseShellPayload(tokens, index, depth, patternTokens, commandTokens, delegatedTokens);
+
   // A wrapper's command operand may itself be a wrapper: `timeout 5 xargs rm`.
   if (COMMAND_WRAPPERS.has(command) || PAYLOAD_WRAPPERS.has(command) || command === "find") {
     return parseTokens(tokens.slice(index), depth + 1, patternTokens, commandTokens, delegatedTokens);
@@ -448,24 +533,22 @@ function parseTokens(
   // An unmeasured program head is not a claim that it is safe.
   if (!COMMAND_WRAPPERS.has(command) && !PATTERN_COMMAND_HEADS.has(command)) {
     // R6. Nothing measurable here says whether this program is a wrapper that
-    // runs its first operand or a leaf command that merely prints it, so the
-    // operand it would delegate to is recorded and the matcher fails it closed.
-    // Only the DELEGATED operand, never the rest: a VCS wrapper's operands
-    // include its commit message, and claiming those would undo tiering.
-    const delegated = delegatedOperand(tokens, index + 1);
-    if (delegated !== undefined) delegatedTokens.add(delegated);
-    // R7: delegating to a shell-executing command means the payload behind it
-    // will RUN, so it is command position and has to be parsed as one. Without
-    // this the token inside `sudo sh -c "..."` is reached by no rule at all --
-    // not by delegation (which names the shell) and not by the parse (which
-    // stopped here).
-    if (delegated !== undefined && SHELL_EXECUTING.has(delegated)) {
-      const flagIndex = tokens.findIndex(
-        (t, i) => i > index && SHELL_PAYLOAD_FLAGS.has(t),
-      );
-      if (flagIndex !== -1 && tokens[flagIndex + 1] !== undefined) {
-        parseCommandLine(tokens[flagIndex + 1], depth + 1, patternTokens, commandTokens, delegatedTokens);
-      }
+    // runs its first operand or a leaf command that merely prints it, so every
+    // plausible operand it would delegate to is recorded and the matcher fails
+    // it closed.
+    const delegated = delegatedOperands(tokens, index + 1);
+    for (const candidate of delegated) delegatedTokens.add(candidate);
+    // R7, SECOND HALF: delegating to a shell-executing command means the payload
+    // behind it will RUN, so it is command position and has to be parsed as one.
+    // Without this the token inside `sudo sh -c "..."` is reached by no rule at
+    // all -- not by delegation (which names the shell) and not by the parse
+    // (which stopped here).
+    //
+    // THE COMMAND ITSELF IS NOT TESTED HERE, ONLY ITS DELEGATION. `sh -lc`
+    // delegates to nothing -- it IS the shell -- so it was already handled above,
+    // before the wrapper recursion could lose the fact that a shell was involved.
+    if ([...delegated].some((d) => SHELL_EXECUTING.has(d))) {
+      parseShellPayload(tokens, index, depth, patternTokens, commandTokens, delegatedTokens);
     }
     return { classified: false, reason: `'${command}' is not a measured command or wrapper`, commandTokens };
   }
