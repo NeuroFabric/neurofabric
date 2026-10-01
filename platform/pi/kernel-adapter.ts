@@ -1291,13 +1291,55 @@ export class KernelAdapter {
       validation = { status: "VALID", validator: "pi-result", message: "Pi returned a successful tool result" };
     }
 
-    if (validation.status === "INVALID" || validation.status === "INCONCLUSIVE") {
+    // F006 §5 item 8. A REFUSAL IS NOT A FAILURE OF THE ATTEMPT, so it must not
+    // block the attempt wherever it lands — including here, and this is the
+    // branch that was missing it.
+    //
+    // Before this, `attemptBlocked` was set from the ValidationResult alone, and
+    // a sibling that was refused set it exactly as a sibling that genuinely
+    // faulted did. Then the LAST sibling succeeded, `lastValidation` was VALID,
+    // and `finishTask` killed the task at :1807 with the only account it had:
+    // "One or more results in this attempt failed or could not be verified" —
+    // no rule, no policy, no path, and nothing failed verification. A refusal is
+    // an ANSWER. It cannot be a fault, and it cannot block.
+    //
+    // Classification is what makes the answer attributable. The full recovery
+    // block below cannot run here: it calls `advance`, and the task is
+    // EXECUTING with siblings still in flight. So the sibling path classifies
+    // the refusal itself — the same RECOVERY_STARTED/SOFT_REFUSAL_CONTINUED
+    // pair the lone path emits (:1368/:1421), carrying the policy's own words —
+    // and books nothing, because a refused call that charged a budget could
+    // exhaust it purely by being refused.
+    //
+    // A genuine fault is untouched: it still blocks, and it still blocks by
+    // exactly the same line of code it always did.
+    const siblingDenial = error instanceof CoreError && error.category === "POLICY_DENIED";
+    if (!siblingDenial && (validation.status === "INVALID" || validation.status === "INCONCLUSIVE")) {
       this.attemptBlocked = true;
     }
 
     // Sibling executions from the same assistant message are still in flight;
     // the task stays EXECUTING until the last one settles.
     if (this.activeExecutions.size > 0) {
+      if (siblingDenial) {
+        await this.events.emit(event("RECOVERY_STARTED", this.task.taskId, {
+          strategy: "CONTINUE",
+          reason: "POLICY_SOFT_REFUSED",
+          failure: "POLICY_DENIED",
+          retryCount: this.task.retryCount,
+          replanCount: this.task.replanCount,
+          strategyCount: this.task.strategyCount ?? 0,
+          attemptMatchesLastFailure: this.lastAttemptSignature === undefined || this.lastAttemptSignature === this.lastFailureSignature,
+          recoveryDepth: this.recoveryDepth,
+        }));
+        await this.events.emit(event("SOFT_REFUSAL_CONTINUED", this.task.taskId, {
+          strategy: "CONTINUE",
+          reason: "POLICY_SOFT_REFUSED",
+          failure: "POLICY_DENIED",
+          denialReason: error.message,
+          recoveryDepth: this.recoveryDepth,
+        }));
+      }
       this.task = {
         ...this.task,
         observations: [...this.task.observations, result.success ? "Tool completed" : "Tool failed"],
