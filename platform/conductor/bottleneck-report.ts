@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat } from "./bottlenecks.ts";
+import { resolveSchemaMemory } from "./schema-memory.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
 import type { ResolvedSchema } from "./schema-memory.ts";
@@ -266,6 +267,24 @@ export async function renderBottleneckReport(input: {
   /** A stored mapping for this file, when one resolved. See `schema-memory.ts`. */
   schema?: ResolvedSchema;
   /**
+   * Where the workspace is, and where the shipped schemas live.
+   *
+   * THE SCHEMA IS RESOLVED HERE WHEN IT IS NOT SUPPLIED, and that is not a
+   * convenience. The governed tool input is walked by the kernel and any string
+   * sitting under a path-shaped KEY is taken to be a file this call produces.
+   * A resolved schema carries `source` (its provenance) and a `roles` map keyed
+   * by column role, and one of those roles is legitimately called `source`, so
+   * handing the mapping in asserted two files that do not exist. Those phantom
+   * artifacts can never verify, so the task can never leave PLANNING and every
+   * clean run ended TASK_NOT_COMPLETED.
+   *
+   * So the tool resolves its own memory from the workspace it is already
+   * governed on. The keys below are named so they are not path operands, which
+   * is naming a value for what it is rather than disguising one as another.
+   */
+  workspaceCwd?: string;
+  defaultsRoot?: string;
+  /**
    * `html` (default) writes the self-contained page. `markdown` writes the same
    * findings as Markdown, which is what the web wedge returns to a browser and
    * what a person can paste into a ticket. The FIGURES are identical: one
@@ -273,7 +292,10 @@ export async function renderBottleneckReport(input: {
    */
   format?: "html" | "markdown";
 }): Promise<{ path: string; bytes: number; rendered: boolean; problems: readonly string[]; markdown?: string }> {
-  const analysis = analyseBottlenecks(input.csv, input.schema);
+  const schema = input.schema ?? (input.workspaceCwd === undefined ? undefined : await resolveSchemaMemory({
+    cwd: input.workspaceCwd, headers: input.csv.headers, defaultsRoot: input.defaultsRoot,
+  }));
+  const analysis = analyseBottlenecks(input.csv, schema);
   const title = String(input.title ?? "Bottleneck report");
 
   // A report drawn from a file the reader already called malformed is a lie with
@@ -363,7 +385,15 @@ export const RENDER_BOTTLENECK_REPORT: ToolDescriptor = {
   description: "Render a self-contained bottleneck report page with row-level evidence for every figure",
   inputSchema: {
     type: "object",
-    properties: { path: { type: "string" }, title: { type: "string" }, csv: { type: "object" } },
+    properties: {
+      path: { type: "string" }, title: { type: "string" }, csv: { type: "object" },
+      // Every real input is declared. The schema is resolved by the renderer
+      // from the workspace rather than handed in here, because a mapping
+      // carries a `source` key and a role named `source`, and both would be
+      // read as output files that do not exist.
+      workspaceCwd: { type: "string" }, defaultsRoot: { type: "string" },
+      format: { type: "string" },
+    },
     required: ["path", "csv"],
   },
   outputSchema: { type: "object" },

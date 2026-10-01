@@ -23,6 +23,13 @@ import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
 export const MAX_CLARIFY_ROUNDS = 3;
 
 /**
+ * How much of the kernel's event history one run's stream is read back from.
+ * Matches the bus's own retention, so a reconstructed stream can never be
+ * shorter than the events the kernel retained for this task.
+ */
+const EVENT_HISTORY_LIMIT = 500;
+
+/**
  * Ruling 3's escalation threshold. Also a product rule, not a kernel control: the
  * kernel makes the refusal count readable, and the product decides when a human
  * is worth interrupting for. Three matches the clarify budget on purpose — the
@@ -141,10 +148,25 @@ export class Conductor {
     } = {},
   ): Promise<ConductorResult> {
     this.emit("ASK", request);
-    const kernelEvents: { type: string; payload: Record<string, unknown> }[] = [];
-    const off = this.kernel.events.subscribe((event) => {
-      kernelEvents.push({ type: event.type, payload: event.payload as Record<string, unknown> });
-    });
+    // THE STREAM IS READ BACK FROM THE KERNEL, NOT FROM A SUBSCRIPTION.
+    //
+    // A subscription here silently lost the second half of every run. The
+    // kernel emitted all fifteen records -- verified against the bus's own
+    // history -- while this sink held eight, so a caller received a truncated
+    // stream for a run that had in fact completed, and TASK_COMPLETED was
+    // simply absent. The bus is not the kernel's stable identity across a run,
+    // so a handle taken before `beginTask` is not a handle on the bus that
+    // served it.
+    //
+    // The kernel's own history is the authoritative record: it is written
+    // before delivery, it survives the bus being replaced, and scoping it to
+    // this run's task id keeps it about THIS run. A stream reconstructed from
+    // history cannot be missing an event the kernel recorded.
+    let taskId = "";
+    const taskEvents = (): { type: string; payload: Record<string, unknown> }[] =>
+      taskId === "" ? [] : this.kernel.events.recent(EVENT_HISTORY_LIMIT)
+        .filter((event) => event.taskId === taskId)
+        .map((event) => ({ type: event.type, payload: event.payload as Record<string, unknown> }));
 
     try {
       // --- CLARIFY (bounded, and never silent) ---
@@ -172,7 +194,7 @@ export class Conductor {
         return {
           status: "CLARIFY_EXHAUSTED",
           state: "CLARIFY_EXHAUSTED",
-          questions, clarifyRounds: rounds, artifacts: [], kernelEvents, progress: this.progress,
+          questions, clarifyRounds: rounds, artifacts: [], kernelEvents: taskEvents(), progress: this.progress,
           failure: {
             code: "CLARIFY_EXHAUSTED",
             reason: `No CSV input after ${rounds} clarify round(s); the last question was: "${questions.at(-1)?.question ?? "none asked"}"`,
@@ -183,11 +205,12 @@ export class Conductor {
       // --- PLAN (the kernel takes over here) ---
       this.emit("PLAN", input);
       await this.kernel.beginTask(request, request, { input });
+      taskId = this.kernel.currentTask?.taskId ?? taskId;
 
       // --- EXECUTE: two governed calls, through the real bridge sequence ---
       this.emit("EXECUTE", "csv_read");
       const read = await this.callTool("csv-read-1", "csv_read", { path: input });
-      if (!read.ok) return this.failed(read.failure, questions, rounds, kernelEvents);
+      if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
 
       // A malformed file is a QUESTION, not a crash. The run stops and asks.
       const csv = read.value as CsvReadResult;
@@ -204,7 +227,7 @@ export class Conductor {
           return {
             status: "CLARIFY_EXHAUSTED",
             state: "CLARIFY_EXHAUSTED",
-            questions, clarifyRounds: rounds + 1, artifacts: [], kernelEvents, progress: this.progress,
+            questions, clarifyRounds: rounds + 1, artifacts: [], kernelEvents: taskEvents(), progress: this.progress,
             failure: { code: "MALFORMED_CSV", reason: question.question, },
           };
         }
@@ -212,7 +235,7 @@ export class Conductor {
 
       this.emit("EXECUTE", "render_page");
       if (options.mode === "bottleneck") {
-        return this.bottleneck(csv, input, options, questions, rounds, kernelEvents);
+        return this.bottleneck(csv, input, options, questions, rounds, taskEvents);
       }
       const rendered = await this.callTool("render-1", "render_page", {
         path: options.output ?? path.join(this.cwd, "workspace", "dashboard.html"),
@@ -221,18 +244,20 @@ export class Conductor {
         sample: csv.sample,
         rowCount: csv.rowCount,
       });
-      if (!rendered.ok) return this.failed(rendered.failure, questions, rounds, kernelEvents);
+      if (!rendered.ok) return this.failed(rendered.failure, questions, rounds, taskEvents());
 
       // --- DELIVER ---
       const task = await this.kernel.finishTask({ ok: true });
       this.emit("DELIVER", task.status);
       const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
       if (task.status !== "COMPLETED") {
-        return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, kernelEvents);
+        return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
       }
-      return { status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, kernelEvents, progress: this.progress };
+      return { status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, kernelEvents: taskEvents(), progress: this.progress };
     } finally {
-      off();
+      // Nothing to release: the stream is read from the kernel's history, so
+      // there is no subscription to take down, and no handle for a slow sink to
+      // outlive the run.
     }
   }
 
@@ -250,7 +275,12 @@ export class Conductor {
     csv: CsvReadResult, input: string,
     options: { output?: string; title?: string; format?: "html" | "markdown" },
     questions: ClarifyQuestion[], rounds: number,
-    kernelEvents: { type: string; payload: Record<string, unknown> }[],
+    /**
+     * Read the stream when the result is built, not once up front: the report
+     * write is the second half of this run's events and they do not exist
+     * until it has happened.
+     */
+    taskEvents: () => { type: string; payload: Record<string, unknown> }[],
   ): Promise<ConductorResult> {
     // Schema memory is consulted HERE, after the read, because it matches on the
     // header row the read actually produced.
@@ -268,21 +298,22 @@ export class Conductor {
     const written = await this.callTool("report-1", "render_bottleneck_report", {
       path: options.output ?? path.join(this.cwd, "workspace", "bottleneck-report.md"),
       title: options.title ?? `Bottleneck report: ${path.basename(input)}`,
-      csv, schema, format: options.format ?? "markdown",
+      csv, workspaceCwd: this.cwd, defaultsRoot: this.options.defaultsRoot,
+      format: options.format ?? "markdown",
     });
-    if (!written.ok) return this.failed(written.failure, questions, rounds, kernelEvents);
+    if (!written.ok) return this.failed(written.failure, questions, rounds, taskEvents());
     if (!written.value || (written.value as { rendered?: boolean }).rendered !== true) {
       return this.failed({
         code: "REPORT_NOT_RENDERED",
         reason: `the renderer declined the file: ${((written.value as { problems?: string[] })?.problems ?? []).join("; ") || "no reason given"}`,
-      }, questions, rounds, kernelEvents);
+      }, questions, rounds, taskEvents());
     }
 
     const task = await this.kernel.finishTask({ ok: true });
     this.emit("DELIVER", task.status);
     const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
     if (task.status !== "COMPLETED") {
-      return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, kernelEvents);
+      return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
     }
     // The Markdown is produced from the SAME analysis object the artifact was
     // rendered from, so the text in the response and the file on disk cannot
@@ -290,7 +321,7 @@ export class Conductor {
     const markdown = toBottleneckMarkdown(analysis, options.title ?? `Bottleneck report: ${path.basename(input)}`);
     return {
       status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
-      report: { markdown, analysis, schema }, kernelEvents, progress: this.progress,
+      report: { markdown, analysis, schema }, kernelEvents: taskEvents(), progress: this.progress,
     };
   }
 
