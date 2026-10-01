@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { KernelAdapter } from "./kernel-adapter.ts";
 import { toolDescriptorFromPi } from "./tool-adapter.ts";
+import { buildPolicy } from "./project-config.ts";
+import { parsePolicyConfig, type PolicyConfig } from "../core/policy-config.ts";
 import { canTransition } from "../core/state-machine.ts";
 
 /**
@@ -133,4 +138,81 @@ test("C1.4 every refusal-eligible state is covered by one of the two tails", asy
     assert.match(precheck.decision.reason ?? "", /NOT evaluated/,
       `${status} names that the call was not evaluated`);
   }
+});
+
+/** The structured half of the same refusal: a trace consumer reads a field, not prose. */
+const lastRefusalPayload = (k: KernelAdapter) =>
+  k.recentEvents(500).filter((e) => e.type === "LIFECYCLE_REFUSED").at(-1)?.payload as
+    Record<string, unknown> | undefined;
+
+test("C1.5 the trace must not claim a replay it did not perform", async () => {
+  // The prose tail and the trace payload are two surfaces carrying one fact.
+  // C1.2 pins the sentence; this pins the structure, because a trace consumer
+  // reads `replayed` and not English, and a payload claiming a replay that
+  // never happened is the same defect in a field no assertion on prose catches.
+  const adapter = await adapterIn("REPLANNING");
+  assert.equal(adapter.currentTask?.failureReason, undefined,
+    "precondition: no stored reason exists, so nothing could have been replayed");
+
+  await adapter.precheckToolCall("read", "execute", { path: "x" }, undefined, "c1");
+  const payload = lastRefusalPayload(adapter);
+  assert.ok(payload, "precondition: the refusal must have been traced at all");
+  assert.equal(payload.replayed, false, "the trace must not claim a replay");
+  assert.equal(payload.originalFailureReason, null,
+    "and must not invent one — null, not an empty string, because there was none");
+  assert.equal(payload.evaluated, false, "and the call was still never evaluated");
+  assert.equal(payload.taskStatus, "REPLANNING", "on the state that actually refused it");
+});
+
+/**
+ * `abort`, not a delivered denial. Under the D1 reversal a denial no longer
+ * ends a task, so a death produced by handing one to recovery would leave a
+ * LIVE task and the log C1.6 walks would prove nothing. `abort` still ends a
+ * task, at `precheckToolCall` -> `abortTask`, and the reason is the policy's
+ * own words rather than one this file made up.
+ */
+const DEATH_RULES = {
+  version: 1,
+  deniedTools: ["withheld_tool"],
+  allowedTools: [],
+  fileRules: [{ pattern: "**", read: "allow", write: "allow" }],
+  destructiveCommandPatterns: [],
+  destructiveCommandTokens: [],
+  limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
+  onViolation: "abort",
+} as const;
+
+test("C1.6 only a FAILED task ever holds a stored failureReason", async () => {
+  // The empirical counterpart to C1.1. C1.1 reads the state table and shows a
+  // reason cannot survive into a live state; this walks what the kernel
+  // ACTUALLY recorded and shows no transition ever writes one anywhere else. A
+  // table can be edited into permitting it; a recorded log cannot be argued
+  // with.
+  const dir = await mkdtemp(path.join(os.tmpdir(), "nf-c1-"));
+  const policyConfig: PolicyConfig = parsePolicyConfig({ ...DEATH_RULES }, "c1-policy.json");
+  const adapter = new KernelAdapter();
+  adapter.setPolicy(buildPolicy({ policyMode: "TRUSTED_PROJECT", allowedRoots: ["."] }, dir, policyConfig));
+  for (const name of ["withheld_tool", "read"]) {
+    adapter.registerTools([toolDescriptorFromPi({ name, description: name })]);
+  }
+  await adapter.beginTask("do the work", "do the work");
+
+  const probe = await adapter.precheckToolCall("withheld_tool", "execute", {}, undefined, "probe");
+  assert.equal(probe.decision.decision, "DENY", "precondition: the policy must actually deny the call");
+  const denialReason = probe.decision.reason ?? "";
+  await adapter.beginToolExecution("call-that-died", "withheld_tool", "execute");
+  await adapter.recordToolResult("call-that-died", "withheld_tool", undefined, true, undefined, denialReason);
+  assert.equal(adapter.currentTask?.status, "FAILED", "precondition: the task must really be dead");
+  assert.ok((adapter.currentTask?.failureReason ?? "").length > 0,
+    "precondition: and must really carry a stored reason, or the walk below examines nothing");
+
+  const withReason = adapter.transitionLog.filter((entry) => entry.failureReason);
+  assert.ok(withReason.length > 0, "precondition: the log must hold at least one recorded reason");
+  for (const entry of withReason) {
+    assert.equal(entry.to, "FAILED",
+      `transition ${entry.from} -> ${entry.to} recorded a failureReason, but only FAILED may hold one`);
+  }
+  // And the permanence that makes the rule total rather than incidental.
+  assert.equal(canTransition("FAILED", "REPLANNING"), false,
+    "a task holding a reason is FAILED, and FAILED is where it stays");
 });

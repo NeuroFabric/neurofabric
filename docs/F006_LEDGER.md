@@ -1116,11 +1116,26 @@ guard before writing the message. Commit `b0a8cdf` on
    forced FAILED task with a certificate still replays it, labelled ORIGINAL.
 
    **Closed with a green pin, not with prose.**
-   `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4`. It pins
+   `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.6`. It pins
    the *invariant* (reachability), not the preference, and it includes the
    guard against over-correcting: `C1.3` asserts the terminal replay is
    untouched, so the closure cannot be satisfied later by deleting the
-   attribution. 4 pass, 0 fail, typecheck clean.
+   attribution. `C1.5` pins the same fact on the *structured* surface — a trace
+   consumer reads `replayed`, not English, so a payload claiming a replay that
+   never happened is the same defect in a field no assertion on prose catches.
+   `C1.6` walks a real recorded transition log and asserts that no transition
+   ever wrote a `failureReason` onto anything but `FAILED` — the empirical
+   counterpart to `C1.1`, which reads the state table. 6 pass, 0 fail,
+   typecheck clean.
+
+   **Stronger still, and read from source rather than pinned:** `REPLANNING` is
+   not merely unreachable *with* a reason, it is unobservable. It is entered at
+   `:1397` and left at `:1398` on consecutive statements, `advance` is entirely
+   synchronous, and nothing awaits between them — so no other code can ever see
+   a task in `REPLANNING` at all. The pins force that state deliberately, and
+   say so. This is a source-reading, not a runtime assertion, because absence of
+   an `await` is not something a test can assert; it is recorded so a later
+   session does not mistake the forced state for a reachable one.
 
    **The wording defect this surfaced is item 9, not a closure of this item.**
    A pin asserting today's exact REPLANNING sentence would make a known-wrong
@@ -1209,6 +1224,18 @@ guard before writing the message. Commit `b0a8cdf` on
    `ESCALATED`, so a live state was simply not enumerated. Deferred, not
    dropped: it changes a public refusal string, so it takes its own item and its
    own review, and `C1.4` is the pin that will need updating when it lands.
+
+   **Consolidation, stated because a discarded working tree is not a silent
+   event.** Two further C1 pins were drafted earlier in the same session into
+   `platform/pi/terminal-refusal-echo.test.ts` and left uncommitted. They
+   covered the trace surface and the log invariant — now `C1.5` and `C1.6` in
+   the file above, which is the canonical home. The draft block was reverted
+   rather than committed: it duplicated coverage, and committing it would have
+   put `platform/` changes on **Track B**, which is barred from touching
+   `platform/` internals at all. Nothing was lost — the two assertions that
+   were unique to it are the two that survived. Recorded here because the
+   alternative, quietly restoring a file to its committed state, is exactly
+   the shape of the undisclosed-work hazard this session opened with.
 
 ---
 
