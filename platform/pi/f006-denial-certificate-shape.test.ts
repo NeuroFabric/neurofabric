@@ -349,8 +349,12 @@
        "no refusal is reported when no reason was delivered",
      );
      assert.equal(adapter.currentTask!.failureReason, undefined, "and no certificate exists either");
-     assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "REPLAN",
-       "an unmarked tool error still replans: the death shape the bridge closes");
+     // D4B: the unmarked tool error no longer REPLANS — it takes the retry rung.
+     // The claim this assertion exists to make is that the failure is NOT
+     // laundered into a survivable refusal, and that is now made on the REASON,
+     // which names the class rather than accumulating into a counter.
+     assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.reason, "TOOL_FAILURE_RETRY",
+       "an unmarked tool error is recovered as an ordinary failure: the death shape the bridge closes, one rung higher");
    });
 
    test("CERT.5 an admitted call that fails reports the same way — the forwarding guard", async () => {

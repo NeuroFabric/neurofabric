@@ -250,13 +250,12 @@ test("T3.2 a denial keeps its category and the policy's own words, and is not a 
 // --- T5: self-hosting — an ordinary-failure session survives -------------
 
 test("T5.1 a session that keeps hitting ordinary failures is NOT killed", async () => {
-  // This is the shape that killed the previous session: not three failures in a
-  // row with nothing in between, but a run that keeps meeting ordinary
-  // obstacles while still making progress. Recovery depth is a bound on
+  // This is the shape that killed the previous session: a run that keeps meeting
+  // ordinary obstacles while still making progress. Recovery depth is a bound on
   // CONSECUTIVE rounds since the last success, so an ordinary failure between
   // two successes must cost nothing at all.
   const adapter = await trustedAdapter();
-  for (let round = 1; round <= 4; round++) {
+  for (let round = 1; round <= 3; round++) {
     await failCommandOnce(adapter, `loop-${round}-fail`);
     assert.notEqual(adapter.currentTask!.status, "FAILED", `round ${round}: an ordinary failure between successes must not kill the task`);
     const bound = await adapter.beginToolExecution(`loop-${round}-ok`, "bash", { toolCallId: `loop-${round}-ok` });
@@ -265,9 +264,51 @@ test("T5.1 a session that keeps hitting ordinary failures is NOT killed", async 
   }
 
   const task = adapter.currentTask!;
-  assert.equal(task.replanCount, 0, "not one ordinary failure needed a replan");
+  // The retry fund is TASK-WIDE and holds two (T5.1c), so the third ordinary
+  // failure in this task needs a replan even though progress was made in
+  // between. What matters is that ONE replan carried three rounds to a
+  // completed session. Before D4B the same session spent a replan per round and
+  // died on the third, with the retry budget never touched at all.
+  assert.equal(task.replanCount, 1, "three ordinary failures cost one replan, not three");
   const finished = await adapter.finishTask({});
   assert.equal(finished.status, "COMPLETED", "T5: the session completes instead of being killed");
+});
+
+test("T5.1b the consecutive burst survives one failure more than it used to, and dies on a reason", async () => {
+  // The bounds are still real, and this is what they look like when they are
+  // reached: four consecutive ordinary failures (two retries, one replan, then
+  // the depth guard), a TERMINATE, and a certificate that names every budget.
+  // Before D4B the same run died at the third failure with the retry budget
+  // untouched — which is the fingerprint the fix exists to move.
+  const adapter = await trustedAdapter();
+  await failCommandOnce(adapter, "burst-1");
+  await failCommandOnce(adapter, "burst-2");
+  await failCommandOnce(adapter, "burst-3");
+  assert.notEqual(adapter.currentTask!.status, "FAILED", "three consecutive ordinary failures no longer kill the task");
+  assert.equal(adapter.currentTask!.retryCount, 2, "and the retries were actually offered, not skipped");
+  assert.equal(adapter.currentTask!.replanCount, 1);
+
+  await failCommandOnce(adapter, "burst-4");
+  assert.equal(adapter.currentTask!.status, "FAILED", "the run is still bounded");
+  assert.match(adapter.currentTask!.failureReason!, /Recovery TERMINATE \[/, "with a structured reason, not a bare status");
+});
+
+test("T5.1c the budgets are TASK-CUMULATIVE, and that residual is stated, not hidden", async () => {
+  // `maxToolRetries` and `maxReplans` have always been task-wide bounds, not
+  // per-attempt ones (see the RecoveryLimits docs). D4B does not change that,
+  // and the consequence is worth pinning so nobody later reads "an ordinary
+  // failure is now safe" as "an ordinary failure is now free": a long run that
+  // meets more ordinary failures than the task-wide budgets allow still ends,
+  // but it ends with a certificate naming the budget rather than a silent death.
+  const adapter = await trustedAdapter();
+  for (let round = 1; round <= 5; round++) {
+    await failCommandOnce(adapter, `cumulative-${round}`);
+    const bound = await adapter.beginToolExecution(`cumulative-${round}-ok`, "bash", { toolCallId: `cumulative-${round}-ok` });
+    if (bound) await adapter.recordToolResult(`cumulative-${round}-ok`, "bash", { output: "ok" }, false);
+  }
+  assert.equal(adapter.currentTask!.status, "FAILED", "the task-wide budgets still bound the run");
+  assert.match(adapter.currentTask!.failureReason!, /replanCount=2\/2|recoveryDepth=3\/3/,
+    "and the certificate names which task-wide budget actually stopped it");
 });
 
 test("T5.2 progress between failures resets the consecutive-round bound", () => {

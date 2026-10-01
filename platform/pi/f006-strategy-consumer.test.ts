@@ -22,6 +22,18 @@ import type { RecoveryLimits } from "../core/index.ts";
  * The anchor is `lastFailureSignature`: which attempt failed last, for this
  * task, reset on the VALID boundary and cleared on supersession. Without it
  * there is nothing to compare and the fork cannot open.
+ *
+ * D4B, 2026-10-01 — HOW TO READ THIS FILE AGAINST THE CURRENT TREE. An ordinary
+ * tool failure now takes a RETRY before it books either ledger (see
+ * `platform/core/recovery.ts` and `d4b-recovery-classification.test.ts`), so
+ * the FIRST failure of a task spends `retryCount` rather than `replanCount` or
+ * `strategyCount`. C4's subject is untouched by that: WHICH LEDGER A REPLAN
+ * BOOKS TO is still the claim, and every assertion about
+ * `attemptMatchesLastFailure`, `strategyCount` and the `STRATEGY_*` reasons is
+ * still exactly the assertion it was. What changed is only the number of
+ * failures a sequence needs before it reaches a REPLAN at all, and the
+ * counter arithmetic that followed from it. The changed assertions carry a
+ * D4B note in place; the reasoning they encode is preserved, not relaxed.
  */
 
 const TOOLS = ["read", "write"].map((name) => toolDescriptorFromPi({ name, description: name }));
@@ -109,16 +121,20 @@ async function interleaveAt(
 test("C4.1 a novel failure takes the strategy path and books to strategyCount", async () => {
   const k = newKernel();
   await k.beginTask("one");
-  // The first failure has no prior failure to differ from, so it is a repeat
-  // and books to the replan budget. It establishes the anchor.
+  // The first failure has no prior failure to differ from, so it is a repeat.
+  // D4B: a repeat of an ordinary failure now takes its RETRY first, so the
+  // first failure of a task books neither ledger. That the anchor is ESTABLISHED
+  // here — rather than the replan budget being charged — is the only thing this
+  // preamble has to do either way.
   await failWith(k, "a1", { path: "a.md" });
-  assert.equal(k.currentTask!.replanCount, 1, "the first failure is a repeat, charged to the replan budget");
+  assert.equal(k.currentTask!.retryCount, 1, "D4B: the first failure takes the retry budget");
+  assert.equal(k.currentTask!.replanCount, 0, "and no ledger is charged until a REPLAN actually happens");
   assert.equal(strategyCount(k), 0, "and to nothing else");
 
   // A DIFFERENT input is a new approach, not a repeat of the one that just failed.
   await failWith(k, "a2", { path: "b.md" });
   assert.equal(strategyCount(k), 1, "a novel attempt books to the strategy fund");
-  assert.equal(k.currentTask!.replanCount, 1, "and leaves the replan budget alone");
+  assert.equal(k.currentTask!.replanCount, 0, "and leaves the replan budget alone");
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.reason, "STRATEGY_CHANGE_REPLAN",
     "the decision names the strategy path");
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, false,
@@ -130,16 +146,22 @@ test("C4.1 a novel failure takes the strategy path and books to strategyCount", 
 test("C4.2 an identical attempt keeps the legacy path and books to replanCount, never strategyCount", async () => {
   const k = newKernel();
   await k.beginTask("one");
-  // Byte-identical input both times: the second is a repeat of the first.
+  // Byte-identical input every time: each is a repeat of the one before it.
+  // D4B: the first TWO repeats take the retry budget (maxToolRetries = 2) and
+  // only the third reaches the REPLAN this test is about. Three identical
+  // attempts, one replan, zero strategy changes: the same conclusion as before,
+  // one rung lower down the ladder.
   await failWith(k, "a1", { path: "same.md" });
   await failWith(k, "a2", { path: "same.md" });
+  await failWith(k, "a3", { path: "same.md" });
 
-  assert.equal(k.currentTask!.replanCount, 2, "both replans were charged to the replan budget");
+  assert.equal(k.currentTask!.retryCount, 2, "D4B: two retries were offered before any replan was booked");
+  assert.equal(k.currentTask!.replanCount, 1, "the replan was charged to the replan budget");
   assert.equal(strategyCount(k), 0, "an identical attempt NEVER books to the strategy fund");
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
     "the trace records it as a repeat");
-  assert.equal(lastPayload(k, "RECOVERY_STARTED")?.reason, "GENERIC_REPLAN",
-    "and the legacy reason, unchanged");
+  assert.equal(lastPayload(k, "RECOVERY_STARTED")?.reason, "TOOL_FAILURE_RETRY_EXHAUSTED_REPLAN",
+    "and names the rung it is on: D4B split the one generic REPLAN reason into the retry ladder, so a replan after the retries says so");
 });
 
 test("C4.2b key order is not novelty: a reordered input is the SAME attempt", async () => {
@@ -150,9 +172,10 @@ test("C4.2b key order is not novelty: a reordered input is the SAME attempt", as
   await k.beginTask("one");
   await failWith(k, "a1", { path: "same.md", offset: 1 });
   await failWith(k, "a2", { offset: 1, path: "same.md" });
+  await failWith(k, "a3", { offset: 1, path: "same.md" });
 
   assert.equal(strategyCount(k), 0, "a reordered input is a repeat, not a new approach");
-  assert.equal(k.currentTask!.replanCount, 2, "so both charged the replan budget");
+  assert.equal(k.currentTask!.replanCount, 1, "so the replan booked to the replan budget (D4B: the first two failures took the retries)");
 });
 
 // --- a3.3/a3.4 exhaustion, adapter-mediated -------------------------------
@@ -172,7 +195,7 @@ test("C4.3 an exhausted fund with a retry-legal failure takes the legacy retry p
   assert.notEqual(k.currentTask!.status, "FAILED", "a retry-legal failure must never be pre-terminated");
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.strategy, "RETRY",
     "the legacy retry path is taken verbatim");
-  assert.equal(k.currentTask!.retryCount, 1, "and the retry was actually issued");
+  assert.equal(k.currentTask!.retryCount, 2, "D4B: the first ordinary failure took one retry, and the transient took the other");
   assert.equal(strategyCount(k), 1, "the exhausted fund spent nothing further");
 });
 
@@ -193,7 +216,7 @@ test("C4.4 an exhausted fund with no legal retry TERMINATES with STRATEGY_BUDGET
   assert.match(reason, /failure=TOOL_FAILURE/, "and the failure that exhausted it");
   assert.match(reason, /strategyCount=1\/1/, "showing the fund spent");
   assert.equal(lastPayload(k, "TASK_FAILED")?.reasonCode, "STRATEGY_BUDGET_EXHAUSTED");
-  assert.equal(k.currentTask!.retryCount, 0, "no retry was ever issued");
+  assert.equal(k.currentTask!.retryCount, 1, "D4B: the first ordinary failure took one retry; this one took none");
 });
 
 // --- a3.5 the anchor lifecycle -------------------------------------------
@@ -210,10 +233,15 @@ test("C4.5 the VALID boundary resets the anchor, so the next failure repeats aga
   await succeedWith(k, "ok1", { path: "c.md" });
   assert.equal(k.diagnostics.recoveryDepth, 0, "the VALID boundary reset the depth");
 
+  // D4B: the reset does NOT refill the task-wide retry budget, which is spent
+  // from `a1`. So the repeats below take two retries and then the replan this
+  // test is measuring — which is exactly why "the anchor reset" and "the budget
+  // reset" are separate claims, and only the first is made here.
   await failWith(k, "a3", { path: "d.md" });
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
     "after a VALID boundary the next failure repeats, it is not a new approach");
-  assert.equal(k.currentTask!.replanCount, 2, "so it is charged to the replan budget");
+  await failWith(k, "a4", { path: "d.md" });
+  assert.equal(k.currentTask!.replanCount, 1, "so the post-success repeats are charged to the replan budget");
   assert.equal(strategyCount(k), 1, "and not to the strategy fund");
 });
 
@@ -232,7 +260,8 @@ test("C4.6 a newer task starts with no anchor, so its first failure is a repeat"
   await failWith(k, "b1", { path: "b.md" });
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
     "the older turn's anchor must not fork the newer turn's first decision");
-  assert.equal(k.currentTask!.replanCount, 1, "so it books to the replan budget");
+  assert.equal(k.currentTask!.retryCount, 1, "D4B: so it books to the retry budget, the ledger a first failure now reaches");
+  assert.equal(k.currentTask!.replanCount, 0, "and never to either replan ledger");
   assert.equal(strategyCount(k), 0, "and never to the strategy fund");
 });
 
@@ -255,12 +284,12 @@ test("C4.8 a failure whose attempt was never prechecked books to the replan budg
   // start spending the strategy fund.
   const k = newKernel();
   await k.beginTask("one");
-  for (const id of ["d1", "d2"]) {
+  for (const id of ["d1", "d2", "d3"]) {
     const bound = await k.beginToolExecution(id, "read");
     assert.ok(bound);
     await k.recordToolResult(id, "read", undefined, true);
   }
-  assert.equal(k.currentTask!.replanCount, 2, "both charged the replan budget, exactly as before C4");
+  assert.equal(k.currentTask!.replanCount, 1, "the replan booked to the replan budget (D4B: two retries came first)");
   assert.equal(strategyCount(k), 0, "and none to the strategy fund");
 });
 
@@ -302,7 +331,8 @@ test("C4.9 a stale failure classification must not write the anchor onto the new
   await failWith(k, "b1", { path: "b.md" });
   assert.equal(lastPayload(k, "RECOVERY_STARTED")?.attemptMatchesLastFailure, true,
     "a stale anchor must not make the newer task's first failure look novel");
-  assert.equal(k.currentTask!.replanCount, 1, "so it books to the replan budget");
+  assert.equal(k.currentTask!.retryCount, 1, "D4B: so it books to the retry budget, not to a replan ledger");
+  assert.equal(k.currentTask!.replanCount, 0, "and neither replan ledger is touched");
   assert.equal(strategyCount(k), 0, "and never to the strategy fund");
 });
 

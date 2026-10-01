@@ -24,6 +24,20 @@ import { CoreError } from "../core/errors.ts";
  *
  * These tests pin the corrected behaviour and the diagnostics that make the
  * next occurrence explainable from the trace alone.
+ *
+ * D4B, 2026-10-01 — READ THE BUDGET ARITHMETIC WITH THE LADDER IN MIND. The
+ * chain below was corrected TWICE, and the second correction is what changed
+ * these numbers: `TOOL_FAILURE` is not retry-eligible, so an ordinary failure
+ * went straight to the generic REPLAN tail until the replan budget and the
+ * depth guard were spent. D4B gives an ordinary failure its own RETRY first, so
+ * the same sequence now walks RETRY -> RETRY -> REPLAN -> TERMINATE(depth)
+ * instead of REPLAN -> REPLAN -> TERMINATE(replan).
+ *
+ * The pins that asserted the ladder itself (F006.2, F006.2b, F006.3) were
+ * written against the old one and are restated here against the new one. Every
+ * claim about CLASSIFICATION, about `UNKNOWN` never reaching recovery, and about
+ * a terminal reason naming the budget that actually stopped the run is
+ * unchanged, and each carries a D4B note saying what moved and why.
  */
 
 const LIMITS: RecoveryLimits = { maxToolRetries: 2, maxReplans: 2, maxStrategyChanges: 2, maxRecoveryDepth: 3, maxExecutionTimeMs: 1000 };
@@ -75,57 +89,96 @@ test("F006.1c RECOVERY_STARTED reports the budgets as they stood at the decision
   const adapter = await newAdapter();
   await failTimes(adapter, 2);
   const payload = lastPayload(adapter, "RECOVERY_STARTED");
-  assert.equal(payload?.retryCount, 0, "deterministic failures never consume the retry budget");
-  assert.equal(payload?.replanCount, 1, "the second decision sees one replan already spent");
+  // D4B: these are the counters AT the second decision, which is taken before
+  // the first decision's budget is spent... which is exactly the point: the
+  // second failure is decided on retryCount=1, having been told that one retry
+  // is already spent. The old values (0 and 1) said the opposite — that
+  // failures spent the replan budget and never the retry one.
+  assert.equal(payload?.retryCount, 1, "the second decision sees one retry already spent");
+  assert.equal(payload?.replanCount, 0, "D4B: and no replan has been spent at all");
   assert.equal(payload?.recoveryDepth, 2, "the second recovery is the second round");
 });
 
 // --- 2. Deterministic / non-retryable failures do not select RETRY --------
 
-test("F006.2 a deterministic non-retryable tool failure never selects RETRY", () => {
+test("F006.2 a tool failure is retried ONLY when the tool does not declare itself non-idempotent", () => {
+  // OVERTURNED BY D4B, and deliberately. This pin used to say a deterministic
+  // non-retryable failure never selects RETRY for ANY idempotency, on the
+  // theory that a retry is a blind repeat. A RETRY is not a blind repeat: it
+  // re-enters PLANNING, so whoever plans decides what happens next, and the
+  // kernel only funds the turn and books it. That distinction is why an
+  // ordinary failure may be retried.
+  //
+  // What is KEPT, and is the whole of F006.2's protective intent: a tool that
+  // DECLARES itself non-idempotent is still never retried, whatever the budget
+  // holds. Nothing in D4B is worth overriding a caller's own declaration.
   for (const depth of [0, 1, 2]) {
-    for (let replanCount = 0; replanCount <= 2; replanCount++) {
-      for (const idempotency of ["IDEMPOTENT", "NON_IDEMPOTENT"] as const) {
-        const decision = chooseRecoveryDetailed({
-          failure: "TOOL_FAILURE", limits: LIMITS, retryCount: 0, replanCount, depth, idempotency,
+    for (let retryCount = 0; retryCount <= 3; retryCount++) {
+      for (let replanCount = 0; replanCount <= 3; replanCount++) {
+        const declared = chooseRecoveryDetailed({
+          failure: "TOOL_FAILURE", limits: LIMITS, retryCount, replanCount, depth, idempotency: "NON_IDEMPOTENT",
         });
-        assert.notEqual(decision.strategy, "RETRY", "a deterministic failure must not be blindly retried");
+        assert.equal(declared.strategy, "ESCALATE",
+          "a tool that declares itself non-idempotent is escalated, never blindly retried");
+        const undeclared = chooseRecoveryDetailed({
+          failure: "TOOL_FAILURE", limits: LIMITS, retryCount, replanCount, depth, idempotency: "IDEMPOTENT",
+        });
+        if (retryCount < LIMITS.maxToolRetries) {
+          assert.equal(undeclared.strategy, "RETRY", "an undeclared failure is retried while the retry budget allows it");
+        } else if (replanCount < LIMITS.maxReplans) {
+          assert.equal(undeclared.strategy, "REPLAN", "and replanned once the retries are gone and replan budget remains");
+        } else {
+          assert.equal(undeclared.strategy, "TERMINATE", "and terminates only once BOTH budgets are spent, naming them");
+        }
       }
     }
   }
 });
 
-test("F006.2b repeated edit failures never increment retryCount", async () => {
+test("F006.2b repeated edit failures spend the retry budget before any replan", async () => {
+  // D4B. Was: "repeated edit failures never increment retryCount" — the direct
+  // fingerprint of the defect, since it meant the retry budget was advertised
+  // and never once used. Now the first two failures take it, and the third is
+  // the first that needs a replan.
   const adapter = await newAdapter();
-  await failTimes(adapter, 2);
+  await failTimes(adapter, 3);
   const task = adapter.currentTask!;
-  assert.equal(task.retryCount, 0, "no retry was ever issued");
-  assert.equal(task.replanCount, 2, "both replans were spent instead");
+  assert.equal(task.retryCount, 2, "both retries were offered first");
+  assert.equal(task.replanCount, 1, "and only then was a replan spent");
+  assert.notEqual(task.status, "FAILED", "three ordinary failures no longer end the task");
 });
 
 // --- 3. Explicit, observable terminal reason ------------------------------
 
 test("F006.3 the terminal reason names the exhausted budget and the failure", async () => {
   const adapter = await newAdapter();
-  await failTimes(adapter, 3);
+  // D4B: four failures, not three — the ladder is one rung longer.
+  await failTimes(adapter, 4);
 
   assert.equal(adapter.currentTask!.status, "FAILED");
   const reason = adapter.currentTask!.failureReason!;
-  assert.match(reason, /REPLAN_BUDGET_EXHAUSTED/, "the reason must identify what was exhausted");
+  assert.match(reason, /RECOVERY_DEPTH_EXHAUSTED/, "the reason must identify what was exhausted");
   assert.match(reason, /failure=TOOL_FAILURE/, "the reason must identify the failure category");
-  assert.match(reason, /replanCount=2\/2/);
-  assert.match(reason, /recoveryDepth=3\/3/);
+  assert.match(reason, /retryCount=2\/2/, "and must show the retry budget WAS used, which is the D4B fix stated as evidence");
+  assert.match(reason, /replanCount=1\/2/);
+  // `4/3`, not `3/3`: the adapter increments the depth for the round it is
+  // entering before the guard reads it, so the round that trips the guard is
+  // itself counted. Pinned as measured, because a certificate that under-reports
+  // the depth it consumed is the same class of lie as one that names the wrong
+  // budget.
+  assert.match(reason, /recoveryDepth=4\/3/);
   assert.doesNotMatch(reason, /no safe recovery strategy remains/, "the generic F-006 reason is gone");
 });
 
 test("F006.3b TASK_FAILED carries the structured reason, not one generic sentence", async () => {
   const adapter = await newAdapter();
-  await failTimes(adapter, 3);
+  await failTimes(adapter, 4);
   const payload = lastPayload(adapter, "TASK_FAILED");
-  assert.equal(payload?.reasonCode, "REPLAN_BUDGET_EXHAUSTED");
+  assert.equal(payload?.reasonCode, "RECOVERY_DEPTH_EXHAUSTED");
   assert.equal(payload?.failure, "TOOL_FAILURE");
   assert.equal(payload?.strategy, "TERMINATE");
-  assert.equal(payload?.replanCount, 2);
+  assert.equal(payload?.replanCount, 1);
+  assert.equal(payload?.retryCount, 2, "D4B: and the retry budget is reported as spent, not as untouched");
 });
 
 test("F006.3c depth exhaustion is distinguishable from replan exhaustion", () => {
@@ -134,10 +187,21 @@ test("F006.3c depth exhaustion is distinguishable from replan exhaustion", () =>
   });
   assert.deepEqual(depthTrip, { strategy: "TERMINATE", reason: "RECOVERY_DEPTH_EXHAUSTED" });
 
+  // D4B: `TOOL_FAILURE` can no longer reach `REPLAN_BUDGET_EXHAUSTED` — with the
+  // retry rung in front of it, it reaches `RETRY_AND_REPLAN_BUDGET_EXHAUSTED`,
+  // which is the same outcome with both budgets named. The generic tail still
+  // ends the run for every class that has no retry rung, and that is what this
+  // pin now distinguishes the depth trip from.
   const replanTrip = chooseRecoveryDetailed({
-    failure: "TOOL_FAILURE", limits: LIMITS, retryCount: 0, replanCount: 2, depth: 0, idempotency: "IDEMPOTENT",
+    failure: "UNKNOWN", limits: LIMITS, retryCount: 0, replanCount: 2, depth: 0, idempotency: "IDEMPOTENT",
   });
   assert.deepEqual(replanTrip, { strategy: "TERMINATE", reason: "REPLAN_BUDGET_EXHAUSTED" });
+
+  const bothTrip = chooseRecoveryDetailed({
+    failure: "TOOL_FAILURE", limits: LIMITS, retryCount: 2, replanCount: 2, depth: 0, idempotency: "IDEMPOTENT",
+  });
+  assert.deepEqual(bothTrip, { strategy: "TERMINATE", reason: "RETRY_AND_REPLAN_BUDGET_EXHAUSTED" });
+  assert.notEqual(bothTrip.reason, depthTrip.reason, "a budget death and a depth death are never reported as one thing");
 });
 
 test("F006.3d describeTerminalRecovery reports every budget it consulted", () => {
@@ -216,7 +280,7 @@ test("F006.5c PERMISSION and INVALID_INPUT still fail closed without retrying", 
 
 test("F006.5d terminal states still refuse new executions after a TERMINATE", async () => {
   const adapter = await newAdapter();
-  await failTimes(adapter, 3);
+  await failTimes(adapter, 4);
   assert.equal(adapter.currentTask!.status, "FAILED");
   const bound = await adapter.beginToolExecution("call-after", "read");
   assert.equal(bound, undefined, "a FAILED task must admit no further execution");

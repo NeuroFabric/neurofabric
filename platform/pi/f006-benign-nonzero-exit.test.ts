@@ -46,6 +46,18 @@ import { buildPolicy } from "./project-config.ts";
  * optional, and an absent one means today's behaviour, bit for bit. The worst
  * case for a wrong parse is that the fix is INERT, never that it misclassifies:
  * `B5` and `B6` pin that.
+ *
+ * D4B, 2026-10-01 — WHAT MOVED IN THIS FILE. Several pins used
+ * `replanCount === 1` as the discriminator between "this outcome was an answer"
+ * and "this outcome was a fault". That discriminator is gone: an ordinary
+ * failure now takes a RETRY before it charges any replan, so a genuine failure's
+ * FIRST budget spend is `retryCount`. The discrimination itself is unchanged and
+ * is now made on the STRATEGY and the REASON, which is a stronger signal than an
+ * accumulated counter — a counter reports how much has been spent, the reason
+ * reports what was decided. What B3, B8, B9 and B10 assert is that a genuine
+ * failure is never laundered into `BENIGN_NONZERO_EXIT` / `CONTINUE`, and that
+ * still holds exactly. D4B did not touch the (command, exit-code) table, so the
+ * classification half of this file is unchanged line for line.
  */
 
 type CoreErrorOptions = ConstructorParameters<typeof CoreError>[2];
@@ -118,8 +130,11 @@ test("B3 a GENUINE failure that happens to exit 1 is still a tool failure", () =
       depth: 0,
       idempotency: "IDEMPOTENT",
     }),
-    { strategy: "REPLAN", reason: "GENERIC_REPLAN" },
-    "and it must still replan exactly as it did before this fix",
+    // D4B: a genuine fault is retried before it is replanned. It is still a
+    // FAULT — it books a budget, unlike the answer above — and it is still
+    // bounded by the same two counters.
+    { strategy: "RETRY", reason: "TOOL_FAILURE_RETRY" },
+    "and it must remain a fault: a budget-spending outcome, never a survivable answer",
   );
 });
 
@@ -208,19 +223,26 @@ test("B8 end to end: a genuine failure still spends budget exactly as before", a
   const k = await adapter();
   // Exit 1 from a command that is not a search: the measured `node` case.
   //
-  // The discriminator between a benign CONTINUE and a genuine REPLAN is NOT the
-  // task status: both end in PLANNING, because a replan re-enters planning too.
+  // The discriminator between a benign CONTINUE and a genuine fault is NOT the
+  // task status: both end in PLANNING, because a retry re-enters planning too.
   // An earlier draft of this gate asserted on status and was red for the wrong
-  // reason. It is the BUDGET and the EVENT that differ, and both are asserted.
+  // reason. D4B removed the other discriminator as well — `replanCount` is no
+  // longer the first budget a fault charges. What remains, and is asserted here,
+  // is the STRATEGY and the REASON: an answer continues for free, a fault books a
+  // budget and names itself.
   await shellCall(k, "g1", 'node -e "process.exit(1)"', "\n\nCommand exited with code 1");
-  assert.equal(k.currentTask?.replanCount, 1, "a genuine failure must still charge the replan budget");
+  const decided = eventsOf(k, "RECOVERY_STARTED").at(-1)?.payload as Record<string, unknown>;
+  assert.equal(decided.reason, "TOOL_FAILURE_RETRY", "a genuine failure takes the retry rung, and says which failure it is");
+  assert.notEqual(decided.reason, "BENIGN_NONZERO_EXIT_CONTINUED", "a fault is never reported as an answer");
+  assert.equal(k.currentTask?.retryCount, 1, "and it does charge a budget, unlike the answer");
   assert.equal(eventsOf(k, "SOFT_REFUSAL_CONTINUED").length, 0, "and must not be laundered into a survivable outcome");
 
   // A genuine failure of the SAME command that is in the table: grep's error
   // code is not a no-match.
   const k2 = await adapter();
   await shellCall(k2, "g2", "grep -rn needle missing.md", ERROR_RESULT);
-  assert.equal(k2.currentTask?.replanCount, 1, "grep exiting 2 is an error, not a no-match");
+  assert.equal(k2.currentTask?.retryCount, 1, "grep exiting 2 is an error, not a no-match");
+  assert.equal(k2.currentTask?.replanCount, 0, "and it spent no replan, where an answer would have spent nothing either but for a different reason");
 });
 
 test("B9 the exit status is read from the trailing annotation only", async () => {
@@ -234,16 +256,22 @@ test("B9 the exit status is read from the trailing annotation only", async () =>
     "grep -rn needle notes.md",
     "some file said: Command exited with code 1\nand then succeeded",
   );
-  assert.equal(k.currentTask?.replanCount, 1, "a mid-text mention must not be read as an exit status");
+  const decided = eventsOf(k, "RECOVERY_STARTED").at(-1)?.payload as Record<string, unknown>;
+  assert.equal(decided.reason, "TOOL_FAILURE_RETRY",
+    "a mid-text mention must not be read as an exit status, so this is an ordinary failure rather than an answer");
+  assert.equal(k.currentTask?.retryCount, 1, "and an ordinary failure costs a budget an answer would not");
 });
 
 test("B10 a structured exit code is preferred over text, and absence is inert", async () => {
   const k = await adapter();
   await shellCall(k, "s1", "grep -rn needle notes.md", { exitCode: 1, output: "" });
-  assert.equal(k.currentTask?.replanCount, 0, "a structured exit code is honoured when present");
+  assert.equal(k.currentTask?.retryCount, 0, "a structured exit code is honoured when present, and the answer is free");
+  assert.equal(k.currentTask?.replanCount, 0);
 
-  // Nothing recognisable at all: today's behaviour, unchanged.
+  // Nothing recognisable at all: an ordinary failure. D4B: it costs the retry
+  // budget first, which is the discriminator this test now uses.
   const k2 = await adapter();
   await shellCall(k2, "s2", "grep -rn needle notes.md", { output: "" });
-  assert.equal(k2.currentTask?.replanCount, 1, "an unrecognised result must stay a plain tool failure");
+  assert.equal(k2.currentTask?.retryCount, 1, "an unrecognised result must stay a plain tool failure");
+  assert.equal(eventsOf(k2, "TASK_FAILED").length, 0, "and must not be laundered into a survivable outcome");
 });
