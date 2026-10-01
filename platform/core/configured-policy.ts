@@ -657,11 +657,19 @@ export class ConfiguredPolicy implements PolicyEngine {
       // depth cap -- NOTHING is exempt and the old whole-text rule applies, so
       // this can only ever keep a denial that would otherwise have been lost.
       const parsed = parseCommandLine(text);
-      const exempt = parsed.classified ? parsed.patternTokens : new Set<string>();
+      // Walk SEGMENTS, not the whole line. Each compound-command segment is a
+      // command line in its own right and is judged on its own exemptions, so an
+      // unclassifiable sibling costs only itself. When no segment could be
+      // offered at all (unbalanced quote) the whole text is scanned with no
+      // exemptions, which is strictly more aggressive than any segment.
+      const units = parsed.segments.length > 0
+        ? parsed.segments
+        : [{ text, exempt: new Set<string>() }];
 
-      for (const candidate of commandTokens(text)) {
-        if (exempt.has(candidate)) continue;
-        if (wanted.has(candidate.toLowerCase())) {
+      for (const unit of units) {
+        for (const candidate of commandTokens(unit.text)) {
+          if (unit.exempt.has(candidate)) continue;
+          if (!wanted.has(candidate.toLowerCase())) continue;
           // POSITION, NOT SPELLING, DECIDES THE TIER. A configured token that
           // IS the command being run is a deletion in itself and ends the task.
           // The same token anywhere else -- a commit message, a grep pattern, a
@@ -669,10 +677,12 @@ export class ConfiguredPolicy implements PolicyEngine {
           // survivable, so the agent can rephrase and continue.
           //
           // Both branches refuse. The tier only decides whether the RUN ends.
-          // An unclassified parse contributes whatever commands it did resolve,
-          // and anything not positively identified as the operation defaults to
-          // the survivable tier: execution is refused either way, so preferring
-          // SOFT cannot turn a refusal into an execution.
+          // `commandTokens` is collected across every segment, so a deletion
+          // sitting behind an unclassifiable segment is still an operation. An
+          // unclassified parse contributes whatever commands it did resolve, and
+          // anything not positively identified as the operation defaults to the
+          // survivable tier: execution is refused either way, so preferring SOFT
+          // cannot turn a refusal into an execution.
           const operation = parsed.commandTokens.has(candidate);
           return this.deny(`${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`,
             operation ? "HARD_DENY" : "SOFT_REFUSE");

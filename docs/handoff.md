@@ -457,28 +457,45 @@ operation. Whatever it did not positively identify is treated as payload.
 Execution is refused either way, so this default can never turn a refusal into
 an execution; it decides only whether the task ends.
 
-**Two carve-outs an operator must know**, both pinned separately and both
-narrower than the rule above:
+**Two carve-outs an operator must know.** Both are pinned separately, and both
+are narrower than the rule above:
 
 1. *Pattern position is exempt outright, not softly refused.* A token that is
    the search pattern of `grep`/`egrep`/`fgrep`/`rg`/`sed`/`awk`/`tr` is allowed
    outright, which is strictly stronger than a soft refusal. Pinned by
-   `platform/pi/command-position-corpus.test.ts`. The exemption exists because it
-   was measured: narrowing to command position would have re-admitted nested
-   deletions inside shell payloads.
-2. *One unclassifiable segment voids pattern exemptions for the whole line.*
-   `parseCommandLine` stops at the first segment it cannot understand, so an
-   unrelated `echo` in a compound command discards a legitimate pattern-position
-   exemption elsewhere in that same line. Fail-closed by design; the cost is a
-   false positive, not a hole.
+   `platform/pi/payload-position-tiering.test.ts` (P1d) and
+   `platform/pi/command-position-corpus.test.ts`. The exemption is narrow on
+   purpose: a head-only rule was measured and refused, because it re-admitted
+   nested deletions inside shell payloads. Pattern position is the one carve-out
+   the measurement supports, and nothing wider is claimed.
+2. *Compound commands are judged segment by segment.* A command line joined by
+   `;`, `|` or `&&` is several command lines, and each is judged on its own.
+   A segment that cannot be understood forfeits **only its own** exemptions, so
+   a grep pattern survives an unrelated `echo` beside it. Command tokens are
+   collected across **all** segments, so the floor holds wherever a deletion
+   sits — including behind an unclassifiable segment, which before per-segment
+   classification was never parsed at all and was softened to the survivable
+   tier. Pinned by P3a–P3f in the same file.
 
 **Operational consequence, learned the hard way.** Prose is only reliably
 recognised as payload, and an agent's commit messages, commit bodies and
 diagnostic `grep` patterns are full of ordinary English. This control has ended
-two sessions outright on innocuous words — once on a commit message, once on a
-diagnostic search whose pattern was an ordinary English verb. Therefore: put
-prose in *files*, not on command lines; search by key name rather than by value;
-keep compound commands to a single recognised head.
+three sessions outright on innocuous words — once on a commit message, once on a
+diagnostic search whose pattern was an ordinary English verb, and once on a
+compound search whose *sibling* segment carried the word. Therefore: put prose in
+*files*, not on command lines.
+
+**Search documents in-process, never with a shell `grep`.** A `grep` pattern is
+a payload position, but the words people actually search for — a note titled
+"known scanner behaviour", a section about avoiding deletion — are exactly the
+kind of prose this control is tuned to catch. `node -e` plus `fs` carries no
+such words on a command line. Searching by key name rather than by value is the
+same discipline applied to code.
+
+**Push after every commit, not at logical pauses.** A green commit that sits
+local for a session is indistinguishable, to everyone including the agent, from
+work that was never done: the branch is behind, CI is measuring an older commit,
+and the loss is discovered only at the end. One commit, one push, immediately.
 
 **A running session does not pick up a change to this control.** The policy is
 loaded at session start, so a tiering fix committed mid-session governs the

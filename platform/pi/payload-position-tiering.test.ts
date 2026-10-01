@@ -171,3 +171,77 @@ test("P2e the same token yields opposite tiers by position alone", async () => {
   assert.equal(soft, "SOFT_REFUSE");
   assert.equal(hard, "HARD_DENY");
 });
+
+// === 3. COMPOUND COMMANDS: classified per segment ========================
+//
+// A compound command is several command lines joined by `;`, `|` or `&&`. Each
+// is a command line in its own right and must be judged on its own.
+//
+// The bug these pin: `parseCommandLine` used to stop at the FIRST segment it
+// could not classify, discarding every exemption it had already earned. So one
+// unrelated `echo` anywhere in the line could void a legitimate grep exemption
+// elsewhere in the same line. That is the compound command that ended the
+// session that produced this file.
+//
+// The floor moved the other way at the same time, and that is the important
+// half: before this, a deletion sitting AFTER an unclassifiable segment was
+// never parsed at all, so it was tiered as payload and the run continued. The
+// fix makes the floor STRONGER than it was, not merely different.
+
+test("P3a a grep pattern survives an unclassifiable sibling segment", async () => {
+  // This is the session-killer shape: a grep for a real word, then an echo,
+  // then an ls. The token appears ONLY in the grep's pattern position.
+  const { adapter } = await governed();
+  const { decision } = await adapter.precheckToolCall(
+    "bash", "execute", { command: `grep -rn "${TOKEN}" docs; echo done; ls docs` }, undefined, "p3a",
+  );
+  assert.equal(decision.decision, "ALLOW",
+    "an unclassifiable sibling must not cost a sibling segment its exemption");
+  assert.notEqual(adapter.currentTask!.status, "FAILED");
+});
+
+test("P3b the floor holds for a deletion in the FIRST segment", async () => {
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `${TOKEN} notes.txt; echo done`, "p3b"), "HARD_DENY",
+    "command position in any segment is command position");
+});
+
+test("P3c the floor holds for a deletion AFTER an unclassifiable segment", async () => {
+  // RED before the fix: the echo was unclassifiable, the parser stopped there,
+  // the deletion was never seen as an operation, and the run continued.
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `echo done; ${TOKEN} notes.txt`, "p3c"), "HARD_DENY",
+    "a deletion behind an unclassifiable segment must not be softened into payload");
+});
+
+test("P3c2 that deletion still terminates the run", async () => {
+  const { adapter } = await governed();
+  await refuseThenReport(adapter, `echo done; ${TOKEN} notes.txt`, "p3c2");
+  assert.equal(adapter.currentTask!.status, "FAILED", "the floor is about the run, not only the tier");
+});
+
+test("P3d an unclassifiable segment is SOFT_REFUSE and the run continues", async () => {
+  // An option the wrapper table never measured. The parser cannot know what the
+  // program does with what follows, so nothing is positively identified as the
+  // operation - and the ruling is that ambiguity never terminates.
+  const { adapter } = await governed();
+  const reason = await refuseThenReport(adapter, `env --unmeasured-option ${TOKEN} notes.txt`, "p3d");
+  const task = adapter.currentTask!;
+  assert.notEqual(task.status, "FAILED", "ambiguity must not end the run");
+  assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.reason, "POLICY_SOFT_REFUSED");
+  assert.ok(reason.length > 0, "and the reason still travels, so the agent can rephrase");
+});
+
+test("P3e a pipeline is judged segment by segment too", async () => {
+  const grepSide = await governed();
+  const commandSide = await governed();
+  // Per R2 a pattern position is exempt outright, so this is ALLOW rather than
+  // a soft refusal -- and the exemption still has to survive the pipe, which is
+  // the whole point of this section.
+  const { decision } = await grepSide.adapter.precheckToolCall(
+    "bash", "execute", { command: `cat notes | grep -n "${TOKEN}"` }, undefined, "p3e-soft",
+  );
+  assert.equal(decision.decision, "ALLOW", "the pattern exemption survives a pipeline sibling");
+  const hard = await tierOf(commandSide.adapter, `echo done | ${TOKEN} notes.txt`, "p3e-hard");
+  assert.equal(hard, "HARD_DENY", "and the operation behind the pipe is still the operation");
+});
