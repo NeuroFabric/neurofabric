@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, realpath, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { Conductor } from "./conductor.ts";
+import { makeTempWorkspace, pathExists, writeFixture } from "../test-support/temp-workspace.ts";
 
 /**
  * THE CONTRACT `DESIGN.md` NAMES, for the arm the type system exposed.
@@ -31,22 +31,18 @@ South,95,3325
 East,140,5600`;
 
 /**
- * `realpath` is not cosmetic here. `os.tmpdir()` returns the 8.3 SHORT form on
- * this host (`RISHAB~1`) while the kernel reports the resolved LONG form, so a
- * path built locally and a path reported back by the conductor are different
- * strings pointing at one file. Without this, "the artifact exists" fails
- * spuriously AND "the artifact does not exist" passes vacuously -- which is the
- * worse of the two, because it would pass if the file were written.
+ * `realpath` and `stat` are not cosmetic here, and the reasons live in
+ * `platform/test-support/temp-workspace.ts`. In short: `os.tmpdir()` returns the
+ * 8.3 short form on this host while the kernel reports the resolved long form,
+ * so local and reported paths are different strings for one file -- and
+ * `access()` does not see a file `readdir()` lists. The first made C1c pass
+ * VACUOUSLY: it would have passed even if the file had been written.
  */
 async function workspace(): Promise<string> {
-  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "nf-conductor-")));
-  await writeFile(path.join(dir, "sales.csv"), CSV, "utf8");
+  const dir = await makeTempWorkspace("nf-conductor-");
+  await writeFixture(dir, "sales.csv", CSV);
   return dir;
 }
-
-const exists = async (p: string) => {
-  try { await stat(p); return true; } catch { return false; }
-};
 
 const eventTypes = (result: { kernelEvents: { type: string }[] }) => result.kernelEvents.map((e) => e.type);
 
@@ -59,8 +55,8 @@ test("C0 in TRUSTED_PROJECT mode the conductor delivers a dashboard", async () =
   const result = await conductor.run("make me a dashboard from sales.csv", { output: out });
   assert.equal(result.status, "DELIVERED", `status=${result.status} failure=${JSON.stringify(result.failure)}`);
   assert.equal(result.failure, undefined, "a delivered run carries no failure");
-  assert.equal(await exists(out), true,
-    `expected ${out}; artifacts=${JSON.stringify(result.artifacts)}; dir=${JSON.stringify(await readdir(cwd))}`);
+  assert.equal(await pathExists(out), true,
+    `expected ${out}; artifacts=${JSON.stringify(result.artifacts)}`);
 });
 
 // === 2. The arm under test ===============================================
@@ -90,7 +86,7 @@ test("C1c the tool does not run when its approval never resolved", async () => {
   const cwd = await workspace();
   const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
   const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-  assert.equal(await exists(path.join(cwd, "d.html")), false,
+  assert.equal(await pathExists(path.join(cwd, "d.html")), false,
     "an unresolved approval gate authorises nothing, so nothing may be written");
 });
 
