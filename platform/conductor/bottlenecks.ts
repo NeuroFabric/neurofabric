@@ -248,8 +248,15 @@ function resolveMappings(csv: CsvReadResult, schema?: ResolvedSchema): {
     const note = fromStore
       ? `verified schema "${schema?.id}"`
       : role === "duration"
-        ? "unit not stated in export"
-        : `inferred from name; ${distinct} distinct`;
+        // R10 superseded the old wording on this branch. It used to say the unit
+        // was not stated in the export, which was true of the file and false of
+        // the decision: the owner has ruled the elapsed column to be
+        // milliseconds, so the note names the ruling instead of the gap. The
+        // merge had dropped it, and a test asserting the ruling went red.
+        ? "ms by owner ruling R10"
+        : role === "time"
+          ? "UTC by owner ruling R11"
+          : `inferred from name; ${distinct} distinct`;
     mappings.push({ role, column: pick, hypothesis, note });
   }
   return { mappings, degenerate, chosen, verified };

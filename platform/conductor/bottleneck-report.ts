@@ -134,6 +134,40 @@ ${absent}`;
 }
 
 /**
+ * RESTORED FROM MAIN AFTER THE MERGE, and the merge is why it is here.
+ *
+ * The template below renders `${divergenceBanner(analysis)}`, and the merge of
+ * main into this branch kept that call while dropping the function that
+ * satisfies it. A template literal is not type checked for an undefined
+ * binding in the same way, so the file still built its HTML and still failed at
+ * runtime, and two conductor tests went red on the divergence headline. The
+ * body below is main's, brought back unchanged: reimplementing it here would
+ * be a second, subtly different banner nobody had reviewed.
+ */
+function divergenceBanner(a: BottleneckAnalysis): string {
+  const d = a.divergence;
+  if (d === null) return "";
+  const elapsed = d.byElapsed.totalElapsed;
+  const freq = d.byFrequency.totalElapsed;
+  const ratio = d.totalRatio === undefined ? null : d.totalRatio;
+  const pctOfCost = elapsed !== null && elapsed + (freq ?? 0) > 0 && elapsed > 0
+    ? (elapsed / (elapsed + (freq ?? 0))) * 100 : null;
+
+  const multiple = ratio === null ? null
+    : ratio >= 10 ? Math.round(ratio) : Number(ratio.toFixed(1));
+  const comparison = ratio === null ? "" : ratio >= 1
+    ? `${multiple}x the total elapsed time`
+    : `${(1 / ratio).toFixed(1)}x LESS total elapsed time`;
+
+  return `<div class="banner">
+  <p class="banner-title">The two rankings disagree. That is the finding.</p>
+  <p><strong>Most frequent:</strong> ${escapeHtml(d.byFrequency.label)} &mdash; ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.</p>
+  <p><strong>Most expensive:</strong> ${escapeHtml(d.byElapsed.label)} &mdash; ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}, with ${comparison}${pctOfCost === null ? "" : ` and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.</p>
+  <p class="banner-note">Ranking by frequency alone would have pointed at ${escapeHtml(d.byFrequency.key)} and buried ${escapeHtml(d.byElapsed.key)}. Evidence rows are in the tables below.</p>
+</div>`;
+}
+
+/**
  * The sentence that says where the column readings came from.
  *
  * This used to be a constant: "every column reading is inferred from the column
