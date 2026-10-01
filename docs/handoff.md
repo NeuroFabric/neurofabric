@@ -429,6 +429,63 @@ call.**
 **Commit subjects are 72 characters or fewer.** A longer subject is refused
 outright. Check the length before committing, not after.
 
+**Destructive tokens are tiered by POSITION, not by spelling.** A token listed in
+`destructiveCommandTokens` is refused in both positions below. What differs is
+only whether the task ends.
+
+- **Command position** — the token *is* the operation being run. `HARD_DENY`,
+  and the task terminates. This is the security floor and it does not move. It
+  holds through a wrapper (`xargs <token> …`) and inside a shell payload
+  (`bash -c "<token> …"`), because the parser walks both rather than pattern-
+  matching the head of the line.
+- **Payload position** — the token is *data*: a commit message, a quoted
+  argument, a message body. `SOFT_REFUSE`, and the task continues so the agent
+  can rephrase and carry on. The denial reason is preserved precisely so it
+  knows what to rephrase.
+
+**Why the tiers cannot be merged.** Both refuse execution; only the fate of the
+run differs. A token that is only ever data is not a hazard, and ending the run
+over it destroys every chance the agent has to correct itself. A token that is
+the operation is a hazard in itself, and no different next move makes it
+permitted.
+
+**Anything not positively identified as the operation defaults to the
+survivable tier.** The parser records the command operand even when it cannot
+classify the rest of the line, so a bare deletion — which it deliberately does
+not "bless", its job being to find pattern positions — is still seen as an
+operation. Whatever it did not positively identify is treated as payload.
+Execution is refused either way, so this default can never turn a refusal into
+an execution; it decides only whether the task ends.
+
+**Two carve-outs an operator must know**, both pinned separately and both
+narrower than the rule above:
+
+1. *Pattern position is exempt outright, not softly refused.* A token that is
+   the search pattern of `grep`/`egrep`/`fgrep`/`rg`/`sed`/`awk`/`tr` is allowed
+   outright, which is strictly stronger than a soft refusal. Pinned by
+   `platform/pi/command-position-corpus.test.ts`. The exemption exists because it
+   was measured: narrowing to command position would have re-admitted nested
+   deletions inside shell payloads.
+2. *One unclassifiable segment voids pattern exemptions for the whole line.*
+   `parseCommandLine` stops at the first segment it cannot understand, so an
+   unrelated `echo` in a compound command discards a legitimate pattern-position
+   exemption elsewhere in that same line. Fail-closed by design; the cost is a
+   false positive, not a hole.
+
+**Operational consequence, learned the hard way.** Prose is only reliably
+recognised as payload, and an agent's commit messages, commit bodies and
+diagnostic `grep` patterns are full of ordinary English. This control has ended
+two sessions outright on innocuous words — once on a commit message, once on a
+diagnostic search whose pattern was an ordinary English verb. Therefore: put
+prose in *files*, not on command lines; search by key name rather than by value;
+keep compound commands to a single recognised head.
+
+**A running session does not pick up a change to this control.** The policy is
+loaded at session start, so a tiering fix committed mid-session governs the
+*next* session, not the current one. After landing such a fix, expect the
+behaviour to be unchanged until restart — and do not read that as the fix
+having failed.
+
 **Scratch files go to `$TEMP/` with distinct names.** `.git/` is not storage.
 Two PR bodies were destroyed mid-session by an `mv` that clobbered an assembled
 file under a reused name. Use a fresh name per PR body, and verify a body with

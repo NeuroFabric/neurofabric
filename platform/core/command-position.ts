@@ -127,6 +127,16 @@ export interface CommandPositionResult {
    * destructive-token rule. Every other token keeps today's behaviour.
    */
   readonly patternTokens: ReadonlySet<string>;
+  /**
+   * Tokens that ARE the operation being run -- the command operand at some
+   * nesting level, after wrappers are consumed and payloads recursed into.
+   *
+   * This is what the tiering reads. A token in this set is a deletion; the same
+   * token anywhere else is data. Recorded even when `classified` is false,
+   * because `rm notes.txt` is unclassified by design (the module's job is to
+   * find PATTERN positions, not to bless commands) and is still a deletion.
+   */
+  readonly commandTokens: ReadonlySet<string>;
   /** False when the parser cannot understand the input. The caller must fall
    *  back to today's whole-text rule. Never means "allow". */
   readonly classified: boolean;
@@ -134,7 +144,7 @@ export interface CommandPositionResult {
   readonly reason?: string;
 }
 
-type Unclassified = { classified: false; reason: string };
+type Unclassified = { classified: false; reason: string; commandTokens: ReadonlySet<string> };
 
 /** Split on the operators that separate one command from the next. */
 function splitSegments(text: string): string[] {
@@ -231,7 +241,7 @@ function commandOperandIndex(
   tokens: readonly string[],
   wrapper: WrapperSpec,
   start: number,
-): { index: number } | Unclassified {
+): { index: number } | { reason: string } {
   let index = start;
   let bare = 0;
   while (index < tokens.length) {
@@ -244,13 +254,13 @@ function commandOperandIndex(
         .find((option) => token.length > option.length && token.startsWith(option));
       if (attached !== undefined) { index += 1; continue; }
       if (wrapper.optionsWithValue.has(token)) {
-        if (index + 1 >= tokens.length) return { classified: false, reason: `option '${token}' has no value` };
+        if (index + 1 >= tokens.length) return { reason: `option '${token}' has no value` };
         index += 2;
         continue;
       }
       if (wrapper.flags.has(token)) { index += 1; continue; }
       // An option this table never measured is not an option it understands.
-      return { classified: false, reason: `unmeasured option '${token}'` };
+      return { reason: `unmeasured option '${token}'` };
     }
     if (wrapper.consumesAssignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) { index += 1; continue; }
     if (bare < wrapper.bareOperands) { bare += 1; index += 1; continue; }
@@ -263,11 +273,12 @@ function parseTokens(
   tokens: readonly string[],
   depth: number,
   patternTokens: Set<string>,
+  commandTokens: Set<string>,
 ): CommandPositionResult | Unclassified {
   if (depth > MAX_SECURITY_SCAN_DEPTH) {
-    return { classified: false, reason: `command nesting exceeds the depth cap of ${MAX_SECURITY_SCAN_DEPTH}` };
+    return { classified: false, reason: `command nesting exceeds the depth cap of ${MAX_SECURITY_SCAN_DEPTH}`, commandTokens };
   }
-  if (tokens.length === 0) return { classified: false, reason: "empty command segment" };
+  if (tokens.length === 0) return { classified: false, reason: "empty command segment", commandTokens };
 
   const head = tokens[0];
 
@@ -276,11 +287,11 @@ function parseTokens(
     const cIndex = tokens.indexOf("-c", 1);
     if (cIndex === -1) {
       // `sh` with no `-c` reads a script from stdin, which is not knowable here.
-      return { classified: false, reason: `'${head}' invoked without -c` };
+      return { classified: false, reason: `'${head}' invoked without -c`, commandTokens };
     }
     const payload = tokens[cIndex + 1];
-    if (payload === undefined) return { classified: false, reason: `-c carries no payload` };
-    return parseCommandLine(payload, depth + 1, patternTokens);
+    if (payload === undefined) return { classified: false, reason: `-c carries no payload`, commandTokens };
+    return parseCommandLine(payload, depth + 1, patternTokens, commandTokens);
   }
 
   // `find`'s exec options carry a nested command line as their body.
@@ -299,37 +310,44 @@ function parseTokens(
       }
       if (cursor >= tokens.length) {
         // Measured: find reports "missing argument to '-exec'" in this shape.
-        return { classified: false, reason: `'${tokens[i]}' has no terminator` };
+        return { classified: false, reason: `'${tokens[i]}' has no terminator`, commandTokens };
       }
-      const nested = parseTokens(body, depth + 1, patternTokens);
+      const nested = parseTokens(body, depth + 1, patternTokens, commandTokens);
       if (!nested.classified) return nested;
     }
-    return { patternTokens, classified: true };
+    return { patternTokens, commandTokens, classified: true };
   }
 
   const wrapper = COMMAND_WRAPPERS.get(head);
   let index = 0;
   if (wrapper !== undefined) {
     const consumed = commandOperandIndex(tokens, wrapper, 1);
-    if ("classified" in consumed) return consumed;
+    if (!("index" in consumed)) return { classified: false, reason: consumed.reason, commandTokens };
     index = consumed.index;
   }
 
   const command = tokens[index];
-  if (command === undefined) return { classified: false, reason: `'${head}' names no command operand` };
+  if (command === undefined) return { classified: false, reason: `'${head}' names no command operand`, commandTokens };
+
+  // Recorded BEFORE both returns below, and before the measured-command check.
+  // `rm notes.txt` is unclassified on purpose -- this module's job is to find
+  // PATTERN positions, not to bless commands -- and the tiering still has to see
+  // that the token is the operation. Recursion continues to carry the same set,
+  // so a command found inside a wrapper or a payload lands here too.
+  commandTokens.add(command);
 
   // A wrapper's command operand may itself be a wrapper: `timeout 5 xargs rm`.
   if (COMMAND_WRAPPERS.has(command) || PAYLOAD_WRAPPERS.has(command) || command === "find") {
-    return parseTokens(tokens.slice(index), depth + 1, patternTokens);
+    return parseTokens(tokens.slice(index), depth + 1, patternTokens, commandTokens);
   }
 
   for (const token of patternPositionsOf(tokens, index)) patternTokens.add(token);
 
   // An unmeasured program head is not a claim that it is safe.
   if (!COMMAND_WRAPPERS.has(command) && !PATTERN_COMMAND_HEADS.has(command)) {
-    return { classified: false, reason: `'${command}' is not a measured command or wrapper` };
+    return { classified: false, reason: `'${command}' is not a measured command or wrapper`, commandTokens };
   }
-  return { patternTokens, classified: true };
+  return { patternTokens, commandTokens, classified: true };
 }
 
 /** Parse one command line, recursing through payloads and `-exec` bodies. */
@@ -337,16 +355,17 @@ export function parseCommandLine(
   text: string,
   depth = 0,
   patternTokens: Set<string> = new Set(),
+  commandTokens: Set<string> = new Set(),
 ): CommandPositionResult {
   if (hasUnbalancedQuote(text)) {
-    return { patternTokens, classified: false, reason: "unbalanced quote" };
+    return { patternTokens, commandTokens, classified: false, reason: "unbalanced quote" };
   }
   for (const segment of splitSegments(text)) {
     const tokens = tokenizeShell(segment).map((token) => token.text.trim()).filter((token) => token !== "");
-    const parsed = parseTokens(tokens, depth, patternTokens);
+    const parsed = parseTokens(tokens, depth, patternTokens, commandTokens);
     if (!parsed.classified) {
-      return { patternTokens, classified: false, reason: parsed.reason };
+      return { patternTokens, commandTokens, classified: false, reason: parsed.reason };
     }
   }
-  return { patternTokens, classified: true };
+  return { patternTokens, commandTokens, classified: true };
 }
