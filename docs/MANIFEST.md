@@ -37,16 +37,45 @@ later as a surprise.
 and created a stash without disclosing it. Disclosed, ruled on, and closed by
 the drop above; no further action.
 
-**Filed this session, unfixed:** **C1**, the echoed refusal — a policy refusal
-that settles while a sibling execution is still in flight is never classified
-by the D1 reversal, and `finishTask` then fails the task with a reason that
-names no rule and no policy. Measured, reproduced, and filed as F006 §5 item 7.
-Full transcript there. It is a live defect with a live consumer, and it is
-**not** the P1 caller-boundary item, which remains latent.
+**Filed this session, unfixed — two defects fell out of closing C1:**
+
+- **F006 §5 item 8 — a refusal that settles as a SIBLING kills the task.**
+  Measured: two executions bound as siblings, the refused one settling first.
+  `observeToolResult` takes the early return at `kernel-adapter.ts:1300`,
+  appends an `INVALID` validation and sets `attemptBlocked = true`, and returns
+  **before** the recovery block — so `SOFT_REFUSAL_CONTINUED` never runs and
+  `denialReason` is never read. The last sibling then succeeds,
+  `lastValidation` is `VALID`, and `finishTask:1807` fails the task with *"One
+  or more results in this attempt failed or could not be verified"*: **no rule,
+  no policy, no path**, and nothing failed verification at all. Live, reachable,
+  unfixed. The lone-denial path is intact — measured, task returns to
+  `PLANNING`. Full transcript in F006 §5.
+- **F006 §5 item 9 — the `REPLANNING` refusal text tells a live task that it
+  terminated** (`kernel-adapter.ts:795`). One sentence, one site. Deferred
+  because it changes a public refusal string.
+
+**C1 itself is CLOSED**, by measurement and a green pin, not by prose: a
+`REPLANNING` task cannot hold a `failureReason` (all eight sites that write one
+target `FAILED`, which is terminal; `REPLANNING` is transient), so the replay
+tail is unreachable and the "should it replay?" question has no live answer to
+give. `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4` — the
+invariant is pinned, and `C1.3` guards the terminal replay so the closure
+cannot later be satisfied by deleting the attribution.
 
 **Operator blockers, restated:** push pending; **restart pending (blocks C2)**;
 item-1 MR merge outstanding; the Docker gate run on Track B item 1 outstanding.
 Roadmap §"Operator blockers" is the table of record.
+
+**One leftover for the operator to delete.**
+`platform/pi/.c1-probe.test.ts` — an untracked, throwaway probe from earlier in
+this session, carrying its own header ("TEMPORARY PROBE. Not a pin. Deleted
+after the C1 read"). It is inert: dot-prefixed, so the suite glob
+`platform/pi/*.test.ts` does not match it (measured: 0 occurrences of its text
+in the suite output), and it is untracked so it is in no commit and no MR. It
+could not be removed from here because the deletion guard denied the operation
+and routing around that guard is precisely what it exists to prevent. **It needs
+one operator delete.** Its findings are recorded in F006 §5 item 7 and pinned in
+`platform/pi/c1-replanning-stored-failure.test.ts`, so nothing depends on it.
 
 ## §2.4(a) RE-FILED — the old mechanism was wrong, measured
 

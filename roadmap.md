@@ -39,25 +39,29 @@ what a task is allowed to die of. `abort` still ends a task, one layer out, in
 pre-reversal code as present tense. It is evidence of a bug, not current law, and
 must be marked as such before the ledger is used as a corrective authority again.
 
-## Human decision required
+## Human decision required — **NONE. `REPLANNING` is CLOSED by measurement.**
 
-**`REPLANNING` and the stored-failure echo** — ledger §3.2.
+**`REPLANNING` and the stored-failure echo** — ledger §3.2, closed 2026-10-01.
 
-`REFUSED_EXECUTION_STATES` includes `REPLANNING`, which the ledger's own
-`TERMINAL_TASK_STATES` comment calls "still live and still owned by whoever started
-it". Of the three sites gated on that set, only `kernel-adapter.ts:835`
-(`describeTerminalRefusal`) replays the stored reason. **That replay is unpinned for
-`REPLANNING`.**
+The question was whether a live `REPLANNING` task should replay a stored
+failure reason. It was left unpinned because a pin must assert one of two
+answers. **It is not a choice.** A `REPLANNING` task cannot hold a
+`failureReason` at all: every one of the eight sites that writes one targets
+`FAILED`, which is terminal and cannot transition onward, and `REPLANNING` is
+entered from `RECOVERING` and left on the next line without one. The replay
+tail is therefore unreachable for `REPLANNING`, so the "yes" answer describes a
+state the machine cannot produce and the code already is the "no" answer.
 
-Two candidate answers, both live:
+Full derivation, the eight call sites, and the measured refusal strings: F006
+§5 item 7. Closed with a **green pin** on the invariant, not with prose —
+`platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4`, including
+`C1.3`, which asserts the terminal replay is untouched so the closure cannot be
+satisfied later by deleting the attribution.
 
-- **yes** — a live `REPLANNING` task should replay a stored reason, and the pin
-  should be added;
-- **no** — `REPLANNING` should refuse without replaying a stored reason.
-
-**Deliberately not pinned.** A pin must assert one of these, and choosing silently
-would launder an open design question into settled law. Requires an operator
-decision. No code change.
+**Two defects fell out of the closure and are filed, not closed:** item 8 (a
+sibling refusal fails the task with a reason naming no rule — live, reachable,
+unfixed) and item 9 (the `REPLANNING` refusal text tells a live task it
+terminated). Neither is a reason to reopen the question above.
 
 ## P1 — caller-boundary fix: a refusal is indistinguishable from a tool fault
 
@@ -126,7 +130,7 @@ below are the whole of what was authorised this session.
 | Order | Item | State | Outcome |
 |---|---|---|---|
 | 1 | F006 work-order record (docs-only) | unblocked | done — F006 §5, and this table |
-| 2 | **C1** echoed-refusal | self-contained | **done — read, measured, FILED** as F006 §5 item 7. Not closed: it is a live defect, and the fix needs its own branch. |
+| 2 | C1 echoed-refusal | self-contained | **done — CLOSED.** Read from source and measured: the question was vacuous, the replay is unreachable for `REPLANNING`. Closed with a green invariant pin (`C1.1`–`C1.4`). Two further defects surfaced and are filed as F006 §5 items 8 and 9. |
 | 3 | **B2 item 1** — Dockerfile + compose | unblocked | done on `docker-ui-scaffold`, status `UNVERIFIED` pending the operator's Docker run |
 | 4 | Full status report, both tracks | this document's sibling | done |
 
@@ -184,7 +188,9 @@ design; these interfaces are scaffolding, not a contract.
 | 3 | Documenting pin D1.1c | **blocked — awaiting operator paste** |
 | 4 | Ledger reversal entry | pending, diff first |
 | 5 | Caller-boundary fix (validator threading) | deferred — own review cycle |
-| C1 | Echoed refusal: a sibling refusal fails the task | **FILED** — F006 §5 item 7, measured, unfixed |
+| C1 | Echoed refusal: `REPLANNING` stored-failure replay | **CLOSED** — unreachable by construction; green pin `C1.1`–`C1.4` |
+| 8 | Sibling refusal fails the task, reason names no rule | **FILED** — F006 §5 item 8, measured, live, unfixed |
+| 9 | `REPLANNING` refusal text claims the task terminated | **FILED** — F006 §5 item 9, wording, unfixed |
 | B1 | Dockerfile + compose, green baseline | authored, **`UNVERIFIED`** — operator's Docker run |
 | B2 | Frontend shell, mock data | pending B1 |
 | B3 | Typed wire points for State + Observability | pending B2 |

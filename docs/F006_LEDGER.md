@@ -1089,9 +1089,46 @@ guard before writing the message. Commit `b0a8cdf` on
    containment is unchanged, so the widening cannot reach outside the roots. It
    is recorded here rather than described as a tightening, because it is not
    one.
-7. **C1 — the echoed refusal, second edition: a refusal that settles as a
-   sibling kills the task, and the certificate names neither the policy nor the
-   rule.** Filed 2026-10-01, measured, **unfixed**.
+7. **C1 — the REPLANNING stored-failure echo. CLOSED 2026-10-01 by
+   measurement; nothing to decide.** The open question was whether a REPLANNING
+   task should replay a stored failure reason. It is not a choice, and the
+   reason is structural:
+
+   - `failureReason` is written in exactly one place, `advance()`, and only when
+     a caller passes it. **All eight call sites target FAILED** — supersession
+     `:693`, policy abort `:1036`, recovery TERMINATE `:1432`, the legacy denial
+     path `:1754`, the three `finishTask` kills `:1782`/`:1800`/`:1817`, and
+     the unusable-stream kill `:1854`.
+   - FAILED is terminal and admits nothing (`state-machine.ts:17`,
+     `FAILED: []`), and `transitionTask` throws on any transition out of a
+     terminal state (`:30`). A task holding a stored failure can therefore
+     never be REPLANNING afterwards.
+   - REPLANNING is entered only from the REPLAN branch (`:1397`), left again on
+     the next line (`:1398`), and that branch sets no reason. It is transient
+     inside one synchronous block.
+
+   So the replay tail in `describeTerminalRefusal` (`:780-798`) is
+   **unreachable for REPLANNING**. The "yes" option describes a state the state
+   machine cannot produce, and the code already behaves as the "no" option.
+   Measured, not inferred: a forced REPLANNING task refuses with *"it was NOT
+   evaluated and no policy rule refused it; the task terminated WITHOUT
+   recording a failureReason, so there is no original failure to replay"*, and a
+   forced FAILED task with a certificate still replays it, labelled ORIGINAL.
+
+   **Closed with a green pin, not with prose.**
+   `platform/pi/c1-replanning-stored-failure.test.ts`, `C1.1`–`C1.4`. It pins
+   the *invariant* (reachability), not the preference, and it includes the
+   guard against over-correcting: `C1.3` asserts the terminal replay is
+   untouched, so the closure cannot be satisfied later by deleting the
+   attribution. 4 pass, 0 fail, typecheck clean.
+
+   **The wording defect this surfaced is item 9, not a closure of this item.**
+   A pin asserting today's exact REPLANNING sentence would make a known-wrong
+   string permanent and would break CI on the day it is fixed.
+8. **The echoed refusal, second edition: a refusal that settles as a sibling
+   kills the task, and the certificate names neither the policy nor the
+   rule.** Filed 2026-10-01, measured, **unfixed**. Found while closing item 7;
+   it is a separate site with a separate fix and is not closed under C1.
 
    **What the D1 reversal fixed, confirmed by measurement.** A lone mid-execution
    refusal does survive: the task returns to `PLANNING`, the event trail reads
@@ -1157,6 +1194,21 @@ guard before writing the message. Commit `b0a8cdf` on
    gates needed: the lone denial still survives (**green today**, guards the
    reversal against a fix that over-corrects), and the sibling denial leaves the
    task alive with the policy's reason reachable (**red today**).
+9. **The REPLANNING refusal text tells a live task that it terminated.**
+   Filed 2026-10-01 by item 7's measurement, **unfixed**. One sentence, one
+   site: `kernel-adapter.ts:795` gives a REPLANNING task *"the task terminated
+   WITHOUT recording a failureReason, so there is no original failure to
+   replay"*. The second clause is true. The first is not — a REPLANNING task is
+   live, and that is exactly the distinction this codebase draws between
+   `TERMINAL_TASK_STATES` and `REFUSED_EXECUTION_STATES` (`:88-92`).
+
+   Small, but it is the one defect class this repository exists to prevent: a
+   message that reads as an account of what happened and is not one, sitting
+   where the operator will not re-check it. The fix is a REPLANNING branch in
+   the same `if/else` chain — the chain already special-cases `COMPLETED` and
+   `ESCALATED`, so a live state was simply not enumerated. Deferred, not
+   dropped: it changes a public refusal string, so it takes its own item and its
+   own review, and `C1.4` is the pin that will need updating when it lands.
 
 ---
 
