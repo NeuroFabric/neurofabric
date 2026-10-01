@@ -94,7 +94,12 @@ function toResponse(result: ConductorResult): Record<string, unknown> {
     questions: result.questions,
     artifacts: result.artifacts,
     schema: result.report?.schema === undefined ? undefined : {
-      id: result.report.schema.id, source: result.report.schema.source, learnedRoles: result.report.learnedRoles,
+      // `learnedRoles` lives on the SCHEMA, not on the report. Reading it off
+      // the report returned undefined for every run, so the UI could never
+      // show which columns came from the per-checkout archive.
+      id: result.report.schema.id,
+      source: result.report.schema.source,
+      learnedRoles: result.report.schema.learnedRoles,
     },
     kernelEvents: result.kernelEvents,
     progress: result.progress,

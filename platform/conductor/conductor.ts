@@ -344,7 +344,7 @@ export class Conductor {
    */
   private async callTool(
     callId: string, tool: string, input: Record<string, unknown>,
-  ): Promise<{ ok: true; value: unknown } | { ok: false; failure: { code: string; reason: string } }> {
+  ): Promise<{ ok: true; value: unknown } | { ok: false; failure: { code: string; reason: string; kernelReasonCode?: string } }> {
     const bound = await this.kernel.beginToolExecution(callId, tool, { toolCallId: callId });
     if (bound === undefined) {
       return { ok: false, failure: { code: "CALL_NOT_BOUND", reason: `the kernel refused to bind ${tool} (task is ${this.kernel.currentTask?.status})` } };
