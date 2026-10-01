@@ -93,7 +93,11 @@ function categoryTable(rows: readonly CategoryStat[], title: string, order: "fre
       <td class="num">${c.breachCount}</td>
       <td class="cite">rows ${escapeHtml(cite(c.rows))}</td>
     </tr>`).join("\n");
-  const extra = order === "elapsed" ? "<th>total elapsed</th>" : "";
+  // R10. The owner ruled the elapsed column to be milliseconds, so the header
+  // says so rather than leaving the reader to infer a unit from the magnitude of
+  // the numbers. A column labelled "total elapsed" next to 3,405,355 is a claim
+  // about a unit the report never makes.
+  const extra = order === "elapsed" ? "<th>total elapsed (ms)</th>" : "";
   return `<h2>${escapeHtml(title)}</h2>
 <table>
   <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th>${extra}<th>over threshold</th><th>evidence</th></tr></thead>
@@ -168,6 +172,51 @@ function divergenceBanner(a: BottleneckAnalysis): string {
 }
 
 /**
+ * THE DIVERGENCE IN MARKDOWN. The same finding as `divergenceBanner`, in the
+ * rendering the web wedge hands back to a browser and a person pastes into a
+ * ticket.
+ *
+ * RESTORED. The merge kept `divergenceBanner` because the HTML template calls it,
+ * so nothing went red: HTML still shouted. The Markdown template simply never
+ * had a block for it, and it degrades silently rather than failing -- which is
+ * the worse failure, because a report that under-reports is still a report that
+ * looks finished.
+ *
+ * It is a DEDICATED BLOCK rather than a clause appended to the lead sentence,
+ * because the sentence that would have carried it is the one a reader skims.
+ * The two rankings disagreeing is this product's entire claim, and a 158x cost
+ * multiple buried mid-paragraph is read as trivia. A callout cannot be skimmed
+ * past by accident.
+ *
+ * D2 STILL HOLDS: when both orderings agree this returns "", because a headline
+ * that always shouts is one nobody reads.
+ */
+function markdownDivergenceBanner(a: BottleneckAnalysis): string {
+  const d = a.divergence;
+  if (d === null) return "";
+  const elapsed = d.byElapsed.totalElapsed;
+  const freq = d.byFrequency.totalElapsed;
+  const ratio = d.totalRatio ?? null;
+  const pctOfCost = elapsed !== null && elapsed + (freq ?? 0) > 0 && elapsed > 0
+    ? (elapsed / (elapsed + (freq ?? 0))) * 100 : null;
+  const multiple = ratio === null ? null : ratio >= 10 ? Math.round(ratio) : Number(ratio.toFixed(1));
+  const comparison = ratio === null ? "" : ratio >= 1
+    ? ` with **${multiple}x the total elapsed time**`
+    : ` at **${(1 / ratio).toFixed(1)}x LESS total elapsed time**`;
+
+  return [
+    "> [!WARNING]",
+    "> **The two rankings disagree. That is the finding.**",
+    ">",
+    `> - **Most frequent:** ${mdCell(d.byFrequency.label)} — ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.`,
+    `> - **Most expensive:** ${mdCell(d.byElapsed.label)} — ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}${comparison}${pctOfCost === null ? "" : `, and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.`,
+    ">",
+    `> Ranking by frequency alone would have pointed at ${mdCell(d.byFrequency.key)} and buried ${mdCell(d.byElapsed.key)}. Evidence rows are in the tables below.`,
+    "",
+  ].join("\n");
+}
+
+/**
  * The sentence that says where the column readings came from.
  *
  * This used to be a constant: "every column reading is inferred from the column
@@ -199,9 +248,19 @@ function provenanceNote(a: BottleneckAnalysis): string {
  * for the TABLE STRUCTURE here, and the browser escapes them again for HTML
  * before rendering. Two layers, because one layer is a bet about which renderer
  * will eventually see this text.
+ *
+ * EMPHASIS IS ESCAPED, NOT DELETED. This used to strip `*` and `_` outright, and
+ * a column name is mostly underscores: `_time` printed as `time`, `alert_code`
+ * as `alertcode`, `logger_name` as `loggername`. Those are not the columns in the
+ * file. The report was renaming the evidence it cites, which is the one thing
+ * this renderer exists not to do -- and it disagreed with the HTML rendering of
+ * the same analysis, which has no such stripping. A backslash escape renders as
+ * the literal character and cannot open emphasis, so the cell is both safe and
+ * true. Backticks stay deleted: there is no escape that makes them inert in every
+ * renderer, and a value carrying one is vanishingly rare.
  */
 function mdCell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[`*_[\]<>]/g, "").replace(/\r?\n/g, " ").trim();
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[`*_]/g, (c) => `\\${c}`).replace(/[\[\]<>]/g, "").replace(/\r?\n/g, " ").trim();
 }
 
 function mdRows(rows: readonly number[], limit = 12): string {
@@ -214,11 +273,17 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
   const lines = [
     `## ${heading}`,
     "",
-    "| # | category | alerts | over threshold | total elapsed | source rows |",
+    "| # | category | alerts | over threshold | total elapsed (ms) | source rows |",
     "|---|---|---|---|---|---|",
   ];
   stats.forEach((s, index) => {
-    lines.push(`| ${index + 1} | ${mdCell(s.key)} | ${s.count} | ${s.breachCount} | ${s.totalElapsed === null ? "not measurable" : s.totalElapsed.toLocaleString()} | ${mdRows(s.rows)} |`);
+    // R13: the LABEL, not the bare key. The key alone says PEGA0001; the label
+    // says PEGA0001 (HttpAPI), which is the row a person recognises. The key is
+    // still a prefix of it, so anything matching on the code keeps working, and
+    // an alias is only ever present when R13 proved the mapping unambiguous in
+    // both directions -- one logger serving two codes is a coincidence, not a
+    // label.
+    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} | ${s.breachCount} | ${s.totalElapsed === null ? "not measurable" : s.totalElapsed.toLocaleString()} | ${mdRows(s.rows)} |`);
   });
   lines.push("", `_Ranked by ${measure}._`, "");
   return lines.join("\n");
@@ -245,6 +310,11 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     }
     out.push(`> ${lead}`, "");
   }
+
+  // The divergence is the HEADLINE, and it leads. Same D2 guard as the HTML
+  // banner: nothing is printed when the two orderings agree.
+  const divergence = markdownDivergenceBanner(analysis);
+  if (divergence !== "") out.push(divergence);
 
   if (analysis.mappings.length > 0 || analysis.missing.length > 0) {
     const verifiedCount = analysis.verifiedRoles?.length ?? 0;
