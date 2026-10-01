@@ -59,12 +59,31 @@ export interface DegenerateColumn {
 /** A ranked alert category, with the elapsed time it cost. */
 export interface CategoryStat {
   readonly key: string;
+  /** key plus its human-readable alias, when one is unambiguous (R13). */
+  readonly label: string;
   readonly count: number;
-  /** Sum of the duration column, or null when there is no credible one. */
+  /** Sum of the duration column in milliseconds (R10), or null when absent. */
   readonly totalElapsed: number | null;
   /** Rows over the threshold. Zero when there is no threshold column. */
   readonly breachCount: number;
   readonly rows: readonly number[];
+}
+
+/**
+ * The disagreement between ranking by frequency and ranking by elapsed time.
+ *
+ * This is the finding the product exists to surface. A category can top the
+ * frequency table on sheer volume while contributing a rounding error of the
+ * total cost, and the one burying the other is whichever ranking you did not
+ * print. Measured rather than eyeballed, so the page can state the ratio.
+ */
+export interface Divergence {
+  readonly byFrequency: CategoryStat;
+  readonly byElapsed: CategoryStat;
+  /** Total elapsed of the elapsed-leader over the frequency-leader. */
+  readonly totalRatio: number | null;
+  /** Alert count of the elapsed-leader over the frequency-leader. */
+  readonly alertRatio: number | null;
 }
 
 export interface LatencyBand {
@@ -112,7 +131,31 @@ export interface BottleneckAnalysis {
    * entirely normal while being wrong.
    */
   readonly timestampsAreNaive: boolean;
+  /** R10: the owner has ruled the elapsed column to be milliseconds. */
+  readonly durationUnit: "ms";
+  /** R10 was a ruling, so the unit is established rather than inferred. */
+  readonly durationUnitIsRuled: true;
+  /** R11: the owner has ruled timestamps to be UTC. */
+  readonly timeZoneIsRuled: true;
+  /** Loggers that map to more than one code, so no alias is printed for them. */
+  readonly ambiguousAliases: readonly string[];
+  /** Null when both rankings agree. See D2: a headline that always shouts is noise. */
+  readonly divergence: Divergence | null;
 }
+
+/**
+ * RULINGS BY A PERSON, not inferences from a column name.
+ *
+ * R10: the Pega elapsed column is milliseconds. R11: its timestamps are UTC.
+ * Both were open questions in the first real-data findings and both are now
+ * settled. They live here, in ONE place, and the schema memory persists them --
+ * because re-deriving a ruling from a header on every run would quietly discard
+ * it the first time the file was needed.
+ *
+ * R12 (hostnames stay out of generated artefacts) is NOT here: it is a rendering
+ * control, not a fact about a schema, and it is enforced in the renderer.
+ */
+export const OWNER_RULINGS = { durationUnit: "ms", timeZone: "UTC" } as const;
 
 const ERROR_STATUSES = new Set(["4", "5"]);
 
@@ -129,6 +172,7 @@ const ROLE_CANDIDATES: Record<string, readonly string[]> = {
   // Most specific first: a code discriminates better than a type.
   category: ["alert_code", "alertcode", "alert_type", "alertType", "category", "event_type", "type"],
   message: ["_raw", "message", "msg", "description", "details"],
+  alias: ["logger_name", "logger", "source_module"],
   status: ["status", "code", "http_status"],
   duration: ["elapsed_time", "elapsed_ms", "duration_ms", "duration", "elapsed"],
   threshold: ["threshold", "limit", "threshold_ms"],
@@ -259,6 +303,24 @@ function rank(entries: Map<string, { error: number; rows: number[] }>): Bottlene
     .sort((a, b) => b.errorCount - a.errorCount || b.errorRate - a.errorRate || a.key.localeCompare(b.key));
 }
 
+/**
+ * A logger's readable form for a label: its final dotted segment.
+ *
+ * Fully qualified names run past seventy characters, which breaches the
+ * committed report's cell budget and reads worse. The last segment is the part
+ * a human recognises -- the class or handler name -- and discarding the package
+ * prefix is a DISPLAY choice, not a semantic one: the full value is still what
+ * the mapping used, and the analysis returns it unchanged.
+ */
+function aliasLabel(value: string): string {
+  const last = value.split(".").filter((s) => s.length > 0).at(-1) ?? value;
+  return last.length > 24 ? `${last.slice(0, 23)}…` : last;
+}
+
+function categoryLabel(key: string, alias: string | undefined): string {
+  return alias === undefined ? key : `${key} (${aliasLabel(alias)})`;
+}
+
 function bucket(map: Map<string, { error: number; rows: number[] }>, key: string, error: boolean, row: number): void {
   const entry = map.get(key) ?? { error: 0, rows: [] };
   if (error) entry.error += 1;
@@ -285,6 +347,7 @@ export function analyseBottlenecks(
   const latencyCol = chosen.duration;
   const categoryCol = chosen.category;
   const thresholdCol = chosen.threshold;
+  const aliasCol = chosen.alias;
 
   const sources = new Map<string, { error: number; rows: number[] }>();
   const signatures = new Map<string, { error: number; rows: number[] }>();
@@ -299,7 +362,7 @@ export function analyseBottlenecks(
 
   let errorRows = 0;
 
-  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[] }>();
+  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[]; loggers: Set<string> }>();
 
   let naiveTimestamps = 0;
   let timestampRows = 0;
@@ -351,7 +414,7 @@ export function analyseBottlenecks(
     // question asks for both.
     if (categoryCol !== undefined) {
       const key = String(row[categoryCol] ?? "(none)");
-      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [] };
+      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [], loggers: new Set<string>() };
       const rawDuration = latencyCol === undefined ? Number.NaN : Number(String(row[latencyCol] ?? ""));
       if (entry.elapsed !== null && Number.isFinite(rawDuration)) entry.elapsed += rawDuration;
       if (thresholdCol !== undefined && Number.isFinite(rawDuration)
@@ -360,6 +423,10 @@ export function analyseBottlenecks(
       }
       entry.count += 1;
       entry.rows.push(rowNumber);
+      if (aliasCol !== undefined) {
+        const logger = String(row[aliasCol] ?? "").trim();
+        if (logger.length > 0) entry.loggers.add(logger);
+      }
       categories.set(key, entry);
     }
   });
@@ -368,8 +435,22 @@ export function analyseBottlenecks(
   // would report a confident answer about a fraction of the export, with
   // nothing on the page to say so. A real 101-row export was half-analysed this
   // way before a red test caught it.
+  // R13. An alias is only printed when the mapping is unambiguous in BOTH
+  // directions. One logger serving several codes is a coincidence, and
+  // labelling the majority of its rows with it would be wrong for them.
+  const aliasOf = new Map<string, string>();
+  const ambiguousAliases: string[] = [];
+  for (const [key, v] of categories) {
+    if (v.loggers.size !== 1) continue;
+    const logger = [...v.loggers][0];
+    const sharedWith = [...categories.entries()].filter(([, o]) => o.loggers.has(logger));
+    if (sharedWith.length === 1) aliasOf.set(key, logger);
+    else ambiguousAliases.push(logger);
+  }
+
   const categoryStats: CategoryStat[] = [...categories.entries()].map(([key, v]) => ({
     key,
+    label: categoryLabel(key, aliasOf.get(key)),
     count: v.count,
     totalElapsed: v.elapsed,
     breachCount: v.breach,
@@ -385,6 +466,17 @@ export function analyseBottlenecks(
   const missing = (["category", "time", "source", "message", "duration"] as const)
     .filter((role) => chosen[role] === undefined)
     .map((role) => (role === "message" ? "message" : role));
+
+  const divergence = byFrequency[0] !== undefined && byElapsed[0] !== undefined
+    && byFrequency[0].key !== byElapsed[0].key
+    ? {
+      byFrequency: byFrequency[0],
+      byElapsed: byElapsed[0],
+      totalRatio: byFrequency[0].totalElapsed && byElapsed[0].totalElapsed
+        ? byElapsed[0].totalElapsed / byFrequency[0].totalElapsed : null,
+      alertRatio: byFrequency[0].count === 0 ? null : byElapsed[0].count / byFrequency[0].count,
+    }
+    : null;
 
   const total = csv.rows.length;
   return {
@@ -406,5 +498,10 @@ export function analyseBottlenecks(
     categories: byFrequency,
     categoriesByElapsed: byElapsed,
     timestampsAreNaive: timestampRows > 0 && naiveTimestamps === timestampRows,
+    durationUnit: OWNER_RULINGS.durationUnit,
+    durationUnitIsRuled: true,
+    timeZoneIsRuled: true,
+    ambiguousAliases: [...new Set(ambiguousAliases)],
+    divergence,
   };
 }
