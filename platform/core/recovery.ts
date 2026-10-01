@@ -1,6 +1,6 @@
 import { CoreError } from "./errors.ts";
 import { isBenignNonZeroExit } from "./benign-exit.ts";
-import type { ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./types.ts";
+import type { DenialTier, ExecutionRecord, Idempotency, Plan, Task, ToolResult } from "./types.ts";
 
 export type FailureCategory = "TRANSIENT" | "PERMISSION" | "INVALID_INPUT" | "TOOL_FAILURE" | "TIMEOUT" | "RATE_LIMIT" | "MODEL_FAILURE" | "VALIDATION_FAILURE" | "DEPENDENCY_FAILURE" | "POLICY_DENIED"
   /**
@@ -168,6 +168,20 @@ export function chooseRecoveryDetailed(options: {
    * threaded end to end.
    */
   violation?: "block" | "abort";
+  /**
+   * RULING 1 (2026-10-01): WHICH KIND of refusal produced this failure.
+   *
+   * `HARD_DENY` TERMINATEs — a destructive command, a secret, a workspace
+   * escape, a scan that could not complete. `SOFT_REFUSE` and an ABSENT tier
+   * CONTINUE — a read outside the workspace, an unapproved tool, and every
+   * refusal from an engine that does not classify.
+   *
+   * BOTH remain non-retryable and non-replan-worthy. The tier decides the task's
+   * fate and nothing else about the refusal, which is why it is read here, at
+   * the one place the task's fate is decided, rather than at any of the places
+   * the refusal is reported.
+   */
+  tier?: DenialTier;
 }): RecoveryDecision {
   const { limits, failure, depth, idempotency } = options;
   const strategyCount = options.strategyCount ?? 0;
@@ -204,6 +218,22 @@ export function chooseRecoveryDetailed(options: {
   // elapsed time above, and recovery depth plus the exhausted retry, replan and
   // strategy funds below. Each is unchanged.
   if (failure === "POLICY_DENIED") {
+    // RULING 1. Two tiers, resolved HERE and nowhere else.
+    //
+    //   HARD_DENY  -> TERMINATE. The call was a hazard in itself; no other next
+    //                  move makes it permitted, and a run that keeps going after
+    //                  one is a run that will try it again.
+    //   SOFT / none -> CONTINUE. The call was refused for scope or authority; the
+    //                  agent adapts or asks. This is the D1 reversal of
+    //                  2026-10-01, unchanged, and it stays the default so no
+    //                  caller is moved by omission.
+    //
+    // Reported ahead of the budget guards, as the denial always was, because a
+    // task that is both refused and out of depth has to be told the refusal is
+    // what happened.
+    if (options.tier === "HARD_DENY") {
+      return { strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" };
+    }
     return { strategy: "CONTINUE", reason: "POLICY_SOFT_REFUSED" };
   }
   // F-006 §2.3: the command answered, and the answer was "no". There is nothing
@@ -343,6 +373,16 @@ export function describeTerminalRecovery(
 ): string {
   const { limits, retryCount, replanCount, depth, failure } = options;
   const strategyCount = options.strategyCount ?? 0;
+  if (failure === "POLICY_DENIED") {
+    // RULING 1: a HARD denial ends the task, so the certificate has to name
+    // what killed it. The counters are printed, but never AS the cause.
+    const denial = options.denialReason === undefined ? "" : `, denied=${options.denialReason}`;
+    return `Policy DENY [${decision.reason}]: failure=${failure}${denial}`
+      + `, retryCount=${retryCount}/${limits.maxToolRetries}, `
+      + `replanCount=${replanCount}/${limits.maxReplans}, `
+      + `strategyCount=${strategyCount}/${limits.maxStrategyChanges}, `
+      + `recoveryDepth=${depth}/${limits.maxRecoveryDepth}`;
+  }
   const elapsed = options.elapsedMs === undefined ? "" : `, elapsedMs=${options.elapsedMs}/${limits.maxExecutionTimeMs}`;
   // The policy's OWN words, when any survived to this point. A refusal is only
   // actionable if the operator can see WHICH rule refused it, so nothing

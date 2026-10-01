@@ -4,7 +4,7 @@ import { extractPathCandidates, MAX_SECURITY_SCAN_DEPTH, newScanState, Workspace
 import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
 
 export type { StringScan } from "./workspace.ts";
-import type { PolicyDecision, PolicyRequest, ToolBudgetTelemetry } from "./types.ts";
+import type { DenialTier, PolicyDecision, PolicyRequest, ToolBudgetTelemetry } from "./types.ts";
 
 export interface ApprovalProvider {
   requestApproval(request: PolicyRequest): Promise<boolean>;
@@ -229,14 +229,28 @@ export function sensitiveBasenameMatch(input: unknown, candidates?: readonly str
 /**
  * Classify a request for trusted-project mode.
  *
- * Returns a denial reason, or `undefined` when the operation is ordinary
- * development work that may proceed without interaction.
+ * Returns the denial and its RULING 1 tier, or `undefined` when the operation is
+ * ordinary development work that may proceed without interaction.
+ *
+ * The tier is decided HERE, per reason, because this is the only place that
+ * knows which rule fired. Before the ruling the kernel saw one undifferentiated
+ * refusal and had to treat all of them alike; that is what made "read a secret"
+ * indistinguishable from "look in a directory that is not yours".
+ *
+ * Every branch is classified. A branch added later and left unclassified comes
+ * back `undefined` for its tier and is then read as SOFT by recovery — the
+ * pre-ruling behaviour, and survivable-but-wrong rather than silently fatal.
  */
-export function classifyTrustedOperation(request: PolicyRequest, boundary: WorkspaceBoundary): string | undefined {
+export function classifyTrustedOperation(
+  request: PolicyRequest,
+  boundary: WorkspaceBoundary,
+): { reason: string; tier: DenialTier } | undefined {
   const { tool, input } = request;
 
   // A destructive-classified tool is never auto-executed.
-  if (tool.riskLevel === "DESTRUCTIVE") return `tool '${tool.name}' is classified DESTRUCTIVE`;
+  if (tool.riskLevel === "DESTRUCTIVE") {
+    return { reason: `tool '${tool.name}' is classified DESTRUCTIVE`, tier: "HARD_DENY" };
+  }
 
   const pathScan = scanToolPathCandidates(tool, input);
   const commandScan = scanCommandText(tool, input);
@@ -246,23 +260,32 @@ export function classifyTrustedOperation(request: PolicyRequest, boundary: Works
   const commandTruncated = commandScan.truncated || textScan.truncated;
 
   const basename = sensitiveBasenameMatch(input, pathScan.candidates);
-  if (basename) return `operation targets credential file '${basename}'`;
+  // RULING 1: everything below is a hazard in itself — a secret, a credential
+  // file, a destructive command, a scan that could not finish, or a write that
+  // escapes the workspace. None of them becomes permitted by a different next
+  // move, so they end the run with the rule named.
+  if (basename) return { reason: `operation targets credential file '${basename}'`, tier: "HARD_DENY" };
 
   const secret = matchIn(textScan, SECRET_ACCESS_PATTERNS);
-  if (secret) return `operation touches credential material (matched ${secret.source})`;
+  if (secret) return { reason: `operation touches credential material (matched ${secret.source})`, tier: "HARD_DENY" };
 
   const destructive = matchIn(textScan, DESTRUCTIVE_PATTERNS);
-  if (destructive) return `command is destructive (matched ${destructive.source})`;
+  if (destructive) return { reason: `command is destructive (matched ${destructive.source})`, tier: "HARD_DENY" };
 
   // Fail closed on an incomplete scan. A pattern that matched is still
   // evidence, so the specific reasons above are reported first; this catches
   // the case that actually matters, where the walk stopped before it could see
   // the payload at all. It is checked before the boundary because an empty
   // candidate list and a truncated one look identical to the checks below.
-  if (pathScan.truncated || commandTruncated) return truncatedScanReason(tool.name);
+  if (pathScan.truncated || commandTruncated) {
+    return { reason: truncatedScanReason(tool.name), tier: "HARD_DENY" };
+  }
 
+  // SOFT, and this is the ruling's clearest case: the call pointed somewhere the
+  // workspace does not cover. The agent can be told that and asked, or try
+  // somewhere in-root — nothing about it is dangerous, only out of bounds.
   const escape = boundary.checkCandidates(pathScan.candidates);
-  if (!escape.allowed) return `path boundary violation: ${escape.reason}`;
+  if (!escape.allowed) return { reason: `path boundary violation: ${escape.reason}`, tier: "SOFT_REFUSE" };
 
   return undefined;
 }
@@ -324,7 +347,9 @@ export class TrustedProjectPolicy implements PolicyEngine {
 
   evaluate(request: PolicyRequest): PolicyDecision {
     const denial = classifyTrustedOperation(request, this.boundary);
-    if (denial) return { decision: "DENY", reason: `Neurofebric policy: ${denial}` };
+    // RULING 1: the tier travels on the decision. Absent is read as SOFT, so an
+    // engine that does not classify keeps the D1 reversal's behaviour exactly.
+    if (denial) return { decision: "DENY", reason: `Neurofebric policy: ${denial.reason}`, tier: denial.tier };
     return { decision: "ALLOW" };
   }
 
