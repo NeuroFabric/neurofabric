@@ -73,6 +73,18 @@ export type RecoveryReason =
   | "STRATEGY_BUDGET_EXHAUSTED"
   | "POLICY_DENIED_TERMINATED"
   | "POLICY_SOFT_REFUSED"
+  /**
+   * D4B: an ordinary failure bought a RETRY before it bought anything else.
+   *
+   * These three names exist so the trace can say which of the three things
+   * happened — retried, replanned after the retries ran out, or escalated because
+   * the tool declares itself non-idempotent. A single generic REPLAN reason
+   * covered all three, and that generic answer is what the terminal certificate
+   * blamed.
+   */
+  | "TOOL_FAILURE_RETRY"
+  | "TOOL_FAILURE_RETRY_EXHAUSTED_REPLAN"
+  | "TOOL_FAILURE_NON_IDEMPOTENT_ESCALATED"
   /** F-006 §2.3: an answer, not a fault. The failure is final; the task lives. */
   | "BENIGN_NONZERO_EXIT_CONTINUED";
 
@@ -262,6 +274,44 @@ function repeatAttemptDecision(options: {
     // Retries are spent but replans may remain: fall through, as before.
     if (replanCount < limits.maxReplans) {
       return { strategy: "REPLAN", reason: "TRANSIENT_RETRY_EXHAUSTED_REPLAN" };
+    }
+    return { strategy: "TERMINATE", reason: "RETRY_AND_REPLAN_BUDGET_EXHAUSTED" };
+  }
+  // D4B. AN ORDINARY FAILURE IS RETRIED BEFORE IT IS REPLANNED.
+  //
+  // What used to happen: `TOOL_FAILURE` is not in `RETRY_ELIGIBLE`, so control
+  // fell straight through to the generic REPLAN tail below. With maxReplans = 2
+  // that meant three ordinary failures — a command that exited non-zero, a path
+  // that was not there, a tool that simply failed — killed the task, with the
+  // retry budget never once touched. The measured fingerprint was
+  // `retryCount=0/2` beside `replanCount=2/2`. The previous fix session was
+  // terminated by this, and in product terms the application dies the moment a
+  // user asks for something slightly unusual.
+  //
+  // WHY A RETRY IS NOT A BLIND REPEAT. `RETRY` does not re-execute anything
+  // here: it advances the task to RETRYING and back to PLANNING, which hands
+  // control to whoever plans next — in production, the model, which sees the
+  // failure in its observations and decides what to do about it. The kernel
+  // funds one more turn and books it against `maxToolRetries`. That is a
+  // materially different risk from the mechanical repeat F006.2 was written
+  // against, which is why the two rules do not contradict each other.
+  //
+  // `NON_IDEMPOTENT` IS STILL REFUSED A RETRY. That declaration is the caller
+  // stating that repeating the call is unsafe, and nothing here is worth
+  // overriding it. `UNKNOWN` is not the same statement: it is the absence of one
+  // (platform/pi/tool-adapter.ts gives every Pi shell tool `UNKNOWN`), and
+  // treating "nobody said" as "nobody may ever try again" is what made the
+  // session death the common case rather than the rare one.
+  if (failure === "TOOL_FAILURE") {
+    if (idempotency === "NON_IDEMPOTENT") {
+      return { strategy: "ESCALATE", reason: "TOOL_FAILURE_NON_IDEMPOTENT_ESCALATED" };
+    }
+    if (retryCount < limits.maxToolRetries) return { strategy: "RETRY", reason: "TOOL_FAILURE_RETRY" };
+    // Retries spent. A replan is now the correct next move, and it is still
+    // bounded: `replanCount < maxReplans` is the same guard the transient path
+    // has always used, so nothing is opened up here that was not already open.
+    if (replanCount < limits.maxReplans) {
+      return { strategy: "REPLAN", reason: "TOOL_FAILURE_RETRY_EXHAUSTED_REPLAN" };
     }
     return { strategy: "TERMINATE", reason: "RETRY_AND_REPLAN_BUDGET_EXHAUSTED" };
   }

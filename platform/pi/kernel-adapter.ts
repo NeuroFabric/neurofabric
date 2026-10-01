@@ -32,7 +32,7 @@ import {
   type ToolResult,
   type ValidationResult,
 } from "../core/index.ts";
-import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type RecoveryLimits } from "../core/index.ts";
+import { chooseRecoveryDetailed, classifyFailure, describeTerminalRecovery, type FailureCategory, type RecoveryLimits, type RecoveryReason, type RecoveryStrategy } from "../core/index.ts";
 import { callSignature } from "../core/call-signature.ts";
 import { commandNameFrom, exitStatusFrom } from "../core/benign-exit.ts";
 import { vaultToolDescriptors, vaultToolsEnabled, type VaultWiring } from "./vault-tools.ts";
@@ -176,6 +176,33 @@ export interface KernelDiagnostics {
 }
 
 /**
+ * D4B R5: why a call failed, in the kernel's own terms, for a caller that has to
+ * report it outward.
+ *
+ * Everything here is already emitted on `RECOVERY_STARTED` /
+ * `SOFT_REFUSAL_CONTINUED`. This is the same information made readable by the
+ * caller that owns the trace, because a fact that only exists inside the
+ * component that produced it cannot be traced by anything else.
+ *
+ * `denialReason` is the policy's own words and is ABSENT for every failure that
+ * was not a refusal. It is never synthesised, defaulted, or filled in from the
+ * classification: a refusal with no reason delivered must read as a refusal with
+ * no reason, which is exactly what the pre-bridge defect looked like.
+ */
+export interface FailureReport {
+  /** The class the failure was classified into. Never absent once reported. */
+  classification: FailureCategory;
+  /** What recovery did about it. `CONTINUE` means "reported, and the task lives". */
+  strategy: RecoveryStrategy;
+  /** The structured reason behind that strategy, when one applies. */
+  reason?: RecoveryReason;
+  /** The policy's words, for a refusal only. */
+  denialReason?: string;
+  /** The `onViolation` the policy put on the decision, when it carried one. */
+  violation?: "block" | "abort";
+}
+
+/**
  * Content block types that represent a real assistant *action*.
  *
  * A tool call is an action the model actually took, so a turn whose only
@@ -314,6 +341,26 @@ export class KernelAdapter {
    * anchor would fork the newer task's decisions using the older task's history.
    */
   private lastFailureSignature: string | undefined;
+
+  /**
+   * D4B R5: what the kernel decided about the LAST failure it classified.
+   *
+   * Pi hands the bridge a boolean `isError` and an opaque payload. Everything
+   * else — which class this was, whether a rule refused it and which, what the
+   * recovery did about it — is reconstructed inside this adapter, and until D4B
+   * it stayed inside: it reached the event stream but no caller could read it
+   * back. The extension therefore could not trace why a call failed, only that
+   * it did, and an operator reading a dead session had no way to tell an
+   * ordinary failure from a refusal without re-deriving both from raw logs.
+   *
+   * A getter rather than a field so it cannot be written from outside, and it
+   * holds the LAST report only: this is a trace surface, not an audit log. The
+   * durable record is the event stream, and nothing here duplicates it.
+   *
+   * Cleared with the rest of the per-task recovery state, because a stale
+   * report attributed to a newer task would be worse than no report at all.
+   */
+  private failureReport: FailureReport | undefined;
 
   /** Real executions currently in flight, keyed by Pi toolCallId. */
   private readonly activeExecutions = new Map<string, BoundExecution>();
@@ -563,6 +610,18 @@ export class KernelAdapter {
   }
 
   /**
+   * D4B R5: the classification and attribution of the last failure, for a caller
+   * that has to report it outward — the Pi bridge above all.
+   *
+   * `undefined` means no failure has been classified for the current task, which
+   * is NOT the same as "nothing is known": a success never writes here, so the
+   * bridge can tell a clean call from a call it failed to classify.
+   */
+  get lastFailureReport(): FailureReport | undefined {
+    return this.failureReport;
+  }
+
+  /**
    * The single place a task state changes, so every transition is recorded with
    * the state it came from, the method that moved it, and the counters as they
    * stood. Behaviour is exactly `transitionTask`; the bookkeeping is additive.
@@ -706,6 +765,9 @@ export class KernelAdapter {
     this.recoveryDepth = 0;
     this.lastAttemptSignature = undefined;
     this.lastFailureSignature = undefined;
+    // D4B R5: a newer turn inherits no failure report from the older one. Same
+    // lifecycle as every counter above it, for the same reason.
+    this.failureReport = undefined;
     this.executionStartedAtNs = process.hrtime.bigint();
     this.activeExecutions.clear();
     this.knownToolCallIds.clear();
@@ -1318,6 +1380,19 @@ export class KernelAdapter {
       this.attemptBlocked = true;
     }
 
+    // D4B R5: the sibling path classifies its own refusal, so it publishes its
+    // own report too. Written BEFORE the in-flight early return below, because
+    // that return is where a sibling-settled failure is otherwise invisible to
+    // every caller outside this method.
+    if (siblingDenial) {
+      this.failureReport = {
+        classification: "POLICY_DENIED",
+        strategy: "CONTINUE",
+        reason: "POLICY_SOFT_REFUSED",
+        denialReason: error instanceof CoreError ? error.message : undefined,
+      };
+    }
+
     // Sibling executions from the same assistant message are still in flight;
     // the task stays EXECUTING until the last one settles.
     if (this.activeExecutions.size > 0) {
@@ -1401,6 +1476,17 @@ export class KernelAdapter {
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
+      // D4B R5: publish what was decided, for the caller's trace. Written on
+      // every classified failure, including CONTINUE, so a survivable refusal and
+      // an ordinary failure are both reportable rather than one of them being
+      // observable only through the event stream.
+      this.failureReport = {
+        classification: failure,
+        strategy,
+        reason: decision.reason,
+        denialReason,
+        violation: options?.violation,
+      };
             // §2.3: a refusal is an answer, not a spend. CONTINUE books nothing --
       // not retry, not replan, and not recovery depth. Charging depth for a
       // refusal would let repeated denials starve the task without it ever
@@ -1491,6 +1577,11 @@ export class KernelAdapter {
       this.recoveryDepth = 0;
       this.lastAttemptSignature = undefined;
       this.lastFailureSignature = undefined;
+      // D4B R5: a VALID boundary clears the report with the rest of the per-task
+      // recovery state. Keeping it would let a later call inherit the previous
+      // call's classification, which is precisely the misattribution the report
+      // exists to prevent.
+      this.failureReport = undefined;
     }
 
     return validation;

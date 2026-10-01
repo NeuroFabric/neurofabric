@@ -199,8 +199,44 @@ export default function platformOrchestrator(pi: ExtensionAPI): void {
     // what made a committed `onViolation: block` terminate the task anyway:
     // recovery was told the denial was UNLABELLED, and an unlabelled denial
     // terminated. The label is now carried the whole way.
+    //
+    // D4B: `errorRetryable` (the fifth argument) is STILL forwarded as
+    // `undefined`, and that is now a deliberate statement rather than a gap.
+    // Pi's `tool_execution_end` carries a boolean and nothing that says whether
+    // a repeat could plausibly succeed, so there is no honest value to forward
+    // and inventing one would be guessing at an external contract. The kernel
+    // no longer depends on it for the ordinary-failure case: D4B gives an
+    // ordinary failure its own retry path precisely because that flag cannot be
+    // supplied. A caller that DOES know the answer supplies it and gets
+    // `TRANSIENT` on top.
     await kernel.recordToolResult(event.toolCallId, event.toolName, event.result, event.isError, undefined, denial?.reason, denial?.violation);
-    record("tool_execution_end", { toolCallId: event.toolCallId, tool: event.toolName, isError: event.isError, artifacts: kernel.artifacts.length, taskStatus: kernel.currentTask.status });
+    // D4B R5. Pi reports an OUTCOME (`isError`) and an opaque payload. Which
+    // class the failure was, whether a rule refused it, and what recovery did
+    // are reconstructed inside the kernel, and until this line they stayed
+    // there — so the session trace could say that a call failed and nothing
+    // about why. An operator reading a dead session had to re-derive the
+    // classification from raw logs, which is the same blindness D1's reversal
+    // created for refusals and was fixed for those at `SOFT_REFUSAL_CONTINUED`.
+    //
+    // Read AFTER `recordToolResult`, because the report is written by the
+    // classification that call just performed. Read before `record`, so the
+    // report belongs to THIS result even if a later call has already run.
+    //
+    // `undefined` means no failure was classified — a success, or a result the
+    // kernel never processed. The field is therefore absent rather than
+    // null-filled: an ordinary success must not appear to carry a class.
+    const failure = kernel.lastFailureReport;
+    record("tool_execution_end", {
+      toolCallId: event.toolCallId,
+      tool: event.toolName,
+      isError: event.isError,
+      artifacts: kernel.artifacts.length,
+      taskStatus: kernel.currentTask.status,
+      failureClassification: failure?.classification,
+      recoveryStrategy: failure?.strategy,
+      recoveryReason: failure?.reason,
+      denialReason: failure?.denialReason,
+    });
   });
 
   pi.on("agent_end", async (event) => {
