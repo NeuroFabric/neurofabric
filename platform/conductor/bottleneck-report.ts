@@ -83,24 +83,36 @@ ${body}
 </table>`;
 }
 
+/**
+ * THE FOUR DURATION COLUMNS. Total, mean, median, p95 -- or a row of em-dashes.
+ *
+ * The four travel TOGETHER in both renderings and in both rank orders. The
+ * frequency table used to omit cost entirely, which is a strange omission in a
+ * product whose headline finding is that frequency and cost disagree: the reader
+ * is shown the two rankings side by side and then asked to compare a number
+ * from one with a number from the other, when both are in the other table.
+ *
+ * A measure the file cannot support is an em-dash and never a 0, for the same
+ * reason the analysis returns null: 0 ms is a finding, "&mdash;" is a gap.
+ */
+function durationCells(c: CategoryStat, format: (n: number) => string): string {
+  const cell = (v: number | null): string => `<td class="num">${v === null ? "&mdash;" : escapeHtml(format(v))}</td>`;
+  return `${cell(c.totalElapsed)}${cell(c.meanElapsed)}${cell(c.medianElapsed)}${cell(c.p95Elapsed)}`;
+}
+
 function categoryTable(rows: readonly CategoryStat[], title: string, order: "frequency" | "elapsed"): string {
   if (rows.length === 0) return "";
   const body = rows.map((c, i) => `    <tr${i === 0 ? ' class="top"' : ""}>
       <td class="rank">${i === 0 ? "<strong>1</strong>" : i + 1}</td>
       <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.label)}</td>
       <td class="num">${c.count}</td>
-      ${order === "elapsed" ? `<td class="num">${c.totalElapsed === null ? "&mdash;" : c.totalElapsed.toLocaleString()}</td>` : ""}
+      ${durationCells(c, (n) => n.toLocaleString())}
       <td class="num">${c.breachCount}</td>
       <td class="cite">rows ${escapeHtml(cite(c.rows))}</td>
     </tr>`).join("\n");
-  // R10. The owner ruled the elapsed column to be milliseconds, so the header
-  // says so rather than leaving the reader to infer a unit from the magnitude of
-  // the numbers. A column labelled "total elapsed" next to 3,405,355 is a claim
-  // about a unit the report never makes.
-  const extra = order === "elapsed" ? "<th>total elapsed (ms)</th>" : "";
   return `<h2>${escapeHtml(title)}</h2>
 <table>
-  <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th>${extra}<th>over threshold</th><th>evidence</th></tr></thead>
+  <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th><th>total elapsed (ms)</th><th>mean (ms)</th><th>median (ms)</th><th>p95 (ms)</th><th>over threshold</th><th>evidence</th></tr></thead>
   <tbody>
 ${body}
   </tbody>
@@ -273,17 +285,18 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
   const lines = [
     `## ${heading}`,
     "",
-    "| # | category | alerts | over threshold | total elapsed (ms) | source rows |",
-    "|---|---|---|---|---|---|",
+    "| # | category | alerts | over threshold | total elapsed (ms) | mean (ms) | median (ms) | p95 (ms) | source rows |",
+    "|---|---|---|---|---|---|---|---|---|",
   ];
   stats.forEach((s, index) => {
+    const cell = (v: number | null): string => (v === null ? "not measurable" : v.toLocaleString());
     // R13: the LABEL, not the bare key. The key alone says PEGA0001; the label
     // says PEGA0001 (HttpAPI), which is the row a person recognises. The key is
     // still a prefix of it, so anything matching on the code keeps working, and
     // an alias is only ever present when R13 proved the mapping unambiguous in
     // both directions -- one logger serving two codes is a coincidence, not a
     // label.
-    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} | ${s.breachCount} | ${s.totalElapsed === null ? "not measurable" : s.totalElapsed.toLocaleString()} | ${mdRows(s.rows)} |`);
+    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} | ${s.breachCount} | ${cell(s.totalElapsed)} | ${cell(s.meanElapsed)} | ${cell(s.medianElapsed)} | ${cell(s.p95Elapsed)} | ${mdRows(s.rows)} |`);
   });
   lines.push("", `_Ranked by ${measure}._`, "");
   return lines.join("\n");
