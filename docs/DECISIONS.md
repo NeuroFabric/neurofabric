@@ -3086,3 +3086,61 @@ truncation, so no live fail-open remains.
   fail-closed instinct applied to scan bounds.
 - D-030 — referenced by `tool-paths-recursion.test.ts` but absent from this file;
   that gap is pre-existing and was not fabricated here.
+
+## D-032 — Schema memory has two stores, and the checkout's own wins
+
+**Date:** 2026-10-02
+**Stage:** 3 (product wedge)
+**Status:** Accepted
+
+### Context
+
+Stage 2 established a verified column mapping for the Pega alert export: the
+category role is `alert_code`, the duration role is `elapsed_time`, and
+`alertType` — which is named exactly like a category column and holds a single
+distinct value across the whole export — is rejected as unable to discriminate.
+
+The same export shape will arrive again, from a customer who has never run this
+tool. If the only place that knowledge lives is a per-checkout scratch
+directory, then every new install re-derives the mapping by column name, and
+re-runs the R9 trap on real customer data instead of on a fixture.
+
+### Decision
+
+Two stores, one merge, and the order between them is the decision:
+
+1. `.session-archive/schemas.json` — what THIS checkout has learned. Per
+   checkout, gitignored, never shipped. Accepted as either a bare array or a
+   `{ "schemas": [...] }` object, because it is a file a person edits by hand.
+2. `configs/default-schemas.json` — core VERIFIED schemas, tracked in git,
+   shipped with the product.
+
+They are merged role by role, archive first: a checkout that corrected one role
+keeps that correction and still inherits the verified mapping for the rest.
+Choosing a whole store rather than merging would mean either discarding what the
+user learned or discarding what we verified.
+
+A stored mapping is applied only to a file that actually has its columns, and
+only when it can fill the required roles. It is never a way to force a column
+past the cardinality rejection: that rejection is a property of the data, and a
+configuration file does not overrule arithmetic.
+
+### Consequence
+
+- `platform/conductor/schema-memory.ts` is the only reader of either store. A
+  missing, empty or corrupt archive degrades to the shipped defaults and never
+  throws: a memory subsystem that can take the product down is worse than one
+  that forgets.
+- A column supplied by a store is reported as `established` with its
+  provenance; everything inferred from a column NAME stays `hypothesis`. The
+  report's own sentence about its basis is now derived from that count rather
+  than hardcoded, because a page that calls a verified mapping a guess — or a
+  guess an established fact — is worse than one that admits what it does not know.
+- Pinned by `platform/conductor/schema-memory.test.ts` (5) and
+  `platform/conductor/report-markdown.test.ts` (5).
+
+### Cross-references
+
+- R9 (Stage 2) — the `alertType` cardinality rejection this store now carries.
+- D-016 — the per-checkout vault precedent for runtime-learned state staying
+  untracked.

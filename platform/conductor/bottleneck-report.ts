@@ -4,6 +4,7 @@ import path from "node:path";
 import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat } from "./bottlenecks.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
+import type { ResolvedSchema } from "./schema-memory.ts";
 
 /**
  * THE STAGE 2 ARTIFACT: a bottleneck report page.
@@ -117,7 +118,7 @@ function mappingsSection(a: BottleneckAnalysis): string {
   const dropped = a.degenerateColumns.map((d) => `    <li><strong>${escapeHtml(d.column)}</strong> &mdash; ${escapeHtml(d.note)} (${d.distinctValues} distinct value(s)).</li>`).join("\n");
   const absent = a.missing.length === 0 ? "" : `<p class="gap"><strong>This page cannot answer anything requiring:</strong> ${a.missing.map(escapeHtml).join(", ")}. No credible column for ${a.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted for ${a.missing.length === 1 ? "it" : "them"}.</p>`;
   return `<h2>How this page was read</h2>
-<p class="none">Every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>
+${provenanceNote(a)}
 <table>
   <thead><tr><th>role</th><th>column</th><th>basis</th><th>note</th></tr></thead>
   <tbody>
@@ -131,13 +132,148 @@ ${dropped}
 ${absent}`;
 }
 
+/**
+ * The sentence that says where the column readings came from.
+ *
+ * This used to be a constant: "every column reading is inferred from the column
+ * NAME alone". Once a stored schema can supply a verified mapping, that sentence
+ * is false for the rows it describes, and a report that mislabels its own
+ * evidence is worse than one that admits what it does not know. So the basis is
+ * stated per source, and the counts are printed rather than asserted.
+ */
+function provenanceNote(a: BottleneckAnalysis): string {
+  const verifiedCount = a.verifiedRoles?.length ?? 0;
+  if (verifiedCount === 0) {
+    return `<p class="none">No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation. A name describes intent; it does not prove semantics.</p>`;
+  }
+  const where = a.schemaSource === "SESSION_ARCHIVE"
+    ? "this checkout's own learned schema (<code>.session-archive</code>)"
+    : "a core schema shipped with the product (<code>configs/default-schemas.json</code>)";
+  const rest = a.mappings.length - verifiedCount;
+  return `<p class="none">${verifiedCount} of ${a.mappings.length} column reading(s) come from ${escapeHtml(where)}, verified against a real export of this shape.${rest > 0
+    ? ` The remaining ${rest} ${rest === 1 ? "is" : "are"} inferred from the column NAME alone and awaits owner confirmation.`
+    : ""}</p>`;
+}
+
+/**
+ * The same findings as Markdown, for the web wedge and for pasting into a ticket.
+ *
+ * CELL ESCAPING. Every value here came out of a CSV a stranger uploaded, so it
+ * is treated as hostile: a pipe would break the table it sits in, a newline would
+ * invent a row, and backticks would open a code span. The values are neutralised
+ * for the TABLE STRUCTURE here, and the browser escapes them again for HTML
+ * before rendering. Two layers, because one layer is a bet about which renderer
+ * will eventually see this text.
+ */
+function mdCell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[`*_[\]<>]/g, "").replace(/\r?\n/g, " ").trim();
+}
+
+function mdRows(rows: readonly number[], limit = 12): string {
+  const shown = rows.slice(0, limit).join(", ");
+  return rows.length > limit ? `${shown} (+${rows.length - limit} more)` : shown;
+}
+
+function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string): string {
+  if (stats.length === 0) return `## ${heading}\n\n_No rows carried a credible category column, so this ranking is empty. That is a fact about the file, not a finding._\n`;
+  const lines = [
+    `## ${heading}`,
+    "",
+    "| # | category | alerts | over threshold | total elapsed | source rows |",
+    "|---|---|---|---|---|---|",
+  ];
+  stats.forEach((s, index) => {
+    lines.push(`| ${index + 1} | ${mdCell(s.key)} | ${s.count} | ${s.breachCount} | ${s.totalElapsed === null ? "not measurable" : s.totalElapsed.toLocaleString()} | ${mdRows(s.rows)} |`);
+  });
+  lines.push("", `_Ranked by ${measure}._`, "");
+  return lines.join("\n");
+}
+
+/** The Markdown rendering of an analysis. Pure: no I/O, no policy, no kernel. */
+export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report"): string {
+  const topCategory = analysis.categories[0];
+  const topElapsed = analysis.categoriesByElapsed[0];
+  const out: string[] = [`# ${mdCell(title)}`, ""];
+
+  out.push(`${analysis.totalRows} row(s) · ranked by **${mdCell(analysis.categoryColumn ?? "no credible column")}**`);
+  if (analysis.mappings.some((m) => m.role === "status")) {
+    out.push(`· ${analysis.errorRows} error(s) · error rate ${pct(analysis.errorRate)}`);
+  } else {
+    out.push("· no status column, so no error rate is claimed");
+  }
+  out.push("");
+
+  if (topCategory !== undefined) {
+    let lead = `**#1 by frequency:** ${mdCell(topCategory.key)} — ${topCategory.count} alert(s), ${topCategory.breachCount} over threshold, rows ${mdRows(topCategory.rows)}.`;
+    if (topElapsed !== undefined && topElapsed.key !== topCategory.key) {
+      lead += ` **#1 by total elapsed:** ${mdCell(topElapsed.key)} (${topElapsed.totalElapsed?.toLocaleString() ?? "not measurable"}).`;
+    }
+    out.push(`> ${lead}`, "");
+  }
+
+  if (analysis.mappings.length > 0 || analysis.missing.length > 0) {
+    const verifiedCount = analysis.verifiedRoles?.length ?? 0;
+    out.push("## How this report was read", "");
+    out.push(verifiedCount === 0
+      ? "_No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation._"
+      : `_${verifiedCount} of ${analysis.mappings.length} column reading(s) come from ${analysis.schemaSource === "SESSION_ARCHIVE" ? "this checkout's own learned schema" : "a core schema shipped with the product"}, verified against a real export of this shape._`);
+    out.push("");
+    out.push("| role | column | basis | note |", "|---|---|---|---|");
+    for (const m of analysis.mappings) {
+      out.push(`| ${mdCell(m.role)} | ${mdCell(m.column)} | ${m.hypothesis ? "hypothesis" : "established"} | ${mdCell(m.note)} |`);
+    }
+    out.push("");
+  }
+
+  if (analysis.degenerateColumns.length > 0) {
+    out.push("## Columns deliberately not ranked on", "");
+    for (const d of analysis.degenerateColumns) {
+      out.push(`- **${mdCell(d.column)}** — ${mdCell(d.note)} (${d.distinctValues} distinct value(s)).`);
+    }
+    out.push("");
+  }
+
+  if (analysis.missing.length > 0) {
+    out.push(`> **This report cannot answer anything requiring:** ${analysis.missing.map(mdCell).join(", ")}. No credible column for ${analysis.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted.`, "");
+  }
+
+  out.push(mdCategoryTable(analysis.categories, "Alert categories by frequency", "frequency"));
+  out.push(mdCategoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "total elapsed time"));
+
+  if (analysis.byHour.length > 0) {
+    out.push(`## Rows by hour (${analysis.timestampsAreNaive ? "host-local; these timestamps carry no zone" : "UTC"})`, "");
+    out.push("| hour | rows | error rows |", "|---|---|---|");
+    for (const h of analysis.byHour) out.push(`| ${mdCell(h.key)} | ${h.count} | ${h.errorCount} |`);
+    out.push("");
+  }
+
+  if (analysis.unreadableTimestamps.length > 0) {
+    out.push(`## Excluded from the hourly view`, "", `${analysis.unreadableTimestamps.length} row(s) carried an unreadable timestamp: rows ${mdRows(analysis.unreadableTimestamps)}.`, "");
+  }
+  if (analysis.problems.length > 0) {
+    out.push("## Structural problems in the source file", "");
+    for (const p of analysis.problems) out.push(`- ${mdCell(p)}`);
+    out.push("");
+  }
+  return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
+}
+
 /** Render the report. Writes nothing when the CSV reported structural problems. */
 export async function renderBottleneckReport(input: {
   path: string;
   title?: string;
   csv: CsvReadResult;
-}): Promise<{ path: string; bytes: number; rendered: boolean; problems: readonly string[] }> {
-  const analysis = analyseBottlenecks(input.csv);
+  /** A stored mapping for this file, when one resolved. See `schema-memory.ts`. */
+  schema?: ResolvedSchema;
+  /**
+   * `html` (default) writes the self-contained page. `markdown` writes the same
+   * findings as Markdown, which is what the web wedge returns to a browser and
+   * what a person can paste into a ticket. The FIGURES are identical: one
+   * analysis, two renderings, so the two can never disagree.
+   */
+  format?: "html" | "markdown";
+}): Promise<{ path: string; bytes: number; rendered: boolean; problems: readonly string[]; markdown?: string }> {
+  const analysis = analyseBottlenecks(input.csv, input.schema);
   const title = String(input.title ?? "Bottleneck report");
 
   // A report drawn from a file the reader already called malformed is a lie with
@@ -145,6 +281,14 @@ export async function renderBottleneckReport(input: {
   // the structure, render nothing.
   if (analysis.problems.length > 0) {
     return { path: input.path, bytes: 0, rendered: false, problems: analysis.problems };
+  }
+
+  if (input.format === "markdown") {
+    const markdown = toBottleneckMarkdown(analysis, title);
+    const out = String(input.path);
+    await mkdir(path.dirname(out), { recursive: true });
+    await writeFile(out, markdown, "utf8");
+    return { path: out, bytes: Buffer.byteLength(markdown, "utf8"), rendered: true, problems: [], markdown };
   }
 
   const top = analysis.recurring[0];
