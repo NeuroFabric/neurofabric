@@ -488,8 +488,26 @@ export interface NumericColumnStat {
   readonly column: string;
   /** Values that parsed as a number. */
   readonly measured: number;
-  /** Rows whose cell was blank or not a number. */
+  /** Cells that were not usable: `empty + dirty`. */
   readonly missing: number;
+  /**
+   * CELLS THAT WERE BLANK. The value is absent.
+   *
+   * Distinct from `dirty` because it calls for a different investigation: a null
+   * is usually a pipeline that dropped a value, and it is usually benign.
+   */
+  readonly empty: number;
+  /**
+   * CELLS THAT HELD SOMETHING WHICH IS NOT A NUMBER.
+   *
+   * This is a TYPE MISMATCH, and it is the signature of a broken producer: a bad
+   * cast, a locale change, a sentinel like "N/A" written into a float column, or
+   * a column that is not what its name says. Conflating it with `empty` costs
+   * the reader the entire diagnosis, and the two call for opposite responses.
+   */
+  readonly dirty: number;
+  /** Distinct offending values, capped, so one broken column cannot flood a report. */
+  readonly dirtyExamples: readonly string[];
   readonly min: number | null;
   readonly max: number | null;
   readonly mean: number | null;
@@ -517,6 +535,9 @@ export interface NumericalProfile {
 /** Ten rows is a data dictionary; twenty is noise. The report says which. */
 const MAX_NUMERIC_COLUMNS = 10;
 
+/** How many distinct offending values one column may show. */
+const MAX_DIRTY_EXAMPLES = 3;
+
 /**
  * DESCRIBE EVERY NUMERIC COLUMN, SHOW THE MOST VARIED.
  *
@@ -539,29 +560,38 @@ function numericalProfile(csv: CsvReadResult): NumericalProfile {
   const numericColumns = profileGenericColumns(csv.headers, csv.rows).filter((c) => c.kind === "numeric");
   const stats = numericColumns.map((c): NumericColumnStat => {
     let measured = 0;
-    let missing = 0;
+    let empty = 0;
+    let dirty = 0;
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     let sum = 0;
+    // DISTINCT offending values, capped. A column of four thousand identical
+    // "N/A" cells must not produce four thousand words in the report, and the
+    // count above already carries the magnitude.
+    const examples = new Set<string>();
     for (const row of csv.rows) {
       const raw = String(row[c.column] ?? "").trim();
-      const value = raw.length === 0 ? Number.NaN : Number(raw);
-      if (!Number.isFinite(value)) { missing += 1; continue; }
+      // THE THREE-WAY SPLIT, AND THE ORDER MATTERS. An empty cell is checked
+      // FIRST and is never handed to Number(), because Number("") is 0 and
+      // Number(" ") is 0: a blank would become a measurement of zero and drag
+      // the mean down, asserting that unmeasured work was free. Only then is
+      // "not a number" called DIRTY, because holding text in a numeric column is
+      // a fact about the producer and not about absence.
+      if (raw.length === 0) { empty += 1; continue; }
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        dirty += 1;
+        if (examples.size < MAX_DIRTY_EXAMPLES) examples.add(raw);
+        continue;
+      }
       measured += 1;
       sum += value;
       if (value < min) min = value;
       if (value > max) max = value;
     }
-    if (measured === 0) return { column: c.column, measured: 0, missing, min: null, max: null, mean: null, spread: null };
-    return {
-      column: c.column,
-      measured,
-      missing,
-      min,
-      max,
-      mean: sum / measured,
-      spread: max - min,
-    };
+    const shape = { column: c.column, measured, missing: empty + dirty, empty, dirty, dirtyExamples: [...examples] };
+    if (measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null };
+    return { ...shape, min, max, mean: sum / measured, spread: max - min };
   });
 
   const ordered = [...stats].sort((a, b) => (b.spread ?? -1) - (a.spread ?? -1) || a.column.localeCompare(b.column));

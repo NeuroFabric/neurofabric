@@ -302,11 +302,14 @@ function numericalSummaryMarkdown(a: BottleneckAnalysis): string {
   const fmt = (v: number | null, digits = 4): string => (v === null ? "not measurable" : Number(v.toFixed(digits)).toLocaleString());
   const out: string[] = ["## Numerical data summary", ""];
   out.push(`_${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : ""}_`, "");
-  out.push("| # | column | measured | missing | min | max | mean | spread |", "|---|---|---|---|---|---|---|---|");
+  out.push("| # | column | measured | empty | dirty | min | max | mean | spread |", "|---|---|---|---|---|---|---|---|---|");
   n.columns.forEach((c, i) => {
-    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.missing} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |`);
+    // A blank and a type mismatch are shown in SEPARATE columns, because they
+    // are separate problems. In one "missing" column a reader cannot tell a
+    // benign null from a producer writing text into a float.
+    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.empty} | ${c.dirty} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |`);
   });
-  out.push("", "_Columns with the widest spread first. A cell that was blank or not a number is counted under `missing` and excluded from the figures above; it is never treated as zero._", "");
+  out.push("", "_Columns with the widest spread first. `empty` counts blank cells; `dirty` counts cells holding something that is not a number. Neither reaches the figures above, and neither is treated as zero._", "");
   return out.join("\n");
 }
 
@@ -318,7 +321,8 @@ function numericalSummaryHtml(a: BottleneckAnalysis): string {
       <td class="rank">${i + 1}</td>
       <td>${escapeHtml(c.column)}</td>
       <td class="num">${c.measured}</td>
-      <td class="num">${c.missing}</td>
+      <td class="num">${c.empty}</td>
+      <td class="num">${c.dirty}</td>
       <td class="num">${fmt(c.min)}</td>
       <td class="num">${fmt(c.max)}</td>
       <td class="num">${fmt(c.mean)}</td>
@@ -328,12 +332,12 @@ function numericalSummaryHtml(a: BottleneckAnalysis): string {
   return `<h2>Numerical data summary</h2>
 <p class="none">${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${escapeHtml(hidden)}</p>
 <table>
-  <thead><tr><th>#</th><th>column</th><th>measured</th><th>missing</th><th>min</th><th>max</th><th>mean</th><th>spread</th></tr></thead>
+  <thead><tr><th>#</th><th>column</th><th>measured</th><th>empty</th><th>dirty</th><th>min</th><th>max</th><th>mean</th><th>spread</th></tr></thead>
   <tbody>
 ${body}
   </tbody>
 </table>
-<p class="none">Columns with the widest spread first. A cell that was blank or not a number is counted under <strong>missing</strong> and excluded from the figures above; it is never treated as zero.</p>`;
+<p class="none">Columns with the widest spread first. <strong>empty</strong> counts blank cells; <strong>dirty</strong> counts cells holding something that is not a number. Neither reaches the figures above, and neither is treated as zero.</p>`;
 }
 
 function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string, vocabulary: ReportVocabulary): string {
