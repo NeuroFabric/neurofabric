@@ -565,27 +565,37 @@ the measurement host — `sudo` answers `--version` there as **1.0.1**, which is
 Git for Windows' stub, not GNU sudo. The script probes all three every run, so
 a real GNU sudo appearing on a runner becomes visible rather than silent.
 
-**3. Option-value detection under an unmeasured wrapper.** `delegatedOperand`
-assumes `-X` consumes the next token, which is unverifiable for an unmeasured
-program. It therefore errs in *both* directions and neither is fixable without
-measurement:
+**3. ~~Option-value detection under an unmeasured wrapper.~~ CLOSED.** Was the
+gap where `sudo -n <token>` (a flag that takes **no** value) caused one operand
+too many to be skipped, so the token was never reached and the call tiered soft.
+`delegatedOperand` guessed *which* token was delegated; `delegatedOperands` now
+records **every token whose role is genuinely ambiguous** — the token after a
+bare option, and the first bare token after it — and stops there, because a VCS
+wrapper's commit message belongs to the delegated program, not the wrapper. That
+can only over-detect on an unmeasured head, which is the direction R6 already
+fails and the only direction that does not let something through. Pinned by
+`platform/pi/security-gap-r6-r7.test.ts` G3a–G3c, plus G3b so the direction that
+already worked cannot silently regress.
 
-- `sudo -u root <token>` → the value is skipped and the token IS reached →
-  `HARD_DENY`. Fails **closed**, which is why the assumption is safe to hold.
-- `sudo -n <token>` where `-n` genuinely takes no value → one operand too many
-  is skipped, the token is not reached, and it is tiered **soft**. Fails
-  **open**. This is a real gap.
+**4. ~~Combined shell flags are not read.~~ CLOSED.** `sh -lc "<token> ..."`
+was not merely unparsed — it was actively *declared* unreadable. The top of
+`parseTokens` looked the payload flag up with `tokens.indexOf("-c", 1)`, found
+nothing in a cluster, and returned `'sh' invoked without -c` before any rule
+behind it could run. Fixed by reading single-letter clusters that contain `c`
+(`isShellPayloadFlag`), which is an infinite set and therefore not a table.
+Clusters must be letters only, so `--continue` and `-O3` do not match. Two
+details that are the actual difference between "recognised" and "safe": the
+command that *is* a shell is handled **before** the wrapper recursion, since
+`sh` is a `PAYLOAD_WRAPPER` and recursing into `-lc` loses the fact that a shell
+was involved; and when the token after the payload flag is itself a flag
+(`sh -c -l "..."`), both readings are parsed, because leaving the second one
+unread is the direction things get through. Pinned by G4a–G4g, with G4d
+asserting that an ordinary payload behind a cluster is still merely allowed —
+reading clusters must not become "any flag cluster is terminal", which is the
+over-blocking D-024 exists to correct.
 
-**4. Combined shell flags are not read.** `sh -lc "<token> ..."` is not
-recognised: `-lc` is neither `-c` nor any other payload flag, so the payload is
-never parsed and the token inside it is not seen as command position. Fails
-**open**.
-
-Gaps 3 and 4 are the same root cause as gap 1: the wrapper table was measured on
-one host and the behaviours in question cannot be derived without running the
-real programs. Closing them means running GNU `sudo`, `setsid`, `watch` and the
-combined-flag forms on a Linux runner and adding the measurements — which is the
-`measure-wrappers` job's job once those binaries are present.
+Gaps 1 and 2 remain open and are still infrastructure, not policy: they need a
+Linux runner and real GNU `sudo`, `setsid` and `watch` to measure.
 
 **None of these is a new policy.** They are places where the existing one does
 less than its description says, and the description is the thing to fix first if

@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat } from "./bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary, type HourlyProfile } from "./bottlenecks.ts";
 import { resolveSchemaMemory } from "./schema-memory.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
@@ -48,24 +48,12 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function bottleneckTable(rows: readonly BottleneckAnalysis["bySource"][number][], title: string, keyHeader: string): string {
-  if (rows.length === 0) return `<h2>${escapeHtml(title)}</h2>\n<p class="none">Nothing to rank.</p>`;
-  const body = rows.map((b, i) => `    <tr>
-      <td class="rank">${i + 1}</td>
-      <td>${escapeHtml(b.key)}</td>
-      <td class="num">${b.errorCount}</td>
-      <td class="num">${b.count}</td>
-      <td class="num">${pct(b.errorRate)}</td>
-      <td class="cite">rows ${escapeHtml(cite(b.rows))}</td>
-    </tr>`).join("\n");
-  return `<h2>${escapeHtml(title)}</h2>
-<table>
-  <thead><tr><th>#</th><th>${escapeHtml(keyHeader)}</th><th>errors</th><th>total</th><th>rate</th><th>evidence</th></tr></thead>
-  <tbody>
-${body}
-  </tbody>
-</table>`;
-}
+/**
+ * The by-source ranking is computed and returned but NOT rendered (R12): its
+ * values are infrastructure hostnames and a report about alert categories does
+ * not need them. Nothing here rendered it before the hourly table was replaced
+ * by `hourlyTable`, and the generic renderers kept it out on the same grounds.
+ */
 
 function latencyTable(a: BottleneckAnalysis): string {
   if (a.latency.length === 0) return "";
@@ -100,19 +88,26 @@ function durationCells(c: CategoryStat, format: (n: number) => string): string {
   return `${cell(c.totalElapsed)}${cell(c.meanElapsed)}${cell(c.medianElapsed)}${cell(c.p95Elapsed)}`;
 }
 
-function categoryTable(rows: readonly CategoryStat[], title: string, order: "frequency" | "elapsed"): string {
+function categoryTable(rows: readonly CategoryStat[], title: string, order: "frequency" | "elapsed", vocabulary: ReportVocabulary): string {
   if (rows.length === 0) return "";
+  // THE BREACH COLUMN IS OPTIONAL, IN BOTH PLACES IT APPEARS. It is rendered
+  // only when the file states a threshold, and when it is rendered the header
+  // and every row carry the SAME conditional cell -- a header that can vanish
+  // while rows keep a cell is how a dropped column silently misaligns a table.
+  const breach = vocabulary.thresholdLabel === null
+    ? { head: "", cell: () => "" }
+    : { head: `<th>${escapeHtml(vocabulary.thresholdLabel)}</th>`, cell: (c: CategoryStat) => `<td class="num">${c.breachCount}</td>` };
   const body = rows.map((c, i) => `    <tr${i === 0 ? ' class="top"' : ""}>
       <td class="rank">${i === 0 ? "<strong>1</strong>" : i + 1}</td>
       <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.label)}</td>
       <td class="num">${c.count}</td>
       ${durationCells(c, (n) => n.toLocaleString())}
-      <td class="num">${c.breachCount}</td>
+      ${breach.cell(c)}
       <td class="cite">rows ${escapeHtml(cite(c.rows))}</td>
     </tr>`).join("\n");
   return `<h2>${escapeHtml(title)}</h2>
 <table>
-  <thead><tr><th>#</th><th>category (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th><th>total elapsed (ms)</th><th>mean (ms)</th><th>median (ms)</th><th>p95 (ms)</th><th>over threshold</th><th>evidence</th></tr></thead>
+  <thead><tr><th>#</th><th>${escapeHtml(vocabulary.unit)} (${escapeHtml(order === "elapsed" ? "by total elapsed" : "by frequency")})</th><th>rows</th><th>total elapsed (ms)</th><th>mean (ms)</th><th>median (ms)</th><th>p95 (ms)</th>${breach.head}<th>evidence</th></tr></thead>
   <tbody>
 ${body}
   </tbody>
@@ -163,6 +158,7 @@ ${absent}`;
 function divergenceBanner(a: BottleneckAnalysis): string {
   const d = a.divergence;
   if (d === null) return "";
+  const v = a.vocabulary;
   const elapsed = d.byElapsed.totalElapsed;
   const freq = d.byFrequency.totalElapsed;
   const ratio = d.totalRatio === undefined ? null : d.totalRatio;
@@ -177,8 +173,8 @@ function divergenceBanner(a: BottleneckAnalysis): string {
 
   return `<div class="banner">
   <p class="banner-title">The two rankings disagree. That is the finding.</p>
-  <p><strong>Most frequent:</strong> ${escapeHtml(d.byFrequency.label)} &mdash; ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.</p>
-  <p><strong>Most expensive:</strong> ${escapeHtml(d.byElapsed.label)} &mdash; ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}, with ${comparison}${pctOfCost === null ? "" : ` and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.</p>
+  <p><strong>Most frequent:</strong> ${escapeHtml(d.byFrequency.label)} &mdash; ${d.byFrequency.count} ${v.unitPlural}${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.</p>
+  <p><strong>Most expensive:</strong> ${escapeHtml(d.byElapsed.label)} &mdash; ${d.byElapsed.count} ${v.unitPlural}${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}, with ${comparison}${pctOfCost === null ? "" : ` and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.</p>
   <p class="banner-note">Ranking by frequency alone would have pointed at ${escapeHtml(d.byFrequency.key)} and buried ${escapeHtml(d.byElapsed.key)}. Evidence rows are in the tables below.</p>
 </div>`;
 }
@@ -206,6 +202,7 @@ function divergenceBanner(a: BottleneckAnalysis): string {
 function markdownDivergenceBanner(a: BottleneckAnalysis): string {
   const d = a.divergence;
   if (d === null) return "";
+  const v = a.vocabulary;
   const elapsed = d.byElapsed.totalElapsed;
   const freq = d.byFrequency.totalElapsed;
   const ratio = d.totalRatio ?? null;
@@ -220,8 +217,8 @@ function markdownDivergenceBanner(a: BottleneckAnalysis): string {
     "> [!WARNING]",
     "> **The two rankings disagree. That is the finding.**",
     ">",
-    `> - **Most frequent:** ${mdCell(d.byFrequency.label)} — ${d.byFrequency.count} alert(s)${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.`,
-    `> - **Most expensive:** ${mdCell(d.byElapsed.label)} — ${d.byElapsed.count} alert(s)${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}${comparison}${pctOfCost === null ? "" : `, and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.`,
+    `> - **Most frequent:** ${mdCell(d.byFrequency.label)} — ${d.byFrequency.count} ${v.unitPlural}${freq === null ? "" : `, ${freq.toLocaleString()} ms total`}.`,
+    `> - **Most expensive:** ${mdCell(d.byElapsed.label)} — ${d.byElapsed.count} ${v.unitPlural}${elapsed === null ? "" : `, ${elapsed.toLocaleString()} ms total`}${comparison}${pctOfCost === null ? "" : `, and ${pctOfCost.toFixed(1)}% of all elapsed time in this export`}.`,
     ">",
     `> Ranking by frequency alone would have pointed at ${mdCell(d.byFrequency.key)} and buried ${mdCell(d.byElapsed.key)}. Evidence rows are in the tables below.`,
     "",
@@ -288,13 +285,16 @@ function mdRows(rows: readonly number[], limit = 12): string {
   return rows.length > limit ? `${shown} (+${rows.length - limit} more)` : shown;
 }
 
-function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string): string {
+function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string, vocabulary: ReportVocabulary): string {
   if (stats.length === 0) return `## ${heading}\n\n_No rows carried a credible category column, so this ranking is empty. That is a fact about the file, not a finding._\n`;
+  // Same contract as the HTML table: the breach column appears only when the
+  // file states a threshold, and the header and the cells decide together.
+  const breach = vocabulary.thresholdLabel;
   const lines = [
     `## ${heading}`,
     "",
-    "| # | category | alerts | over threshold | total elapsed (ms) | mean (ms) | median (ms) | p95 (ms) | source rows |",
-    "|---|---|---|---|---|---|---|---|---|",
+    `| # | category | ${vocabulary.unitPlural} |${breach === null ? "" : ` ${breach} |`} total elapsed (ms) | mean (ms) | median (ms) | p95 (ms) | source rows |`,
+    `|---|---|---|${breach === null ? "" : "---|"}---|---|---|---|---|`,
   ];
   stats.forEach((s, index) => {
     const cell = (v: number | null): string => (v === null ? "not measurable" : v.toLocaleString());
@@ -304,17 +304,84 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
     // an alias is only ever present when R13 proved the mapping unambiguous in
     // both directions -- one logger serving two codes is a coincidence, not a
     // label.
-    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} | ${s.breachCount} | ${cell(s.totalElapsed)} | ${cell(s.meanElapsed)} | ${cell(s.medianElapsed)} | ${cell(s.p95Elapsed)} | ${mdRows(s.rows)} |`);
+    lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} |${breach === null ? "" : ` ${s.breachCount} |`} ${cell(s.totalElapsed)} | ${cell(s.meanElapsed)} | ${cell(s.medianElapsed)} | ${cell(s.p95Elapsed)} | ${mdRows(s.rows)} |`);
   });
   lines.push("", `_Ranked by ${measure}._`, "");
   return lines.join("\n");
 }
 
+/** The chronological, spike-aware hour table. Mirrors `hourlyTable` exactly. */
+function hourlyMarkdown(a: BottleneckAnalysis): string {
+  const h = a.hourly;
+  const header = a.timestampsAreNaive ? "hour (host-local; these timestamps carry no zone)" : "hour (UTC)";
+  const out: string[] = [];
+  if (h.insufficient && h.buckets > 0) {
+    out.push(`> Only ${h.buckets} hour bucket(s) carry rows, which is too few for the ${h.spikeMultiple}x test to mean anything. No hour is called abnormal.`, "");
+  } else if (h.flagged > 0) {
+    const worst = [...h.hours].filter((x) => x.isSpike).sort((a, b) => b.count - a.count)[0];
+    out.push(`> [!WARNING]`, `> **${h.flagged} hour${h.flagged === 1 ? "" : "s"} above the average. That is the incident.**`, ">",
+      `> Worst: **${mdCell(worst.key)}** carried **${worst.count} rows** of ${h.countedRows} — ${(worst.share * 100).toFixed(1)}% of the export in one hour, ${mdCell(worst.rule ?? "")}.`, ">",
+      `> Mean ${h.meanPerHour.toFixed(1)} rows/hour over ${h.buckets} observed hour(s), population sigma ${h.sigma.toFixed(1)}. Flagged above ${h.spikeMultiple}x the mean.`, "");
+  }
+  out.push(`## Rows by ${header}`, "");
+  out.push(`| hour | rows | share | vs avg | signal |`, `|---|---|---|---|---|`);
+  for (const x of h.hours) {
+    out.push(`| ${mdCell(x.key)} | ${x.count} | ${(x.share * 100).toFixed(1)}% | ${x.multiple === null ? "not measurable" : `${x.multiple.toFixed(1)}x`} | ${x.isSpike ? `**SPIKE** (${mdCell(x.rule ?? "")})` : ""} |`);
+  }
+  out.push("");
+  return out.join("\n");
+}
+
 /** The Markdown rendering of an analysis. Pure: no I/O, no policy, no kernel. */
+export /**
+ * WHEN IT HAPPENED. Chronological, not ranked, because the question this table
+ * answers is "which hour", and a table sorted by volume makes the reader hunt
+ * for it.
+ *
+ * The SPIKE row is marked in the markup as well as in the words, so the page can
+ * style it and so a reader scanning the column can find it without reading
+ * every cell.
+ */
+function hourlyTable(a: BottleneckAnalysis): string {
+  const h = a.hourly;
+  if (h.hours.length === 0) return "";
+  const body = h.hours.map((x) => `    <tr${x.isSpike ? ' class="spike"' : ""}>
+      <td>${escapeHtml(x.key)}</td>
+      <td class="num">${x.count}</td>
+      <td class="num">${(x.share * 100).toFixed(1)}%</td>
+      <td class="num">${x.multiple === null ? "&mdash;" : `${x.multiple.toFixed(1)}x`}</td>
+      <td>${x.isSpike ? `<span class="badge">SPIKE</span> ${escapeHtml(x.rule ?? "")}` : ""}</td>
+    </tr>`).join("\n");
+  const header = a.timestampsAreNaive ? "hour (host-local -- these timestamps carry no zone)" : "hour (UTC)";
+  return `${hourlyCalloutHtml(h)}
+<h2>Rows by ${escapeHtml(header)}</h2>
+<table>
+  <thead><tr><th>hour</th><th>rows</th><th>share</th><th>vs avg (${h.meanPerHour.toFixed(1)})</th><th>signal</th></tr></thead>
+  <tbody>
+${body}
+  </tbody>
+</table>
+<p class="none">Average ${h.meanPerHour.toFixed(1)} rows/hour across ${h.buckets} observed hour(s); population sigma ${h.sigma.toFixed(1)}. A row is flagged above ${h.spikeMultiple}x that average.</p>`;
+}
+
+function hourlyCalloutHtml(h: HourlyProfile): string {
+  if (h.insufficient && h.buckets > 0) {
+    return `<p class="none">Only ${h.buckets} hour bucket(s) carry rows, which is too few for the ${h.spikeMultiple}x test to mean anything. Hours are listed below; no hour is called abnormal.</p>`;
+  }
+  if (h.flagged === 0) return "";
+  const worst = [...h.hours].filter((x) => x.isSpike).sort((a, b) => b.count - a.count)[0];
+  return `<div class="banner spike-banner">
+  <p class="banner-title">${h.flagged} hour${h.flagged === 1 ? "" : "s"} above the average. That is the incident.</p>
+  <p>Worst: <strong>${escapeHtml(worst.key)}</strong> carried <strong>${worst.count}</strong> of ${h.countedRows} row(s) &mdash; ${(worst.share * 100).toFixed(1)}% of the export in one hour, ${escapeHtml(worst.rule ?? "")}.</p>
+  <p class="banner-note">Mean ${h.meanPerHour.toFixed(1)} rows/hour over ${h.buckets} observed hour(s), population sigma ${h.sigma.toFixed(1)}. Flagged above ${h.spikeMultiple}x the mean.</p>
+</div>`;
+}
+
 export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report"): string {
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
   const out: string[] = [`# ${mdCell(title)}`, ""];
+  const vocab = analysis.vocabulary;
 
   out.push(`${analysis.totalRows} row(s) · ranked by **${mdCell(analysis.categoryColumn ?? "no credible column")}**`);
   if (analysis.mappings.some((m) => m.role === "status")) {
@@ -325,7 +392,7 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
   out.push("");
 
   if (topCategory !== undefined) {
-    let lead = `**#1 by frequency:** ${mdCell(topCategory.key)} — ${topCategory.count} alert(s), ${topCategory.breachCount} over threshold, rows ${mdRows(topCategory.rows)}.`;
+    let lead = `**#1 by frequency:** ${mdCell(topCategory.key)} — ${topCategory.count} ${vocab.unitPlural}${vocab.thresholdLabel === null ? "" : `, ${topCategory.breachCount} ${vocab.thresholdLabel}`}, rows ${mdRows(topCategory.rows)}.`;
     if (topElapsed !== undefined && topElapsed.key !== topCategory.key) {
       lead += ` **#1 by total elapsed:** ${mdCell(topElapsed.key)} (${topElapsed.totalElapsed?.toLocaleString() ?? "not measurable"}).`;
     }
@@ -365,14 +432,11 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     out.push(`> **This report cannot answer anything requiring:** ${analysis.missing.map(mdCell).join(", ")}. No credible column for ${analysis.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted.`, "");
   }
 
-  out.push(mdCategoryTable(analysis.categories, "Alert categories by frequency", "frequency"));
-  out.push(mdCategoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "total elapsed time"));
+  out.push(mdCategoryTable(analysis.categories, `${vocab.headingUnit} categories by frequency`, "frequency", vocab));
+  out.push(mdCategoryTable(analysis.categoriesByElapsed, `${vocab.headingUnit} categories by total elapsed time`, "total elapsed time", vocab));
 
   if (analysis.byHour.length > 0) {
-    out.push(`## Rows by hour (${analysis.timestampsAreNaive ? "host-local; these timestamps carry no zone" : "UTC"})`, "");
-    out.push("| hour | rows | error rows |", "|---|---|---|");
-    for (const h of analysis.byHour) out.push(`| ${mdCell(h.key)} | ${h.count} | ${h.errorCount} |`);
-    out.push("");
+    out.push(hourlyMarkdown(analysis));
   }
 
   if (analysis.unreadableTimestamps.length > 0) {
@@ -443,7 +507,7 @@ export async function renderBottleneckReport(input: {
   const top = analysis.recurring[0];
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
-  const lead = topCategory === undefined ? "" : `<p class="lead"><strong>#1 by frequency:</strong> ${escapeHtml(topCategory.key)} &mdash; ${topCategory.count} alert(s), ${topCategory.breachCount} over threshold, rows ${escapeHtml(cite(topCategory.rows))}.${topElapsed !== undefined && topElapsed.key !== topCategory.key ? ` <strong>#1 by total elapsed:</strong> ${escapeHtml(topElapsed.key)} (${topElapsed.totalElapsed?.toLocaleString()}).` : ""}</p>`;
+  const lead = topCategory === undefined ? "" : `<p class="lead"><strong>#1 by frequency:</strong> ${escapeHtml(topCategory.key)} &mdash; ${topCategory.count} ${analysis.vocabulary.unitPlural}${analysis.vocabulary.thresholdLabel === null ? "" : `, ${topCategory.breachCount} ${escapeHtml(analysis.vocabulary.thresholdLabel)}`}, rows ${escapeHtml(cite(topCategory.rows))}.${topElapsed !== undefined && topElapsed.key !== topCategory.key ? ` <strong>#1 by total elapsed:</strong> ${escapeHtml(topElapsed.key)} (${topElapsed.totalElapsed?.toLocaleString()}).` : ""}</p>`;
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -468,6 +532,10 @@ export async function renderBottleneckReport(input: {
   .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
   .banner-note { color: #5b616e; font-size: .85rem; }
   tr.top td { font-weight: 600; }
+  tr.spike { background: #fdf6f3; }
+  tr.spike td { font-weight: 600; }
+  .badge { display: inline-block; border: 1px solid #b23c17; color: #b23c17; padding: 0 .3rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; }
+  .spike-banner { border-color: #b23c17; }
   .lead-key { font-weight: 700; }
 </style>
 </head>
@@ -479,11 +547,9 @@ export async function renderBottleneckReport(input: {
 ${lead}
 ${divergenceBanner(analysis)}
 ${mappingsSection(analysis)}
-${categoryTable(analysis.categories, "Alert categories by frequency", "frequency")}
-${categoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "elapsed")}
-${bottleneckTable(analysis.byHour, analysis.timestampsAreNaive
-    ? "Rows by hour (host-local -- these timestamps carry no zone)"
-    : "Rows by hour (UTC)", "hour")}
+${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
+${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}
+${hourlyTable(analysis)}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>
 <p class="none">${analysis.unreadableTimestamps.length} row(s) carried an unreadable timestamp: rows ${escapeHtml(cite(analysis.unreadableTimestamps))}.</p>` : ""}

@@ -91,6 +91,32 @@ export interface CategoryStat {
  * total cost, and the one burying the other is whichever ranking you did not
  * print. Measured rather than eyeballed, so the page can state the ratio.
  */
+/**
+ * WHAT THE REPORT CALLS THE THINGS IT IS COUNTING.
+ *
+ * The report used to say "alert(s)" because every file it had ever seen was a
+ * Pega alert export. That was a defensible default and it became a lie the
+ * moment the generic profiler let an access log through: not merely wrong
+ * vocabulary, but an assertion that the file contained alerts. A reader has no
+ * way to tell an unfounded claim about their data from a founded one.
+ *
+ * `thresholdLabel` is NULL when the file states no threshold, and that null is
+ * what makes the breach column DROPPABLE rather than a column of zeros. "Zero
+ * over threshold" against a limit the file never mentioned is a false
+ * all-clear, and a zero is a fact-shaped hole -- worse than an absent column,
+ * because absent can be noticed and zero cannot.
+ */
+export interface ReportVocabulary {
+  /** Singular, for headings and "X per record" phrasing. */
+  readonly unit: string;
+  /** The mid-sentence form, "13 record(s)". */
+  readonly unitPlural: string;
+  /** Capitalised unit, for section headings. */
+  readonly headingUnit: string;
+  /** Null when the file states no threshold, and the column must be dropped. */
+  readonly thresholdLabel: string | null;
+}
+
 export interface Divergence {
   readonly byFrequency: CategoryStat;
   readonly byElapsed: CategoryStat;
@@ -106,6 +132,46 @@ export interface LatencyBand {
   readonly rows: readonly number[];
 }
 
+/** One hour bucket, measured against the rest of the window. */
+export interface HourStat {
+  /** ISO hour key, "2026-09-30T13". Sorts chronologically as a string. */
+  readonly key: string;
+  readonly count: number;
+  /** Fraction of all readable rows, so the spike is quantified in context. */
+  readonly share: number;
+  /** count / meanPerHour, or null when there is no mean. */
+  readonly multiple: number | null;
+  readonly isSpike: boolean;
+  /** Plain-language reason, shown next to the flag. */
+  readonly rule: string | null;
+}
+
+/**
+ * THE SHAPE OF A DAY, AND WHETHER ANY OF IT IS ABNORMAL.
+ *
+ * The ranking answers what a bottleneck COST. This answers WHEN, which is a
+ * different question with a different fix: three million milliseconds spread
+ * evenly over a week is a capacity problem, and the same total inside four
+ * minutes on Tuesday is an incident.
+ *
+ * `meanPerHour` divides by the buckets OBSERVED, never by 24. Dividing by 24
+ * would make every ordinary hour in a six-hour export look like a spike, which
+ * is the failure mode of assuming a window instead of measuring one.
+ */
+export interface HourlyProfile {
+  readonly hours: readonly HourStat[];
+  readonly countedRows: number;
+  readonly buckets: number;
+  readonly meanPerHour: number;
+  /** Population standard deviation of the per-hour counts. */
+  readonly sigma: number;
+  /** A bucket must exceed this multiple of the mean to be flagged. */
+  readonly spikeMultiple: number;
+  readonly flagged: number;
+  /** True when there are too few buckets for the ratio test to mean anything. */
+  readonly insufficient: boolean;
+}
+
 export interface BottleneckAnalysis {
   readonly totalRows: number;
   readonly errorRows: number;
@@ -116,6 +182,11 @@ export interface BottleneckAnalysis {
   readonly recurring: readonly Bottleneck[];
   /** Error volume bucketed by hour. */
   readonly byHour: readonly Bottleneck[];
+  /**
+   * The shape of the day, with spikes flagged. Additive: `byHour` still holds
+   * the plain counts, and nothing that consumed it changed.
+   */
+  readonly hourly: HourlyProfile;
   readonly latency: readonly LatencyBand[];
   /** Rows whose timestamp could not be read, so they are excluded from byHour. */
   readonly unreadableTimestamps: readonly number[];
@@ -156,6 +227,8 @@ export interface BottleneckAnalysis {
   readonly ambiguousAliases: readonly string[];
   /** Null when both rankings agree. See D2: a headline that always shouts is noise. */
   readonly divergence: Divergence | null;
+  /** How this report describes the rows it counted. See `ReportVocabulary`. */
+  readonly vocabulary: ReportVocabulary;
 }
 
 /**
@@ -390,6 +463,74 @@ function bucket(map: Map<string, { error: number; rows: number[] }>, key: string
 }
 
 /** Turn a parsed CSV into the ranked bottleneck view. Never throws. */
+/** Hours below this cannot support a ratio test. See `hourlyProfile`. */
+const MIN_HOUR_BUCKETS = 4;
+
+/**
+ * A bucket must exceed this multiple of the hourly mean to be flagged.
+ *
+ * NOT 2-SIGMA, and the reason is worth keeping. A z-score test assumes the
+ * statistic is compared against a stable distribution, but a single spike
+ * INFLATES the standard deviation of the very distribution it is being tested
+ * against: for 5, 4, 6, 5, 80, 5 the mean is 17.5 and sigma is 28.6, so
+ * mean + 2sigma is 74.7 and the spike at 80 clears it by five. On a shorter
+ * window it cannot clear its own tail at all -- with 10, 20, 70 the threshold
+ * is 85.9 and the spike is NOT flagged. A test that stops working at exactly the
+ * sample sizes real exports have is worse than no test, because it reports a
+ * clean bill of health. The ratio has no such failure mode. Sigma is still
+ * computed and reported, as context.
+ */
+const SPIKE_MULTIPLE = 2;
+
+/**
+ * MEASURE THE SHAPE OF THE DAY.
+ *
+ * The mean divides by the buckets OBSERVED, not by 24 and not by the whole
+ * timestamp span. A six-hour export divided by 24 says every hour is quiet,
+ * which is true of the wrong denominator; and dividing by the span would let a
+ * file with a gap in the middle quietly lower its own baseline.
+ *
+ * `insufficient` exists so that silence is never mistaken for normality. With
+ * two hours, 30 then 70, the ratio test calls 70 a spike against a mean of 50 --
+ * which is arithmetic, not evidence. Below the floor nothing is flagged and the
+ * report says the window was too short to judge, because a table that simply
+ * omits a column reads as "nothing to see here".
+ */
+function hourlyProfile(hours: Map<string, { error: number; rows: number[] }>): HourlyProfile {
+  const entries = [...hours.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const counts = entries.map(([, v]) => v.rows.length);
+  const countedRows = counts.reduce((s, n) => s + n, 0);
+  const buckets = counts.length;
+  const meanPerHour = buckets === 0 ? 0 : countedRows / buckets;
+  const variance = buckets === 0 ? 0 : counts.reduce((s, n) => s + (n - meanPerHour) ** 2, 0) / buckets;
+  const insufficient = buckets < MIN_HOUR_BUCKETS;
+
+  const hours2 = entries.map(([key, v]): HourStat => {
+    const count = v.rows.length;
+    const multiple = meanPerHour > 0 ? count / meanPerHour : null;
+    const isSpike = !insufficient && multiple !== null && multiple > SPIKE_MULTIPLE;
+    return {
+      key,
+      count,
+      share: countedRows === 0 ? 0 : count / countedRows,
+      multiple,
+      isSpike,
+      rule: isSpike && multiple !== null ? `${multiple.toFixed(1)}x the hourly average` : null,
+    };
+  });
+
+  return {
+    hours: hours2,
+    countedRows,
+    buckets,
+    meanPerHour,
+    sigma: Math.sqrt(variance),
+    spikeMultiple: SPIKE_MULTIPLE,
+    flagged: hours2.filter((h) => h.isSpike).length,
+    insufficient,
+  };
+}
+
 export function analyseBottlenecks(
   csv: CsvReadResult,
   /**
@@ -559,6 +700,16 @@ export function analyseBottlenecks(
     : null;
 
   const total = csv.rows.length;
+  // GENERIC FILES ARE DESCRIBED IN RECORDS. A file the profiler had to guess at
+  // is not known to contain alerts, and calling its rows alerts asserts
+  // something about the data the product did not establish. The threshold label
+  // follows the same rule from the other direction: it appears only when the
+  // file really states one.
+  const generic = schema?.source === "GENERIC";
+  const statesThreshold = thresholdCol !== undefined && csv.headers.includes(thresholdCol);
+  const vocabulary: ReportVocabulary = generic
+    ? { unit: "record", unitPlural: "record(s)", headingUnit: "Record", thresholdLabel: statesThreshold ? "over limit" : null }
+    : { unit: "alert", unitPlural: "alert(s)", headingUnit: "Alert", thresholdLabel: statesThreshold ? "over threshold" : null };
   return {
     totalRows: total,
     errorRows,
@@ -566,6 +717,7 @@ export function analyseBottlenecks(
     bySource: rank(sources),
     recurring: rank(signatures),
     byHour: rank(hours),
+    hourly: hourlyProfile(hours),
     latency: bands.filter((b) => b.rows.length > 0).map((b) => ({ label: b.label, count: b.rows.length, rows: b.rows })),
     unreadableTimestamps: unreadable,
     problems: csv.problems,
@@ -583,5 +735,6 @@ export function analyseBottlenecks(
     timeZoneIsRuled: true,
     ambiguousAliases: [...new Set(ambiguousAliases)],
     divergence,
+    vocabulary,
   };
 }
