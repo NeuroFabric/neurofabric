@@ -57,3 +57,5 @@ platform/pi/.s8-probe.test.ts
 # on a dot-prefixed basename, which is exactly the shape the old rule missed.
 verification/.tmp-*.txt
 verification/.tmp-*
+
+data/

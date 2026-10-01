@@ -245,3 +245,74 @@ test("P3e a pipeline is judged segment by segment too", async () => {
   const hard = await tierOf(commandSide.adapter, `echo done | ${TOKEN} notes.txt`, "p3e-hard");
   assert.equal(hard, "HARD_DENY", "and the operation behind the pipe is still the operation");
 });
+
+// === 4. R6: a destructive token behind an UNMEASURED WRAPPER =============
+//
+// Ruling: when an unmeasured wrapper precedes a known destructive token, the
+// token is COMMAND POSITION -- HARD_DENY, terminate. An unmeasured wrapper
+// makes operation identity unverifiable, and unverifiable identity with a
+// destructive token present fails closed hard.
+//
+// WHICH TOKEN, THOUGH, is the whole difficulty, and getting it wrong breaks
+// everything above. `sudo rm notes.txt` must be hard. But `git commit -m
+// "... rm ..."` must NOT, or every payload refusal in section 1 becomes a
+// termination and the ruling is worse than the bug.
+//
+// The line that separates them: a wrapper DELEGATES. Its first bare operand is
+// the program it will run. `git`'s first bare operand is `commit`, and the token
+// sits behind `-m`, an option value -- so the token is data. `sudo`'s first
+// bare operand IS the token -- so the token is the operation, unverifiably.
+//
+// A rule of "any unmeasured head implies hard" would fail the second case, so
+// it is not that rule.
+
+test("P4a a token delegated to an unmeasured wrapper is HARD_DENY", async () => {
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `sudo ${TOKEN} notes.txt`, "p4a"), "HARD_DENY",
+    "the wrapper's whole purpose is to run this program, and we cannot verify that it does");
+});
+
+test("P4b that refusal terminates the run", async () => {
+  const { adapter } = await governed();
+  await refuseThenReport(adapter, `sudo ${TOKEN} notes.txt`, "p4b");
+  assert.equal(adapter.currentTask!.status, "FAILED", "a deletion behind sudo is still a deletion");
+});
+
+test("P4c the delegation survives options that take values", async () => {
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `sudo -u root ${TOKEN} notes.txt`, "p4c"), "HARD_DENY",
+    "an option's value is not the command; the first bare operand after it is");
+});
+
+test("P4d an unmeasured wrapper with NO token is untouched", async () => {
+  for (const command of ["sudo ls .", "sudo cat notes.txt", "sudo -u root ls -la"]) {
+    const { adapter } = await governed();
+    const { decision } = await adapter.precheckToolCall("bash", "execute", { command }, undefined, `p4d-${command}`);
+    assert.equal(decision.decision, "ALLOW",
+      `"${command}" carries no token and must be untouched by R6; got ${decision.decision} ${JSON.stringify((decision as { reason?: string }).reason)}`);
+  }
+});
+
+test("P4e R6 does not reach a token behind an option value", async () => {
+  // This is the boundary that keeps section 1 standing. `git`'s first bare
+  // operand is `commit`; the token is `-m`'s value. Delegation does not reach it.
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `git commit -m "docs: note the ${TOKEN} step"`, "p4e"), "SOFT_REFUSE",
+    "payload tiering must survive R6, or the ruling is worse than the bug it fixes");
+});
+
+test("P4f R6 leaves an unmeasured OPTION on a MEASURED wrapper alone", async () => {
+  // P3d's case. `env` is measured; its option is not. There is no unmeasured
+  // WRAPPER here, so 1b's "ambiguity never terminates" still governs.
+  const { adapter } = await governed();
+  const reason = await refuseThenReport(adapter, `env --unmeasured-option ${TOKEN} notes.txt`, "p4f");
+  assert.notEqual(adapter.currentTask!.status, "FAILED",
+    "an unmeasured option is not an unmeasured wrapper, and the two must not be conflated");
+  assert.ok(reason.length > 0);
+});
+
+test("P4g an unmeasured wrapper does not change a measured wrapper's tiers", async () => {
+  const { adapter } = await governed();
+  assert.equal(await tierOf(adapter, `xargs ${TOKEN} < list.txt`, "p4g"), "HARD_DENY",
+    "a measured wrapper reaching the same conclusion is unchanged by R6");
+});

@@ -11,12 +11,11 @@
  * Run: node --experimental-strip-types verification/acceptance-stage1.mjs
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, access, copyFile } from "node:fs/promises";
-import { constants } from "node:fs";
-import os from "node:os";
+import { readFile, copyFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Conductor } from "../platform/conductor/conductor.ts";
+import { makeTempWorkspace, pathExists } from "../platform/test-support/temp-workspace.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, "fixtures", "stage1");
@@ -32,10 +31,6 @@ function check(name, fn) {
   }
 }
 
-async function exists(p) {
-  try { await access(p, constants.F_OK); return true; } catch { return false; }
-}
-
 /**
  * Each scenario gets its own workspace, with the fixtures copied in.
  *
@@ -43,9 +38,12 @@ async function exists(p) {
  * output path outside it is refused by policy - which is correct, and is why
  * the first run of this script failed with POLICY_SOFT_REFUSE. The scenario has
  * to run somewhere the Conductor is actually allowed to write.
+ *
+ * `realpath` and `stat` come from the shared helpers; the reasons they are not
+ * optional live in `platform/test-support/temp-workspace.ts`.
  */
 async function makeWorkspace() {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "nf-accept-"));
+  const dir = await makeTempWorkspace("nf-accept-");
   for (const name of ["clean-sales.csv", "malformed.csv"]) {
     await copyFile(path.join(FIXTURES, name), path.join(dir, name));
   }
@@ -73,7 +71,7 @@ console.log("\nA. clean-sales.csv -> one-page dashboard");
     check("one artifact is reported", () => assert.equal(result.artifacts.length, 1, `got ${result.artifacts.length}`));
     check("the artifact path is the one requested", () => assert.ok(result.artifacts[0]?.includes("dashboard.html"), result.artifacts[0]));
   }
-  const wrote = await exists(out);
+  const wrote = await pathExists(out);
   check("the dashboard file was written", () => assert.equal(wrote, true, `no file at ${out}`));
   if (wrote) {
     const html = await readFile(out, "utf8");
@@ -127,7 +125,7 @@ console.log("\nB. malformed.csv -> honest structured failure, never a silent dea
       ["CLARIFY_EXHAUSTED", "FAILED"].includes(result.status), result.status));
   }
 
-  const wrote = await exists(out);
+  const wrote = await pathExists(out);
   check("no dashboard was written from a malformed file", () => assert.equal(wrote, false));
 }
 
