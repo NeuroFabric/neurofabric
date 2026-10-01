@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bottleneck report</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem; color: #16181d; background: #fff; max-width: 60rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .meta { color: #5b616e; margin: 0 0 1.5rem; }
+  h2 { font-size: 1rem; margin: 2rem 0 .5rem; padding-bottom: .25rem; border-bottom: 1px solid #d8dbe2; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #eef0f4; vertical-align: top; }
+  th { font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .rank { color: #8a909c; width: 2rem; }
+  .cite { color: #5b616e; font-size: .8rem; font-variant-numeric: tabular-nums; }
+  .none { color: #8a909c; }
+  .lead { border-left: 3px solid #16181d; padding: .1rem 0 .1rem .75rem; margin: 0 0 1.5rem; }
+</style>
+</head>
+<body>
+<h1>Bottleneck report</h1>
+<p class="meta">100 row(s) &middot; 0 error(s) &middot; overall error rate 0.0%</p>
+
+<h2>Bottlenecks by source</h2>
+<p class="none">Nothing to rank.</p>
+<h2>Recurring error signatures</h2>
+<p class="none">Nothing to rank.</p>
+<h2>Errors by hour</h2>
+<table>
+  <thead><tr><th>#</th><th>hour (UTC)</th><th>errors</th><th>total</th><th>rate</th><th>evidence</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="rank">1</td>
+      <td>2026-09-30T00</td>
+      <td class="num">0</td>
+      <td class="num">100</td>
+      <td class="num">0.0%</td>
+      <td class="cite">rows 2, 3, 4, 5, 6, 7, 8, 9 (+92 more)</td>
+    </tr>
+  </tbody>
+</table>
+<h2>Latency distribution</h2>
+<table>
+  <thead><tr><th>band</th><th>rows</th><th>evidence</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>&lt;50ms</td>
+      <td class="num">100</td>
+      <td class="cite">rows 2, 3, 4, 5, 6, 7, 8, 9 (+92 more)</td>
+    </tr>
+  </tbody>
+</table>
+
+</body>
+</html>
