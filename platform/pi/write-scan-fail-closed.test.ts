@@ -68,7 +68,7 @@ const TEST_RULES = {
   destructiveCommandPatterns: [],
   destructiveCommandTokens: [],
   secretWritePatterns: [MARK],
-  limits: { maxToolCallsPerTask: 120, maxFileWritesPerTask: 30, maxBytesPerWrite: 2_000_000 },
+  limits: { maxToolCallsPerTask: 300, maxFileWritesPerTask: 100, maxBytesPerWrite: 2_000_000 },
   onViolation: "block",
 } as const;
 

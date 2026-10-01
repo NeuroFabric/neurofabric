@@ -420,20 +420,24 @@ test("4b. the file-write and write-size limits are enforced too", async () => {
 test("an inactive profile is inert: the base write budget still binds", async () => {
   const root = await sandbox();
   const { adapter } = await adapterWith(root, {
-    limits: { maxToolCallsPerTask: 200, maxFileWritesPerTask: 10, maxBytesPerWrite: 1_000_000 },
-    limitProfiles: { gauntlet: { maxFileWritesPerTask: 50 } },
+    limits: { maxToolCallsPerTask: 200, maxFileWritesPerTask: 2, maxBytesPerWrite: 1_000_000 },
+    limitProfiles: { gauntlet: { maxFileWritesPerTask: 5 } },
   });
 
-  for (let call = 1; call <= 10; call += 1) {
+  // These numbers are local to this test and exist only to make the boundary
+  // cheap to state. The property under test - an unselected profile must not
+  // raise what enforcement sees - holds for any pair of values, so nothing here
+  // is calibrated against the operator budget in .pi/neurofebric-policy.json.
+  for (let call = 1; call <= 2; call += 1) {
     const { decision } = await adapter.precheckToolCall("write", "execute", { path: "a.md", content: "x" }, undefined, `w-${call}`);
-    assert.equal(decision.decision, "ALLOW", `write ${call} of 10 must be allowed`);
+    assert.equal(decision.decision, "ALLOW", `write ${call} of 2 must be allowed`);
   }
 
-  // The profile is defined but not selected, so the base budget of 10 is what
-  // enforcement sees: the 11th write is denied AT 10, not at 50.
-  const eleventh = await adapter.precheckToolCall("write", "execute", { path: "a.md", content: "x" }, undefined, "w-11");
-  assert.equal(eleventh.decision.decision, "DENY");
-  assert.match((eleventh.decision as { reason: string }).reason, /maxFileWritesPerTask exceeded \(10\)/);
+  // The profile is defined but not selected, so the base budget of 2 is what
+  // enforcement sees: the 3rd write is denied AT 2, not at 5.
+  const third = await adapter.precheckToolCall("write", "execute", { path: "a.md", content: "x" }, undefined, "w-3");
+  assert.equal(third.decision.decision, "DENY");
+  assert.match((third.decision as { reason: string }).reason, /maxFileWritesPerTask exceeded \(2\)/);
 });
 
 test("an active profile raises the budget the enforcement actually sees", async () => {
@@ -444,8 +448,10 @@ test("an active profile raises the budget the enforcement actually sees", async 
     activeLimitProfile: "gauntlet",
   });
 
-  // Write 11 is denied by the test above under the same base limits, so its
-  // allowance here can only have come from the profile being merged in.
+  // This shares the base write budget of 10 with the sizing fixture above, but
+  // not with the inactive-profile test, which uses its own local pair. Under
+  // this profile the 51st write is allowed, and that allowance can only have
+  // come from the profile being merged in.
   for (let call = 1; call <= 50; call += 1) {
     const { decision } = await adapter.precheckToolCall("write", "execute", { path: "a.md", content: "x" }, undefined, `w-${call}`);
     assert.equal(decision.decision, "ALLOW", `write ${call} of 50 must be allowed`);
@@ -544,8 +550,8 @@ test("7. the committed project policy file is valid and loadable", async () => {
 
   assert.ok(config, ".pi/neurofebric-policy.json must exist and parse");
   assert.equal(config!.version, 1);
-  assert.equal(config!.limits.maxToolCallsPerTask, 200, "the operator-raised harness budget");
-  assert.equal(config!.limits.maxFileWritesPerTask, 30);
+  assert.equal(config!.limits.maxToolCallsPerTask, 300, "the operator-raised harness budget");
+  assert.equal(config!.limits.maxFileWritesPerTask, 100);
   assert.equal(config!.limits.maxBytesPerWrite, 2_000_000);
   assert.deepEqual(config!.destructiveCommandPatterns, ["rm -rf", "format c:"]);
   assert.deepEqual(
