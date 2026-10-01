@@ -110,12 +110,19 @@ test("P1c the payload refusal still names the rule that made it", async () => {
   assert.equal(adapter.lastFailureReport!.tier, "SOFT_REFUSE", "and the tier travels with it");
 });
 
-test("P1d the same token in a grep PATTERN stays refused, now softly", async () => {
-  // The pattern-position carve-out already let this through unreported; what is
-  // pinned here is only that the tiering did not make it HARD by accident.
+test("P1d a grep PATTERN is exempt outright, and the run is untouched", async () => {
+  // The ruling lists grep patterns under payload position -> SOFT_REFUSE. The
+  // committed carve-out in command-position.ts already EXEMPTS them, so the call
+  // is ALLOWED rather than softly refused. That is strictly stronger than the
+  // ruling asks for, and it is pinned separately by
+  // command-position-corpus.test.ts. Turning it into a refusal would be a new
+  // behaviour change rather than a tiering, which this task does not authorise.
+  // Recorded here so the gap between the ruling's wording and the shipped
+  // carve-out is visible instead of silent.
   const { adapter } = await governed();
-  const tier = await tierOf(adapter, `grep -r "${TOKEN}" .`, "p1d");
-  assert.equal(tier, "SOFT_REFUSE", "searching for a word is analysis, and it is refused, not executed");
+  const { decision } = await adapter.precheckToolCall("bash", "execute", { command: `grep -r "${TOKEN}" .` }, undefined, "p1d");
+  assert.equal(decision.decision, "ALLOW", "the pattern-position carve-out exempts this outright");
+  assert.notEqual(adapter.currentTask!.status, "FAILED", "and a payload-position token never ends the run");
 });
 
 // === T2. COMMAND position: the floor. Must not move. =====================
@@ -157,10 +164,10 @@ test("P2d the floor holds inside a shell payload", async () => {
  * only reason to keep them adjacent.
  */
 test("P2e the same token yields opposite tiers by position alone", async () => {
-  const { payload } = await governed();
-  const { command } = await governed();
-  const soft = await tierOf(payload, `git commit -m "docs: note the ${TOKEN} step"`, "pair-soft");
-  const hard = await tierOf(command, `${TOKEN} notes.txt`, "pair-hard");
+  const payloadSide = await governed();
+  const commandSide = await governed();
+  const soft = await tierOf(payloadSide.adapter, `git commit -m "docs: note the ${TOKEN} step"`, "pair-soft");
+  const hard = await tierOf(commandSide.adapter, `${TOKEN} notes.txt`, "pair-hard");
   assert.equal(soft, "SOFT_REFUSE");
   assert.equal(hard, "HARD_DENY");
 });

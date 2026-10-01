@@ -662,8 +662,20 @@ export class ConfiguredPolicy implements PolicyEngine {
       for (const candidate of commandTokens(text)) {
         if (exempt.has(candidate)) continue;
         if (wanted.has(candidate.toLowerCase())) {
+          // POSITION, NOT SPELLING, DECIDES THE TIER. A configured token that
+          // IS the command being run is a deletion in itself and ends the task.
+          // The same token anywhere else -- a commit message, a grep pattern, a
+          // quoted argument -- is data: still refused, still never executed, but
+          // survivable, so the agent can rephrase and continue.
+          //
+          // Both branches refuse. The tier only decides whether the RUN ends.
+          // An unclassified parse contributes whatever commands it did resolve,
+          // and anything not positively identified as the operation defaults to
+          // the survivable tier: execution is refused either way, so preferring
+          // SOFT cannot turn a refusal into an execution.
+          const operation = parsed.commandTokens.has(candidate);
           return this.deny(`${where}: destructive command '${candidate}' is denied; shell must not bypass deletion control`,
-            "HARD_DENY");
+            operation ? "HARD_DENY" : "SOFT_REFUSE");
         }
       }
     }
