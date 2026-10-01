@@ -18,14 +18,25 @@ import type { CsvReadResult } from "./capabilities.ts";
  *
  * A report that says "checkout-api is the bottleneck" without saying from where
  * is an assertion. This one says it and shows its receipts.
+ *
+ * WHAT IS DELIBERATELY NOT PRINTED. The by-source ranking is computed and
+ * returned in the analysis, but NOT rendered. Its values are infrastructure
+ * hostnames, and a bottleneck report about alert categories does not need them;
+ * committing them would publish environment naming into version control for no
+ * gain. Alert CODES are printed, because ranking alert categories IS the
+ * product and a ranking cannot name what it ranks.
  */
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] ?? c));
 }
 
-/** Citations are the point, so they are collapsed only when there are many. */
-function cite(rows: readonly number[], limit = 8): string {
+/**
+ * Citations are the point, so they are collapsed only when there are many.
+ * Five keeps a citation inside the 40-character budget the committed report is
+ * held to, and the "(+N more)" keeps it honest that the list is truncated.
+ */
+function cite(rows: readonly number[], limit = 5): string {
   if (rows.length === 0) return "";
   const shown = rows.slice(0, limit).join(", ");
   return rows.length > limit ? `${shown} (+${rows.length - limit} more)` : shown;
@@ -73,7 +84,7 @@ ${body}
 function categoryTable(rows: readonly CategoryStat[], title: string, order: "frequency" | "elapsed"): string {
   if (rows.length === 0) return "";
   const body = rows.map((c, i) => `    <tr${i === 0 ? ' class="top"' : ""}>
-      <td class="rank">${i === 1 ? "<strong>1</strong>" : i + 1}</td>
+      <td class="rank">${i === 0 ? "<strong>1</strong>" : i + 1}</td>
       <td${i === 0 ? ' class="lead-key"' : ""}>${escapeHtml(c.key)}</td>
       <td class="num">${c.count}</td>
       ${order === "elapsed" ? `<td class="num">${c.totalElapsed === null ? "&mdash;" : c.totalElapsed.toLocaleString()}</td>` : ""}
@@ -172,7 +183,6 @@ ${lead}
 ${mappingsSection(analysis)}
 ${categoryTable(analysis.categories, "Alert categories by frequency", "frequency")}
 ${categoryTable(analysis.categoriesByElapsed, "Alert categories by total elapsed time", "elapsed")}
-${bottleneckTable(analysis.bySource, "Rows by source", "source")}
 ${bottleneckTable(analysis.byHour, "Rows by hour", "hour (UTC)")}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>

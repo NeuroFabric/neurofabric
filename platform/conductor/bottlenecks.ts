@@ -160,7 +160,7 @@ function resolveMappings(csv: CsvReadResult): {
         degenerate.push({
           column: c,
           distinctValues: distinct,
-          note: "holds a single distinct value, so ranking by it would put every row in one bucket",
+          note: "single distinct value; cannot rank",
         });
         return false;
       }
@@ -173,8 +173,8 @@ function resolveMappings(csv: CsvReadResult): {
     const distinct = distinctOf(pick);
     const hypothesis = true;
     const note = role === "duration"
-      ? "read as a duration because the name says so; the UNIT is stated nowhere in this export"
-      : `read from the column name alone; ${distinct} distinct value(s) confirm it can discriminate`;
+      ? "unit not stated in export"
+      : `inferred from name; ${distinct} distinct`;
     mappings.push({ role, column: pick, hypothesis, note });
   }
   return { mappings, degenerate, chosen };
