@@ -1618,9 +1618,21 @@ export class KernelAdapter {
     // and retryable flag. A plain Error collapsed to UNKNOWN and discarded both.
     // F-006 Phase 2a: the flag is the caller's, not a hard-coded `false`.
     // D1: a policy refusal is NOT a tool error. It is rebuilt as its own
-    // category carrying the policy's own words, so recovery terminates on it
-    // instead of replanning the very block that was denied. Every other failure
-    // keeps the unchanged TOOL_ERROR construction below.
+    // category carrying the policy's own words, so recovery can tell a refusal
+    // from a fault at all. Every other failure keeps the unchanged TOOL_ERROR
+    // construction below.
+    //
+    // REVERSED 2026-10-01 (ledger D1, merged 066b2b4). This comment previously
+    // read "so recovery TERMINATES on it", and that was true when written. It is
+    // no longer true: recovery CONTINUEs on a denial, because a refusal is an
+    // ANSWER, not a fault, and only a fault may kill a task.
+    //
+    // The category is no less load-bearing after the reversal than before it.
+    // Collapsed to TOOL_FAILURE, this result would REPLAN the very block that
+    // was denied and burn the replan budget re-proposing it - that is the
+    // original F-006 defect, and it is unchanged. What changed is the far end:
+    // carrying the policy's own words is now what lets the refusal be REPORTED,
+    // and being reported is the whole of the contract.
     return this.observeToolResult(
       result,
       isError
