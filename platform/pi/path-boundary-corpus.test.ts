@@ -424,10 +424,13 @@ test("B3: a soft refusal spends no tool-call budget", () => {
  * delivered as a failed result, `classifyFailure` returns POLICY_DENIED, and
  * recovery terminated on it unconditionally — the committed `onViolation:
  * block` never reached it, because the options carried no violation field.
- *
- * FAILING CLOSED IS THE DEFAULT: an ABSENT violation means terminate. This gate
- * pins the surviving case only, and gate B5 pins the absent case so a later
- * change cannot make "unknown" mean "carry on".
+ * THE REVERSAL (ratified 2026-10-01) DELETED "FAIL CLOSED". B5 used to pin
+ * that an ABSENT violation means terminate, so that "unknown" could never
+ * mean "carry on". That gate is gone by name and B5 now pins the opposite.
+ * Absence is not evidence of `abort`: it is evidence that some layer between
+ * policy and recovery did not carry the field, which is a WIRING defect.
+ * Terminating on a wiring defect made the defect fatal, which is the exact
+ * inversion this class exists to prevent.
  */
 test("B4 MUST-PASS: a block violation received as a tool result does not terminate", () => {
   const decision = chooseRecoveryDetailed({
@@ -440,24 +443,35 @@ test("B4 MUST-PASS: a block violation received as a tool result does not termina
   assert.notEqual(decision.strategy, "TERMINATE", "a block violation terminated the task");
 });
 
-test("B5 MUST-DENY: an absent violation still terminates (fail closed)", () => {
-  const decision = chooseRecoveryDetailed({
-    limits: DEFAULT_LIMITS,
-    failure: "POLICY_DENIED",
-    depth: 0,
-    idempotency: "IDEMPOTENT",
+  test("B5 MUST-PASS: an absent violation does NOT terminate - absence is a wiring bug", () => {
+    const decision = chooseRecoveryDetailed({
+      limits: DEFAULT_LIMITS,
+      failure: "POLICY_DENIED",
+      depth: 0,
+      idempotency: "IDEMPOTENT",
+    });
+    assert.equal(decision.strategy, "CONTINUE", "an absent violation killed the task");
+    assert.equal(decision.reason, "POLICY_SOFT_REFUSED", "and it is reported as a refusal");
+    assert.doesNotMatch(
+      decision.reason,
+      /BUDGET_EXHAUSTED|DEPTH_EXHAUSTED/,
+      "never as a budget problem: absence means unwired, not overdrawn",
+    );
   });
-  assert.equal(decision.strategy, "TERMINATE", "an absent violation let the task continue");
-  assert.equal(decision.reason, "POLICY_DENIED_TERMINATED");
-});
 
-test("B6 MUST-DENY: an abort violation still terminates", () => {
-  const decision = chooseRecoveryDetailed({
-    limits: DEFAULT_LIMITS,
-    failure: "POLICY_DENIED",
-    depth: 0,
-    idempotency: "IDEMPOTENT",
-    violation: "abort",
+  test("B6 MUST-PASS: an abort violation does NOT terminate AT THIS TABLE", () => {
+    // `abort` still ends a task. It does so in `precheckToolCall`, which calls
+    // `abortTask` BEFORE the call can be refused. By the time a result could
+    // reach this line under `abort`, the task is already FAILED and the result
+    // is discarded as out of order - so a `TERMINATE` here would be unreachable
+    // in production, and asserting one would pin a branch no live run takes.
+    const decision = chooseRecoveryDetailed({
+      limits: DEFAULT_LIMITS,
+      failure: "POLICY_DENIED",
+      depth: 0,
+      idempotency: "IDEMPOTENT",
+      violation: "abort",
+    });
+    assert.equal(decision.strategy, "CONTINUE", "an abort violation killed the task here");
+    assert.equal(decision.reason, "POLICY_SOFT_REFUSED", "and it is reported as a refusal");
   });
-  assert.equal(decision.strategy, "TERMINATE", "an abort violation let the task continue");
-});

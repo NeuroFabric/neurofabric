@@ -17,13 +17,14 @@ import {
 import { CoreError } from "../core/errors.ts";
 
 /**
- * D1: a policy refusal is deterministic, and it was being replanned.
+ * D1: a policy refusal is an ANSWER, and it was being treated as a FAULT.
  *
  * A `ConfiguredPolicy` denial is not a transient fault. Nothing about retrying
  * the same call, or replanning around it, can make a denied call permitted: the
  * rule that denied it is a rule about the call itself.
  *
- * The defect, as observed twice in a live session (each time killing the task):
+ * THE ORIGINAL DEFECT, as observed twice in a live session (each time killing
+ * the task):
  *
  *   ConfiguredPolicy denial
  *     -> PolicyDecision { decision: "DENY", reason, violation }
@@ -33,16 +34,37 @@ import { CoreError } from "../core/errors.ts";
  *     -> the table REPLANned it, and the identical denial burned the replan
  *        budget until the task died with REPLAN_BUDGET_EXHAUSTED
  *
- * A refusal was being treated as a fault worth another attempt. Two deaths, two
- * tasks, zero progress: the replan is re-proposing the very block that was
- * denied, so the outcome is determined in advance.
+ * D1 FIXED that by making a marked denial TERMINATE. That was a DEFERRAL, not
+ * a fix: it stopped the replan death and replaced it with a different one. A
+ * refusal is not a fault, and a fault is what a task is allowed to die of.
+ *
+ * THE D1 CONTRACT REVERSAL (ratified 2026-10-01). This file previously asserted
+ *   POLICY_DENIED -> TERMINATE
+ * That assertion is now INVERTED, deliberately and by name:
+ *   POLICY_DENIED -> CONTINUE, always, under every label
+ *
+ * The old contract was wrong on the evidence. `onViolation: block` says the
+ * refusal is survivable, so a run that terminated on it contradicted its own
+ * committed policy — and the committed policy is tracked and legitimate, so the
+ * behaviour was the defect, never the setting. A termination certificate for a
+ * refusal also destroys the refusal's ATTRIBUTION, which is the only reason the
+ * certificate ever existed: it told the operator which rule refused the call,
+ * and a certificate that kills the task cannot be read as an attribution of a
+ * single call inside a longer run.
+ *
+ * `abort` still ends a task, but it no longer does so HERE: `precheckToolCall`
+ * calls `abortTask` before a call can be refused, so by the time any result
+ * could reach this table the task is already FAILED and the result is discarded
+ * as out of order. Termination belongs to that decision, not to this one.
  *
  * The contract asserted here, and ONLY for a marked denial:
- *   POLICY_DENIED -> TERMINATE, no retry, no replan, no budget consumed,
- *   and the certificate names the actual denial reason.
+ *   POLICY_DENIED -> CONTINUE; the refusal is REPORTED with the policy's own
+ *   words; no retry, no replan, no strategy change, no budget consumed; the
+ *   task stays live and in control.
  *
  * Generic TOOL_FAILURE and transient failures are untouched, and pinned as such
- * so this fix cannot quietly widen into a change of recovery policy.
+ * (D1.10, D1.11) so this reversal cannot quietly widen into a change of
+ * recovery policy for real faults.
  */
 
 const RULES = {
@@ -55,8 +77,8 @@ const RULES = {
   destructiveCommandPatterns: ["rm -rf"],
   destructiveCommandTokens: ["rm"],
   limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
-  // NOT `abort`: the whole point is to prove the fix works on the paths where
-  // the adapter does NOT already terminate. `abort` is handled by abortTask.
+  // NOT `abort`: the whole point is to prove the contract on the path where the
+  // adapter does NOT already terminate. `abort` is handled by abortTask.
   onViolation: "block",
 } as const;
 
@@ -142,61 +164,105 @@ test("D1.1b an unmarked tool error still classifies as before", () => {
 
 // --- 2-5. the invariant, end to end ---------------------------------------
 
-test("D1.2 a denied call terminates the task immediately", async () => {
+test("D1.2 REVERSED: a denied call does NOT terminate the task", async () => {
   const { adapter } = await denyingAdapter();
   await deniedMidExecution(adapter, "d1");
-  assert.equal(adapter.currentTask!.status, "FAILED", "a refusal must not leave the task running");
+
+  // The assertion this test used to make is now the bug. `PLANNING` is this
+  // kernel's live, actionable, awaiting-next-move state: the task survived and
+  // can still act on the answer it was given.
+  assert.equal(
+    adapter.currentTask!.status,
+    "PLANNING",
+    "a refusal is an answer: the task stays live and able to act on it",
+  );
+  assert.notEqual(adapter.currentTask!.status, "FAILED", "a refusal must never kill a task");
+  assert.equal(
+    types(adapter, "TASK_FAILED").length,
+    0,
+    "and no failure certificate is emitted, so there is no death to misattribute",
+  );
 });
 
-test("D1.3 a denied call issues no retry", async () => {
+test("D1.3 REVERSED: a denied call issues no retry", async () => {
   const { adapter } = await denyingAdapter();
   await deniedMidExecution(adapter, "d1");
   assert.equal(adapter.currentTask!.retryCount, 0, "a refusal is not retried");
-  assert.equal(lastPayload(adapter, "TASK_FAILED")?.strategy, "TERMINATE");
+  // Not "no retry" but "no recovery move that could fail again": a retry of a
+  // deterministically denied call is a foregone conclusion.
+  assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "CONTINUE");
 });
 
-test("D1.4 a denied call issues no replan and consumes no replan budget", async () => {
+test("D1.4 REVERSED: a denied call issues no replan and consumes no replan budget", async () => {
   const { adapter } = await denyingAdapter();
   await deniedMidExecution(adapter, "d1");
   assert.equal(adapter.currentTask!.replanCount, 0, "the replan budget is untouched by a refusal");
-  assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "TERMINATE", "the table never selected REPLAN");
+  assert.equal(lastPayload(adapter, "RECOVERY_STARTED")?.strategy, "CONTINUE", "the table never selected REPLAN");
 });
 
-test("D1.5 repeated identical denials consume no replan budget", async () => {
+test("D1.5 repeated identical denials consume no budget and never end the task", async () => {
   const { adapter } = await denyingAdapter();
-  await deniedMidExecution(adapter, "d1");
-  assert.equal(adapter.currentTask!.status, "FAILED");
-  assert.equal(adapter.currentTask!.replanCount, 0, "not one replan was spent on the refusal");
-  assert.equal(adapter.currentTask!.retryCount, 0, "and not one retry");
-  assert.equal(adapter.currentTask!.failureReason!.includes("REPLAN_BUDGET_EXHAUSTED"), false,
-    "the task must not die of a budget it never spent");
+  for (let i = 1; i <= 5; i++) {
+    await deniedMidExecution(adapter, `d1-${i}`);
+    assert.notEqual(adapter.currentTask!.status, "FAILED", `the task survived denial ${i}`);
+  }
+  assert.equal(adapter.currentTask!.replanCount, 0, "five denials, zero replans");
+  assert.equal(adapter.currentTask!.retryCount, 0, "five denials, zero retries");
+  assert.equal(adapter.currentTask!.strategyCount ?? 0, 0, "five denials, zero strategy changes");
+  assert.equal(
+    types(adapter, "SOFT_REFUSAL_CONTINUED").length,
+    5,
+    "every refusal is REPORTED: survivable does not mean silent",
+  );
 });
 
-test("D1.6 the terminal certificate names the ACTUAL denial reason", async () => {
+test("D1.6 REVERSED: the refusal is REPORTED with the ACTUAL denial reason", async () => {
   const { adapter } = await denyingAdapter();
   await deniedMidExecution(adapter, "d1");
-  const reason = adapter.currentTask!.failureReason!;
-  assert.match(reason, /POLICY_DENIED/, "the failure class is named");
-  assert.ok(reason.includes(DENIAL_REASON), "the policy's own words, verbatim");
-  assert.ok(reason.includes("outside the allowed roots"), "which rule refused it is identifiable");
-  assert.doesNotMatch(reason, /no safe recovery strategy remains/);
-  assert.doesNotMatch(reason, /Pi reported a tool error/);
+
+  // The terminal certificate is gone, and that costs the operator the one thing
+  // it was for. So the replacement is not merely "the task survives": the
+  // refusal's ATTRIBUTION moves onto the only event a survivable refusal makes,
+  // and carries the policy's own words verbatim. A refusal that is visible but
+  // not attributable is the outcome the certificate existed to prevent.
+  const refusal = lastPayload(adapter, "SOFT_REFUSAL_CONTINUED");
+  assert.ok(refusal, "a survivable refusal is recorded, not swallowed");
+  assert.equal(refusal!.failure, "POLICY_DENIED", "it keeps its identity all the way through recovery");
+  assert.equal(refusal!.strategy, "CONTINUE", "and it books no budget");
+  assert.equal(
+    refusal!.denialReason,
+    DENIAL_REASON,
+    "the policy's own words, verbatim: which rule refused it stays identifiable",
+  );
+  assert.ok(
+    String(refusal!.denialReason).includes("outside the allowed roots"),
+    "and it names the rule, not just the class",
+  );
 });
 
 // --- 6. the table --------------------------------------------------------
 
-test("D1.7 the table terminates POLICY_DENIED without consulting any budget", () => {
+test("D1.7 REVERSED: the table CONTINUES on POLICY_DENIED without consulting any budget", () => {
   for (const idempotency of ["IDEMPOTENT", "NON_IDEMPOTENT", "UNKNOWN"] as Idempotency[]) {
     for (const attemptMatchesLastFailure of [true, false]) {
-      // Every budget deliberately spent: a refusal must not be able to reach a
-      // path that another move could have funded.
-      const decision = chooseRecoveryDetailed({
-        failure: "POLICY_DENIED", limits: DEFAULT_LIMITS,
-        retryCount: 0, replanCount: DEFAULT_LIMITS.maxReplans,
-        strategyCount: DEFAULT_LIMITS.maxStrategyChanges, depth: 0, idempotency,
-        attemptMatchesLastFailure,
-      });
-      assert.equal(decision.strategy, "TERMINATE", "a refusal always terminates");
+      for (const violation of ["block", "abort", undefined] as const) {
+        // Every budget deliberately spent: a refusal must not be able to reach a
+        // path that another move could have funded, and must not die of a
+        // budget it never touched. Pinned under EVERY label, because the
+        // reversal is exactly the claim that the label no longer decides.
+        const decision = chooseRecoveryDetailed({
+          failure: "POLICY_DENIED", limits: DEFAULT_LIMITS,
+          retryCount: 0, replanCount: DEFAULT_LIMITS.maxReplans,
+          strategyCount: DEFAULT_LIMITS.maxStrategyChanges, depth: DEFAULT_LIMITS.maxRecoveryDepth,
+          idempotency, attemptMatchesLastFailure, violation,
+        });
+        assert.equal(
+          decision.strategy,
+          "CONTINUE",
+          `a refusal continued or died (${idempotency}, violation=${violation})`,
+        );
+        assert.equal(decision.reason, "POLICY_SOFT_REFUSED", "and it is reported as a refusal, not a budget");
+      }
     }
   }
 });
@@ -212,31 +278,41 @@ test("D1.8 a refusal is never REPLAN, on either branch of the fork", () => {
         });
         assert.notEqual(decision.strategy, "REPLAN", "a refusal must never be replanned");
         assert.notEqual(decision.strategy, "RETRY", "a refusal must never be retried");
-        assert.notEqual(decision.strategy, "ESCALATE", "a refusal terminates, it does not escalate");
+        assert.notEqual(decision.strategy, "ESCALATE", "a refusal is reported, not escalated into a dead end");
+        assert.notEqual(decision.strategy, "TERMINATE", "and, by the reversal, it never terminates either");
       }
     }
   }
 });
 
 test("D1.9 the refusal guard precedes the guards that could mask it", () => {
-  // Depth and elapsed-time guards also terminate, so a refusal must not be
-  // reported as one of THOSE: the reason would be wrong.
+  // Depth and elapsed-time guards also end the task, so a refusal must not be
+  // reported as one of THOSE: the reason would be wrong, and an investigator
+  // sent after a depth budget that the refusal never touched is worse than no
+  // certificate at all.
   const exhaustedDepth = chooseRecoveryDetailed({
     failure: "POLICY_DENIED", limits: DEFAULT_LIMITS,
     retryCount: 0, replanCount: 0, strategyCount: 0,
     depth: DEFAULT_LIMITS.maxRecoveryDepth, idempotency: "IDEMPOTENT",
   });
-  assert.match(
-    (exhaustedDepth as { reason: string }).reason, /POLICY_DENIED/,
-    "a refusal at the depth limit must still be reported as a refusal",
+  assert.equal(
+    (exhaustedDepth as { reason: string }).reason,
+    "POLICY_SOFT_REFUSED",
+    "a refusal at the depth limit is still reported as a refusal, never as depth exhaustion",
+  );
+  assert.doesNotMatch(
+    (exhaustedDepth as { reason: string }).reason,
+    /DEPTH_EXHAUSTED|BUDGET_EXHAUSTED/,
+    "no budget may be named as the cause of something the refusal already explains",
   );
 });
 
 // --- 7-8. nothing else moved ---------------------------------------------
 
 test("D1.10 a generic deterministic tool failure still REPLANS", () => {
-  // The fix is scoped to MARKED denials. A tool that failed for reasons of its
-  // own keeps every bit of its previous recovery behaviour.
+  // The reversal is scoped to MARKED denials. A tool that failed for reasons of
+  // its own keeps every bit of its previous recovery behaviour — this is the
+  // pin that stops the reversal becoming "nothing is ever terminal".
   for (let replanCount = 0; replanCount < DEFAULT_LIMITS.maxReplans; replanCount++) {
     const decision = chooseRecoveryDetailed({
       failure: "TOOL_FAILURE", limits: DEFAULT_LIMITS,
@@ -258,9 +334,10 @@ test("D1.11 a transient failure still RETRIES then replans then terminates", () 
 test("D1.12 a denial on task N cannot affect task N+1", async () => {
   const { adapter } = await denyingAdapter();
   await deniedMidExecution(adapter, "d1");
-  assert.equal(adapter.currentTask!.status, "FAILED", "the denial ends its own task, and only that one");
+  assert.notEqual(adapter.currentTask!.status, "FAILED", "the denial did not end its own task");
 
-  // A newer turn must start clean: the refusal belongs to the dead task.
+  // A newer turn must start clean: the refusal belongs to the task that got it,
+  // and a task's own record must not be inherited by the next turn.
   await adapter.beginTask("second turn", "second turn");
   assert.equal(adapter.currentTask!.status, "PLANNING", "the newer task is untouched");
   assert.equal(adapter.currentTask!.failureReason, undefined, "it carries no failure reason");

@@ -1359,7 +1359,12 @@ export class KernelAdapter {
       };
       const decision = chooseRecoveryDetailed(recoveryOptions);
       const strategy = decision.strategy;
-      this.recoveryDepth += 1;
+            // §2.3: a refusal is an answer, not a spend. CONTINUE books nothing --
+      // not retry, not replan, and not recovery depth. Charging depth for a
+      // refusal would let repeated denials starve the task without it ever
+      // spending a budget of its own. Every other strategy still pays the
+      // depth it always paid.
+      if (strategy !== "CONTINUE") this.recoveryDepth += 1;
       await this.events.emit(event("RECOVERY_STARTED", this.task.taskId, {
         strategy,
         reason: decision.reason,
@@ -1407,10 +1412,17 @@ export class KernelAdapter {
           // recovery depth still resets below, because the task did make
           // progress: it learned the answer.
           this.advance("PLANNING", `Recovery strategy CONTINUE (${decision.reason})`, { expectTaskId: taskId });
+          // `denialReason` is carried here because this is the ONLY event a
+          // survivable refusal produces. The terminal certificate that used to
+          // name WHICH rule refused the call is gone with the termination, and
+          // without the reason on this event the reversal would leave the
+          // operator with a refusal that is visible but not attributable — the
+          // outcome the certificate existed to prevent.
           await this.events.emit(event("SOFT_REFUSAL_CONTINUED", this.task.taskId, {
             strategy,
             reason: decision.reason,
             failure,
+            denialReason,
             recoveryDepth: this.recoveryDepth,
           }));
           break;

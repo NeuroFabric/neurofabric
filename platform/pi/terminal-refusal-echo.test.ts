@@ -59,7 +59,15 @@ const RULES = {
   destructiveCommandPatterns: [],
   destructiveCommandTokens: [],
   limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
-  onViolation: "block",
+  // `abort`, and this is the load-bearing change of the re-base. Under the D1
+  // reversal a delivered denial no longer ends the task, so the OLD driver for
+  // this file - deliver a denial, let recovery terminate - produces a LIVE task
+  // and every echo assertion below would pass vacuously. `abort` still ends a
+  // task, at `precheckToolCall` -> `abortTask`, so a real death is still
+  // available. And a death is the right substrate: this file is about what a
+  // caller is told when the task is ALREADY dead. `abort` is the only path to
+  // that state now, so the file is pinned on the one route that still exists.
+  onViolation: "abort",
 } as const;
 
 const TOOLS = [FORBIDDEN_TOOL, "read", "bash", "write"].map((name) =>
@@ -76,12 +84,17 @@ async function adapterFor(): Promise<KernelAdapter> {
 }
 
 /**
- * A denial reason built from fragments. The runtime value is a realistic
- * refusal sentence; the source contains no trigger literal, so authoring this
- * file cannot itself be a denied write.
- */
-const DENIAL_REASON = ["policy ", "withheld-tool.json: '", FORBIDDEN_TOOL, "' is in deniedTools"].join("");
-
+    * There is no hand-built denial reason any more, and that is an improvement.
+    *
+    * This file used to assemble a realistic-looking refusal sentence from string
+    * fragments, so that no trigger literal appeared in the source and authoring
+    * the file could not itself become a denied write. The re-base removes the need:
+    * the death is now produced by a REAL policy decision, so `deadTask()` returns
+    * the reason the policy itself produced. The pin is therefore now driven by
+    * live policy output rather than by a string this file made up - which is
+    * strictly stronger, since a hand-built reason can drift from the real shape
+    * without any test noticing.
+    */
 const lifecycleRefusals = (k: KernelAdapter) => k.recentEvents(500).filter((e) => e.type === "LIFECYCLE_REFUSED");
 const lastRefusalPayload = (k: KernelAdapter) =>
   lifecycleRefusals(k).at(-1)?.payload as Record<string, unknown> | undefined;
@@ -102,9 +115,16 @@ function forceState(adapter: KernelAdapter, patch: { status: string; failureReas
 async function deadTask(): Promise<{ adapter: KernelAdapter; causingCallId: string; denialReason: string }> {
   const adapter = await adapterFor();
 
+  // The death is caused by the reason the boundary ACTUALLY emits for the
+  // forbidden tool — probed live, not hand-built — so the preconditions below
+  // verify a real denial, not a string we authored.
+  const probe = await adapter.precheckToolCall(FORBIDDEN_TOOL, FORBIDDEN_TOOL, {}, undefined, "reason-probe");
+  assert.equal(probe.decision.decision, "DENY", "precondition: the forbidden tool must be denied by policy");
+  const denialReason = probe.decision.reason ?? "";
+
   const causingCallId = "call-that-died";
   await adapter.beginToolExecution(causingCallId, FORBIDDEN_TOOL, "execute");
-  await adapter.recordToolResult(causingCallId, FORBIDDEN_TOOL, undefined, true, undefined, DENIAL_REASON);
+  await adapter.recordToolResult(causingCallId, FORBIDDEN_TOOL, undefined, true, undefined, denialReason);
 
   // PRECONDITIONS, asserted before any test below asserts an outcome. Without
   // these, every echo assertion in this file would pass against a live task.
@@ -115,17 +135,20 @@ async function deadTask(): Promise<{ adapter: KernelAdapter; causingCallId: stri
   );
   const stored = adapter.currentTask?.failureReason ?? "";
   assert.ok(
-    stored.includes(DENIAL_REASON),
+    stored.includes(denialReason),
     `precondition: the denial must reach the task as its failureReason, got: ${stored}`,
   );
-  assert.match(stored, /POLICY_DENIED_TERMINATED/, "precondition: the death must name the refusal as the cause");
+    assert.equal(
+    stored,
+    denialReason,
+    "precondition: the death's failureReason must be the policy's own words, verbatim — the re-base stores the refusal unlabelled, so identity is the strongest available check",
+  );
 
-  return { adapter, causingCallId, denialReason: DENIAL_REASON };
+  return { adapter, causingCallId, denialReason };
 }
 
 test("1. a refusal after a death names the CALL THAT TRIGGERED IT, not the earlier one", async () => {
   const { adapter, causingCallId } = await deadTask();
-
   // An unrelated, entirely benign call — the shape that produced the misread.
   const later = await adapter.precheckToolCall("read", "read", { path: "notes.md" }, undefined, "later-call-1");
 
