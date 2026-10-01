@@ -24,6 +24,32 @@ Measured in this pass, on the host that ran it:
 | `main` | `625e59f`, in sync with `origin/main` | `git fetch origin` then `git status -sb` reports no ahead/behind |
 | Suite on `main` | **green** — 480 tests, 478 pass, 0 fail, 2 skipped | `npm test` (typecheck + `platform/*.test.mjs` + `platform/{core,pi}/*.test.ts`) |
 
+#### Host environment — re-measured 2026-09-30, and it is NOT Linux
+
+The wrapper table in §2.2 is measured against a host whose shell semantics are
+not Linux, and every row in it inherits that. Measured, not assumed:
+
+| Claim | Measured value | How |
+|---|---|---|
+| Kernel / platform | `MINGW64_NT-10.0-26200 ... x86_64 Msys` | `uname -a` |
+| bash | `5.3.15(2)-release (x86_64-pc-cygwin)` | `bash --version` |
+| `find`, `xargs`, `env`, `nice`, `stdbuf`, `nohup`, `timeout` | present in `/usr/bin` | `command -v`, one per tool |
+| `setsid` | **ABSENT** | `command -v setsid` returns nothing |
+| `watch` | **ABSENT** | `command -v watch` returns nothing |
+| `sudo` | resolves to a **Windows** binary, not GNU sudo | `command -v sudo` |
+
+**Consequence, and it is a design constraint rather than a footnote.**
+`setsid`, `watch` and `sudo` therefore **cannot be measured on this host** and
+are **not** entered in `COMMAND_WRAPPERS`. Their option grammar is not invented.
+An unrecognised wrapper is *unclassifiable*, and unclassifiable is **DENY** — so
+the gap fails closed and costs false positives on a host where those wrappers are
+not even installed. `sudo` is additionally under a standing instruction not to be
+invoked until the resolution question below is closed.
+
+Two standing rules were added because this host made the cost concrete: **scan
+every measurement probe for absolute-path tokens before issuing it**, and
+**never invoke `sudo` here**.
+
 An earlier operator directive asserted `glab` was installed and asked for the
 provenance line to be written on that basis. It was not written, because the
 claim was not true on this host, and the directive has since been corrected:
@@ -740,6 +766,86 @@ covered by §1.4, and remains open.
 
 **What this ruling does not do.** It does not close §1.4, does not revert the
 `include` change, and does not license the shadow declaration to grow (see §6).
+
+### 3.2 E1 — the terminal refusal echo: the death's second refusal, read from source
+
+Recorded as an **open question with labelled hypotheses**, per instruction. One
+hypothesis is falsified by the source and one survives as a real gap. The death it
+follows is `merged_not_restarted` #2; its certificate is the §2.4 boundary
+refusal, and the operator has measured the cause of the *termination* (the serving
+process was never restarted, so D5 was not live). What follows concerns only the
+*second* refusal, which quoted a path that the command I sent did not contain.
+
+#### Hypothesis 1 — `sudo` resolves out-of-root, so the same resolution recurred
+
+**FALSIFIED. Three independent sites, read in full, all say a bare command name
+is not a path candidate and nothing resolves it against `PATH`:**
+
+| Site | What it does to a bare token like `sudo` |
+|---|---|
+| `platform/core/tool-paths.ts:254-262` `looksLikePath` | returns **false** — no leading `/` or `~`, no `WINDOWS_DRIVE` match, no `./` or `../` prefix, and no embedded `/` or `\` |
+| `platform/core/workspace.ts` `scanPathCandidates` | adds a token only if it is absolute, `./`/`../`-prefixed, or **contains a separator**; `sudo` is none of the three |
+| `platform/core/workspace.ts` `resolveWithinRoot` | performs **no `PATH` lookup**; a relative candidate becomes `path.resolve(rootPath, candidate)`, which is inside the root by construction |
+
+So the out-of-root candidate came from **my own command text**, which carried that
+Windows path literally as the argument to `ls -l`. The agent-side half of the dual
+cause is not merely the rule being broken; it is the *whole* mechanism. Recorded
+because it closes the question rather than leaving it as "possibly a resolution".
+
+#### Hypothesis 2 — can the stored-failure echo reach a LIVE task?
+
+**Yes, and by exactly one state — but not the one in this death.**
+
+`REFUSED_EXECUTION_STATES` (`kernel-adapter.ts:101-107`) is
+`REPLANNING, ESCALATED, COMPLETED, FAILED, CANCELLED, TIMEOUT`. The adjacent
+comment on `TERMINAL_TASK_STATES` (`kernel-adapter.ts:88-95`) says outright that
+a `REPLANNING` task "is still live and is still owned by whoever started it", and
+that is why it is excluded from the terminal set. **`REPLANNING` is the one live
+state inside the refusing set.**
+
+Of the three sites gated on that set, only one replays the stored reason:
+
+| Site | Behaviour |
+|---|---|
+| `kernel-adapter.ts:835` | **replays** `failureReason` via `describeTerminalRefusal` |
+| `kernel-adapter.ts:1024` `abortTask` | early return, emits `POLICY_VIOLATION`, no replay |
+| `kernel-adapter.ts:1083` `beginToolExecution` | `TOOL_EXECUTION_IGNORED`, no replay |
+
+**It is unpinned at `:835` for `REPLANNING`.** Measured counts:
+`terminal-refusal-echo.test.ts` and `stream-termination.test.ts` contain **zero**
+mentions of `REPLANNING`. The only pin is `I3` in `kernel-lifecycle.test.ts:276`,
+which asserts that all six states refuse a new execution at `beginToolExecution` —
+a different site, and it asserts no echo text and no precheck refusal reason.
+
+Mitigating, and stated so the gap is not overstated: the replayed reason is
+**labelled** ORIGINAL and the refusal states the call was NOT evaluated, so the
+labelling defect that once cost a session is fixed. What is open is whether a
+**live** `REPLANNING` task should replay a stored reason at all. **Not filed as a
+defect; filed as an open question, with the two candidate answers being "yes, and
+add the pin" and "no, and `REPLANNING` should refuse without replaying".**
+
+#### Correction to the premise: the task was NOT alive
+
+Measured, and it changes the finding. The certificate reads
+`POLICY_DENIED_TERMINATED` with `recoveryDepth=1/3`, and the second refusal states
+the reason was "recorded when the task terminated and unchanged since". The
+**first** call terminated the task; the second was an ordinary dead-task replay,
+which is precisely the behaviour `terminal-refusal-echo.test.ts` already pins. The
+belief that the task was live was wrong on both sides — mine and the operator's —
+and both had the same source.
+
+#### The finding that survives — E1a: a terminal denial does not announce its own death
+
+The first call's tool result was the **bare denial sentence** and nothing else —
+no terminal banner, no "task is FAILED", nothing distinguishing it from a soft
+refusal. Termination was disclosed only by the **next** call, whose text opened
+with "Task is FAILED". A reader of the transcript cannot tell, from the call that
+caused the death, that it caused a death.
+
+This is a **different defect** from the echo, and a smaller one: it does not
+misreport a cause, it withholds a status. The echo fix made a dead task's refusal
+truthful; it did not make the *originating* refusal say the task died. That is the
+gap, and it is what produced a wrong premise in this session's own report.
 
 ---
 
