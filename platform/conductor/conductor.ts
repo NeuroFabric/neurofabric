@@ -80,8 +80,14 @@ export class Conductor {
   private readonly cwd: string;
   private readonly boundary: WorkspaceBoundary;
   private progress: ProgressEvent[] = [];
+  private readonly options: ConductorOptions;
 
-  constructor(private readonly options: ConductorOptions) {
+  // `options` is a plain field rather than a constructor parameter property:
+  // `npm run test:ts` runs the whole tree through --experimental-strip-types,
+  // whose strip-only mode cannot erase parameter properties. Anything under
+  // platform/ has to be erasable by stripping alone.
+  constructor(options: ConductorOptions) {
+    this.options = options;
     this.cwd = options.cwd;
     this.kernel = new KernelAdapter();
     const config = options.projectConfig ?? { policyMode: "TRUSTED_PROJECT", allowedRoots: ["."] };
