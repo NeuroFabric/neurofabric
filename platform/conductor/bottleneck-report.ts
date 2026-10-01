@@ -285,8 +285,15 @@ function mdRows(rows: readonly number[], limit = 12): string {
   return rows.length > limit ? `${shown} (+${rows.length - limit} more)` : shown;
 }
 
+const NO_CATEGORIES_NOTE = "No categorical columns found; skipping categorical rankings.";
+
 function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string, vocabulary: ReportVocabulary): string {
-  if (stats.length === 0) return `## ${heading}\n\n_No rows carried a credible category column, so this ranking is empty. That is a fact about the file, not a finding._\n`;
+  // EMPTY IN, EMPTY OUT. A caller that has already established there is nothing
+  // to rank gets nothing back, so a heading can never be printed over an empty
+  // body. The old behaviour returned the heading plus an italic apology, which
+  // still rendered "## Alert categories by frequency" above nothing -- a table
+  // that reads as a result.
+  if (stats.length === 0) return "";
   // Same contract as the HTML table: the breach column appears only when the
   // file states a threshold, and the header and the cells decide together.
   const breach = vocabulary.thresholdLabel;
@@ -432,8 +439,16 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     out.push(`> **This report cannot answer anything requiring:** ${analysis.missing.map(mdCell).join(", ")}. No credible column for ${analysis.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted.`, "");
   }
 
-  out.push(mdCategoryTable(analysis.categories, `${vocab.headingUnit} categories by frequency`, "frequency", vocab));
-  out.push(mdCategoryTable(analysis.categoriesByElapsed, `${vocab.headingUnit} categories by total elapsed time`, "total elapsed time", vocab));
+  // THE RANKING TABLES ARE CONDITIONAL. A heading is a claim that there is a
+  // ranking; printing one over an empty body produces a report confidently
+  // answering a question nobody asked. What replaces it is one line naming what
+  // was looked for and not found, which is the version a reader can act on.
+  if (analysis.categories.length > 0) {
+    out.push(mdCategoryTable(analysis.categories, `${vocab.headingUnit} categories by frequency`, "frequency", vocab));
+    out.push(mdCategoryTable(analysis.categoriesByElapsed, `${vocab.headingUnit} categories by total elapsed time`, "total elapsed time", vocab));
+  } else {
+    out.push(`> ${NO_CATEGORIES_NOTE}`, "");
+  }
 
   if (analysis.byHour.length > 0) {
     out.push(hourlyMarkdown(analysis));
@@ -547,8 +562,10 @@ export async function renderBottleneckReport(input: {
 ${lead}
 ${divergenceBanner(analysis)}
 ${mappingsSection(analysis)}
-${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
-${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}
+${analysis.categories.length > 0
+    ? `${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
+${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}`
+    : `<p class="none">${escapeHtml(NO_CATEGORIES_NOTE)}</p>`}
 ${hourlyTable(analysis)}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>

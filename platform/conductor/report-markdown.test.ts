@@ -85,6 +85,11 @@ test("with no stored schema every mapping is still a hypothesis (unchanged behav
 });
 
 test("the markdown report states its basis and cannot be broken by file content", () => {
+  // NOTE ON THE HEADING BELOW. These fixtures are Pega-shaped but are analysed
+  // with NO schema, and a file nothing has been verified about is described in
+  // records. So the neutral heading is the correct one to split on, and this is
+  // the fourth test in the suite that was silently relying on the old leak.
+  // Pega wording through the VERIFIED path is pinned in vocabulary-guard.ts.
   // A category name carrying every character that would break a Markdown table
   // and then the HTML around it. This value came from an uploaded file.
   const hostile = `PEGA|0001 <script>alert(1)</script> \`code\` **bold** [x](y)
@@ -99,7 +104,7 @@ second line`;
   assert.match(md, /inferred from the column NAME alone/, "no memory means it says so");
   // The pipe inside a cell must not become a column break. Counted INSIDE one
   // table, because both category tables have a row numbered 1.
-  const frequencyTable = md.split("## Alert categories by frequency")[1].split("## ")[0];
+  const frequencyTable = md.split("## Record categories by frequency")[1].split("## ")[0];
   assert.equal(
     frequencyTable.split("\n").filter((l) => l.startsWith("| 1 |")).length,
     1, "the hostile cell did not split the table into two rows",
@@ -186,7 +191,7 @@ test("D2 survives into markdown: no divergence block when the two rankings agree
 
 test("R13 the markdown tables carry the alias, and column names keep their underscores", () => {
   const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
-  const table = md.split("## Alert categories by frequency")[1].split("## ")[0];
+  const table = md.split("## Record categories by frequency")[1].split("## ")[0];
   assert.ok(table.includes("PEGA0001 (HttpAPI)"), "the unambiguous alias is appended to the code");
   assert.ok(table.includes("| PEGA0005 |") || table.includes("PEGA0005 |"), "the bare key is still the prefix, so matching on the code still works");
 
