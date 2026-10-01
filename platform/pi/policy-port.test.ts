@@ -420,7 +420,7 @@ test("4b. the file-write and write-size limits are enforced too", async () => {
 test("an inactive profile is inert: the base write budget still binds", async () => {
   const root = await sandbox();
   const { adapter } = await adapterWith(root, {
-    limits: { maxToolCallsPerTask: 200, maxFileWritesPerTask: 10, maxBytesPerWrite: 1_000_000 },
+    limits: { maxToolCallsPerTask: 200, maxFileWritesPerTask: 20, maxBytesPerWrite: 1_000_000 },
     limitProfiles: { gauntlet: { maxFileWritesPerTask: 50 } },
   });
 
@@ -544,8 +544,8 @@ test("7. the committed project policy file is valid and loadable", async () => {
 
   assert.ok(config, ".pi/neurofebric-policy.json must exist and parse");
   assert.equal(config!.version, 1);
-  assert.equal(config!.limits.maxToolCallsPerTask, 200, "the operator-raised harness budget");
-  assert.equal(config!.limits.maxFileWritesPerTask, 30);
+  assert.equal(config!.limits.maxToolCallsPerTask, 300, "the operator-raised harness budget");
+  assert.equal(config!.limits.maxFileWritesPerTask, 100);
   assert.equal(config!.limits.maxBytesPerWrite, 2_000_000);
   assert.deepEqual(config!.destructiveCommandPatterns, ["rm -rf", "format c:"]);
   assert.deepEqual(
