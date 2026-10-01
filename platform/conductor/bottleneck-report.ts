@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary } from "./bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary, type HourlyProfile } from "./bottlenecks.ts";
 import { resolveSchemaMemory } from "./schema-memory.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
@@ -48,24 +48,12 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function bottleneckTable(rows: readonly BottleneckAnalysis["bySource"][number][], title: string, keyHeader: string): string {
-  if (rows.length === 0) return `<h2>${escapeHtml(title)}</h2>\n<p class="none">Nothing to rank.</p>`;
-  const body = rows.map((b, i) => `    <tr>
-      <td class="rank">${i + 1}</td>
-      <td>${escapeHtml(b.key)}</td>
-      <td class="num">${b.errorCount}</td>
-      <td class="num">${b.count}</td>
-      <td class="num">${pct(b.errorRate)}</td>
-      <td class="cite">rows ${escapeHtml(cite(b.rows))}</td>
-    </tr>`).join("\n");
-  return `<h2>${escapeHtml(title)}</h2>
-<table>
-  <thead><tr><th>#</th><th>${escapeHtml(keyHeader)}</th><th>errors</th><th>total</th><th>rate</th><th>evidence</th></tr></thead>
-  <tbody>
-${body}
-  </tbody>
-</table>`;
-}
+/**
+ * The by-source ranking is computed and returned but NOT rendered (R12): its
+ * values are infrastructure hostnames and a report about alert categories does
+ * not need them. Nothing here rendered it before the hourly table was replaced
+ * by `hourlyTable`, and the generic renderers kept it out on the same grounds.
+ */
 
 function latencyTable(a: BottleneckAnalysis): string {
   if (a.latency.length === 0) return "";
@@ -322,7 +310,73 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
   return lines.join("\n");
 }
 
+/** The chronological, spike-aware hour table. Mirrors `hourlyTable` exactly. */
+function hourlyMarkdown(a: BottleneckAnalysis): string {
+  const h = a.hourly;
+  const header = a.timestampsAreNaive ? "hour (host-local; these timestamps carry no zone)" : "hour (UTC)";
+  const out: string[] = [];
+  if (h.insufficient && h.buckets > 0) {
+    out.push(`> Only ${h.buckets} hour bucket(s) carry rows, which is too few for the ${h.spikeMultiple}x test to mean anything. No hour is called abnormal.`, "");
+  } else if (h.flagged > 0) {
+    const worst = [...h.hours].filter((x) => x.isSpike).sort((a, b) => b.count - a.count)[0];
+    out.push(`> [!WARNING]`, `> **${h.flagged} hour${h.flagged === 1 ? "" : "s"} above the average. That is the incident.**`, ">",
+      `> Worst: **${mdCell(worst.key)}** carried **${worst.count} rows** of ${h.countedRows} — ${(worst.share * 100).toFixed(1)}% of the export in one hour, ${mdCell(worst.rule ?? "")}.`, ">",
+      `> Mean ${h.meanPerHour.toFixed(1)} rows/hour over ${h.buckets} observed hour(s), population sigma ${h.sigma.toFixed(1)}. Flagged above ${h.spikeMultiple}x the mean.`, "");
+  }
+  out.push(`## Rows by ${header}`, "");
+  out.push(`| hour | rows | share | vs avg | signal |`, `|---|---|---|---|---|`);
+  for (const x of h.hours) {
+    out.push(`| ${mdCell(x.key)} | ${x.count} | ${(x.share * 100).toFixed(1)}% | ${x.multiple === null ? "not measurable" : `${x.multiple.toFixed(1)}x`} | ${x.isSpike ? `**SPIKE** (${mdCell(x.rule ?? "")})` : ""} |`);
+  }
+  out.push("");
+  return out.join("\n");
+}
+
 /** The Markdown rendering of an analysis. Pure: no I/O, no policy, no kernel. */
+export /**
+ * WHEN IT HAPPENED. Chronological, not ranked, because the question this table
+ * answers is "which hour", and a table sorted by volume makes the reader hunt
+ * for it.
+ *
+ * The SPIKE row is marked in the markup as well as in the words, so the page can
+ * style it and so a reader scanning the column can find it without reading
+ * every cell.
+ */
+function hourlyTable(a: BottleneckAnalysis): string {
+  const h = a.hourly;
+  if (h.hours.length === 0) return "";
+  const body = h.hours.map((x) => `    <tr${x.isSpike ? ' class="spike"' : ""}>
+      <td>${escapeHtml(x.key)}</td>
+      <td class="num">${x.count}</td>
+      <td class="num">${(x.share * 100).toFixed(1)}%</td>
+      <td class="num">${x.multiple === null ? "&mdash;" : `${x.multiple.toFixed(1)}x`}</td>
+      <td>${x.isSpike ? `<span class="badge">SPIKE</span> ${escapeHtml(x.rule ?? "")}` : ""}</td>
+    </tr>`).join("\n");
+  const header = a.timestampsAreNaive ? "hour (host-local -- these timestamps carry no zone)" : "hour (UTC)";
+  return `${hourlyCalloutHtml(h)}
+<h2>Rows by ${escapeHtml(header)}</h2>
+<table>
+  <thead><tr><th>hour</th><th>rows</th><th>share</th><th>vs avg (${h.meanPerHour.toFixed(1)})</th><th>signal</th></tr></thead>
+  <tbody>
+${body}
+  </tbody>
+</table>
+<p class="none">Average ${h.meanPerHour.toFixed(1)} rows/hour across ${h.buckets} observed hour(s); population sigma ${h.sigma.toFixed(1)}. A row is flagged above ${h.spikeMultiple}x that average.</p>`;
+}
+
+function hourlyCalloutHtml(h: HourlyProfile): string {
+  if (h.insufficient && h.buckets > 0) {
+    return `<p class="none">Only ${h.buckets} hour bucket(s) carry rows, which is too few for the ${h.spikeMultiple}x test to mean anything. Hours are listed below; no hour is called abnormal.</p>`;
+  }
+  if (h.flagged === 0) return "";
+  const worst = [...h.hours].filter((x) => x.isSpike).sort((a, b) => b.count - a.count)[0];
+  return `<div class="banner spike-banner">
+  <p class="banner-title">${h.flagged} hour${h.flagged === 1 ? "" : "s"} above the average. That is the incident.</p>
+  <p>Worst: <strong>${escapeHtml(worst.key)}</strong> carried <strong>${worst.count}</strong> of ${h.countedRows} row(s) &mdash; ${(worst.share * 100).toFixed(1)}% of the export in one hour, ${escapeHtml(worst.rule ?? "")}.</p>
+  <p class="banner-note">Mean ${h.meanPerHour.toFixed(1)} rows/hour over ${h.buckets} observed hour(s), population sigma ${h.sigma.toFixed(1)}. Flagged above ${h.spikeMultiple}x the mean.</p>
+</div>`;
+}
+
 export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report"): string {
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
@@ -382,10 +436,7 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
   out.push(mdCategoryTable(analysis.categoriesByElapsed, `${vocab.headingUnit} categories by total elapsed time`, "total elapsed time", vocab));
 
   if (analysis.byHour.length > 0) {
-    out.push(`## Rows by hour (${analysis.timestampsAreNaive ? "host-local; these timestamps carry no zone" : "UTC"})`, "");
-    out.push("| hour | rows | error rows |", "|---|---|---|");
-    for (const h of analysis.byHour) out.push(`| ${mdCell(h.key)} | ${h.count} | ${h.errorCount} |`);
-    out.push("");
+    out.push(hourlyMarkdown(analysis));
   }
 
   if (analysis.unreadableTimestamps.length > 0) {
@@ -481,6 +532,10 @@ export async function renderBottleneckReport(input: {
   .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
   .banner-note { color: #5b616e; font-size: .85rem; }
   tr.top td { font-weight: 600; }
+  tr.spike { background: #fdf6f3; }
+  tr.spike td { font-weight: 600; }
+  .badge { display: inline-block; border: 1px solid #b23c17; color: #b23c17; padding: 0 .3rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; }
+  .spike-banner { border-color: #b23c17; }
   .lead-key { font-weight: 700; }
 </style>
 </head>
@@ -494,9 +549,7 @@ ${divergenceBanner(analysis)}
 ${mappingsSection(analysis)}
 ${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
 ${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}
-${bottleneckTable(analysis.byHour, analysis.timestampsAreNaive
-    ? "Rows by hour (host-local -- these timestamps carry no zone)"
-    : "Rows by hour (UTC)", "hour")}
+${hourlyTable(analysis)}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>
 <p class="none">${analysis.unreadableTimestamps.length} row(s) carried an unreadable timestamp: rows ${escapeHtml(cite(analysis.unreadableTimestamps))}.</p>` : ""}
