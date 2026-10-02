@@ -374,18 +374,41 @@ export async function resolveSchemaMemory(options: ResolveOptions): Promise<Reso
   if (options.rows === undefined || options.rows.length === 0) return undefined;
   const profile = profileGenericColumns(options.headers, options.rows);
   const inferred = inferGenericRoles(profile);
-  const gaps = GENERIC_REQUIRED_ROLES.filter((role) => inferred[role] === undefined);
-  // No rows, or nothing that groups and nothing that dates: return undefined and
-  // let the report say the file matched nothing. A profile with no evidence is
-  // not a weaker profile, it is an invented one.
+  // A USER CORRECTION OUTRANKS THE PROFILER, ALWAYS, EVEN WHEN IT IS PARTIAL.
+  //
+  // Before this, a correction could only take effect if the archive on its own
+  // filled every required role. Correcting ONE column of a sales CSV -- the
+  // ordinary case -- left category and time unfilled, the store path declined,
+  // the profiler ran, and the correction was silently ignored. The person said
+  // no and the product went on saying yes, which is the one outcome this feature
+  // exists to prevent.
+  //
+  // So the archive SEEDS the inference and the profiler fills the rest. The
+  // user's word wins on the roles they spoke about; everything they did not
+  // mention is still a guess, and is still reported as one.
+  const corrected: Record<string, string> = { ...inferred };
+  let correctedRoles = 0;
+  for (const [role, column] of Object.entries(fromArchive.roles)) {
+    if (!options.headers.includes(column)) continue;
+    corrected[role] = column;
+    correctedRoles += 1;
+  }
+  const gaps = GENERIC_REQUIRED_ROLES.filter((role) => corrected[role] === undefined);
+  // Nothing the profiler found and nothing the user corrected: return undefined
+  // and let the report say the file matched nothing. A profile with no evidence
+  // is not a weaker profile, it is an invented one.
   if (gaps.length > 0) return undefined;
 
   return {
-    id: "generic-inferred",
-    roles: inferred,
-    source: "GENERIC",
-    learnedRoles: [],
-    absent: [],
+    id: correctedRoles > 0 ? "user-corrections" : "generic-inferred",
+    roles: corrected,
+    // SESSION_ARCHIVE when the user contributed at least one role, because then
+    // the mapping is partly theirs. It is still a HYPOTHESIS overall -- the
+    // untouched roles are profiler guesses -- and the analysis reports it that
+    // way, which is why the report does not gain Pega vocabulary from it.
+    source: correctedRoles > 0 ? "SESSION_ARCHIVE" : "GENERIC",
+    learnedRoles: Object.keys(corrected).filter((role) => fromArchive.roles[role] !== undefined),
+    absent: [...fromArchive.absent, ...fromCore.absent],
     unresolved: [],
   };
 }
