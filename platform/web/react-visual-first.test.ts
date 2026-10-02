@@ -73,7 +73,7 @@ test("the charts are REAL CHART CONFIGURATIONS, not bars made of divs", () => {
   assert.match(src, /type:\s*"line"/, "a line chart for the shape of the day");
   // Chart.js writes into a canvas. If this ever becomes a DOM bar chart the
   // pinning and the CDN stop mattering, and that is a change worth noticing.
-  assert.match(src, /createElement\("canvas"/, "drawn into a canvas by the pinned library");
+  assert.match(src, /["(]canvas["),]/, "drawn into a canvas by the pinned library");
 });
 
 test("the charts are INSIDE ANSWERS, not on the page", () => {

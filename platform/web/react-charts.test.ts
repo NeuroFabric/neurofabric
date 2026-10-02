@@ -140,7 +140,12 @@ test("the categorical ranking is a BAR chart over the real frequencies", () => {
     "each point is a category and a count");
 
   assert.match(src, /type:\s*"bar"/, "a bar chart, which is the right mark for a frequency");
-  assert.match(src, /D\.ranking/, "driven by the engine's own ranking rather than a second count");
+  // The data comes from the WIDGET PAYLOAD, not from the page re-reading the
+  // global payload. Since the chat-first pivot the server computes the series in
+  // the router and ships it inside the message, so a chart and the answer above
+  // it cannot describe different data.
+  assert.match(src, /props\.payload.*points|payload && props\.payload/,
+    "driven by the widget's own payload, which the server computed");
 });
 
 test("the temporal spikes are a LINE chart, and the hours travel in the payload", () => {
@@ -161,7 +166,8 @@ test("the temporal spikes are a LINE chart, and the hours travel in the payload"
   }
 
   assert.match(src, /type:\s*"line"/, "a line, because time is ordered and the shape IS the finding");
-  assert.match(src, /D\.timeline/, "driven by the hourly profile");
+  assert.match(src, /props\.payload.*points|payload && props\.payload/,
+    "driven by the widget's own payload, which the server computed");
 });
 
 test("the payload's timeline AGREES with the engine's own hourly profile", () => {

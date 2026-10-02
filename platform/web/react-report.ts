@@ -1,6 +1,7 @@
 import type { BottleneckAnalysis, ColumnHealth, NumericColumnStat } from "../conductor/bottlenecks.ts";
 import { synthesize } from "../conductor/synthesis.ts";
 import { greet, type Reply, type ConversationData } from "../conductor/conversation.ts";
+import { forecast, type Forecast } from "../conductor/forecasting.ts";
 import type { Purpose } from "../conductor/semantics.ts";
 import { parseCorrection } from "./chat-parse.ts";
 
@@ -223,6 +224,16 @@ export interface DashboardData {
    */
   readonly timeline: readonly TimelinePoint[];
   /**
+   * THE FORECAST, or null when there was not enough continuous history to make
+   * one.
+   *
+   * Null is a real answer and the common one: projecting from a handful of
+   * hourly points is arithmetic, and a chart that drew a confident line through
+   * four points would be the single most misleading thing this product could
+   * render. The UI shows the REASON rather than quietly hiding the control.
+   */
+  readonly forecast: Forecast | null;
+  /**
    * Mappings this checkout has LEARNED, as role -> column.
    *
    * Carried in the payload rather than fetched, so the panel renders on first
@@ -408,6 +419,11 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     defaultDepth: DEFAULT_DEPTH,
     source: options.live?.path ?? null,
     live: options.live !== undefined,
+    // Computed ONCE, here, by the same pure function the tests exercise. The
+    // chart therefore draws the line this repository asserts on, rather than a
+    // second implementation living in the page -- the arrangement that has
+    // produced two of this product's worst incidents.
+    forecast: forecastFor(analysis),
     timeline: analysis.hourly.hours.map((h) => ({
       hour: h.key,
       count: h.count,
@@ -445,8 +461,36 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
 }
 
 /**
- * THE SHAPE THE ROUTER AND THE PAGE AGREE ON.
+ * THE FORECAST, or null when the history cannot support one.
  *
+ * A thin wrapper rather than an inline call so the "why not" is in ONE place.
+ * `forecast()` already refuses below twelve hourly points and across a gap, and
+ * it refuses for good reasons; repeating those reasons here would be a second
+ * copy that drifts. This adds only the decision about what the CHART does with
+ * a refusal: nothing is drawn, and the reason travels with the payload so the
+ * interface can say WHY instead of leaving a switch that mysteriously does
+ * nothing.
+ *
+ * NOTE ON THE HORIZON. Twelve hours is chosen because that is a shift, and a
+ * shift is the unit a person reading an operations log already thinks in. It is
+ * not tuned against any dataset, and no test in this repository asserts that
+ * twelve is the RIGHT number -- only that a forecast produced with it is
+ * internally consistent and honestly bounded.
+ */
+function forecastFor(analysis: BottleneckAnalysis): Forecast | null {
+  if (analysis.hourly.hours.length === 0) return null;
+  return forecast(analysis.hourly.hours.map((h) => ({
+    hour: h.key,
+    count: h.count,
+    share: h.share,
+    multiple: h.multiple,
+    spike: h.isSpike,
+    rule: h.rule,
+  })), { horizon: 12 });
+}
+
+/**
+ * THE SHAPE THE ROUTER AND THE PAGE AGREE ON.
  * One projection, so the greeting computed here and the answers the server
  * computes later are answers about the same object. Two projections would be two
  * chances for a widget to disagree with itself -- and a chat where the opening
@@ -643,189 +687,6 @@ function ChartNote(props) {
 }
 
 function BarChart(props) {
-  var points = D.ranking.slice(0, D.maxDepth);
-  var ref = useChart(function () {
-    return {
-      type: "bar",
-      data: {
-        labels: points.map(function (r) { return r.key; }),
-        datasets: [{
-          label: "Rows",
-          data: points.map(function (r) { return r.count; }),
-          backgroundColor: "#3b5bdb",
-          borderRadius: 3
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        indexAxis: "y",
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              // The category AND the count. A bar chart whose tooltip says only
-              // "40" has told the reader nothing they could not see.
-              label: function (ctx) {
-                var p = points[ctx.dataIndex];
-                return p.count.toLocaleString("en-US") + " rows, " +
-                  Math.round((p.count / Math.max(1, D.totalRows)) * 100) + "% of the file";
-              }
-            }
-          }
-        },
-        scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
-      }
-    };
-  }, props.version);
-  return React.createElement("div", { className: "canvasbox" },
-    React.createElement("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
-}
-
-function LineChart(props) {
-  var hours = D.timeline;
-  var ref = useChart(function () {
-    return {
-      type: "line",
-      data: {
-        labels: hours.map(function (h) { return h.hour; }),
-        datasets: [{
-          label: "Rows in the hour",
-          data: hours.map(function (h) { return h.count; }),
-          borderColor: "#3b5bdb",
-          backgroundColor: "rgba(59,91,219,0.12)",
-          fill: true,
-          tension: 0.25,
-          // Point colour carries the ENGINE'S verdict, not a visual guess. A
-          // reader can see at a glance which peaks the engine called abnormal,
-          // and hovering says why.
-          pointRadius: hours.map(function (h) { return h.spike ? 6 : 3; }),
-          pointBackgroundColor: hours.map(function (h) { return h.spike ? "#d9480f" : "#3b5bdb"; })
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          tooltip: {
-            callbacks: {
-              // THE POINT OF THE WHOLE EXERCISE: the exact count, the hour it
-              // belongs to, and whether the engine considered it abnormal.
-              // A spike you cannot interrogate is just a bump.
-              label: function (ctx) {
-                var h = hours[ctx.dataIndex];
-                if (!h) return "";
-                var lines = [h.count.toLocaleString("en-US") + " rows in this hour"];
-                if (h.multiple !== null && h.multiple !== undefined) {
-                  lines.push(h.multiple.toFixed(1) + "x the mean hour");
-                }
-                lines.push(h.spike ? ("Flagged as a spike. " + (h.rule || "")) : "Within the usual range");
-                return lines;
-              },
-              title: function (items) {
-                var h = hours[items[0].dataIndex];
-                return h ? h.hour.replace("T", " ") + ":00" : "";
-              }
-            }
-          }
-        },
-        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
-      }
-    };
-  }, props.version);
-  return React.createElement("div", { className: "canvasbox" },
-    React.createElement("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
-}
-
-
-/** The ranking as a table. The chart is an enhancement; this is the fact. */
-function renderRankingTable(rank) {
-  return React.createElement("table", { className: "fallback" },
-    React.createElement("thead", null, React.createElement("tr", null,
-      React.createElement("th", null, "Category"),
-      React.createElement("th", null, "Rows"),
-      React.createElement("th", null, "Share")
-    )),
-    React.createElement("tbody", null, rank.map(function (r) {
-      return React.createElement("tr", { key: r.key },
-        React.createElement("td", null, esc(r.key)),
-        React.createElement("td", null, r.count.toLocaleString("en-US")),
-        React.createElement("td", null, Math.round((r.count / Math.max(1, D.totalRows)) * 100) + "%")
-      );
-    }))
-  );
-}
-
-/** The hours as a table, spikes marked. Never chart-only data. */
-function renderTimelineTable() {
-  return React.createElement("table", { className: "fallback" },
-    React.createElement("thead", null, React.createElement("tr", null,
-      React.createElement("th", null, "Hour"),
-      React.createElement("th", null, "Rows"),
-      React.createElement("th", null, "Vs mean"),
-      React.createElement("th", null, "Verdict")
-    )),
-    React.createElement("tbody", null, D.timeline.map(function (h) {
-      return React.createElement("tr", { key: h.hour, className: h.spike ? "critical" : "" },
-        React.createElement("td", null, esc(h.hour.replace("T", " ") + ":00")),
-        React.createElement("td", null, h.count.toLocaleString("en-US")),
-        React.createElement("td", null,
-          h.multiple === null || h.multiple === undefined ? "-" : h.multiple.toFixed(1) + "x"),
-        React.createElement("td", null, h.spike ? "Spike" : "Normal")
-      );
-    }))
-  );
-}
-
-/**
- * A small shorthand, so the tree below is readable. JSX would be nicer and needs
- * a compiler this artifact deliberately does not have.
- */
-
-/**
- * THE SURFACE. A conversation, not a dashboard.
- *
- * The Owner's verdict on the previous release was that the chat was "shoved into
- * a sidebar". That was correct, and it was not a styling complaint. A chat beside
- * a dashboard is a help widget; a chat as the primary surface is an agent. The
- * difference is which thing you are looking at when the page opens, and whether
- * the analysis arrives as an ANSWER or as a wall to navigate.
- *
- * So the layout is one centred reading column. The charts are not gone -- they
- * are inside the answers now, which is the only place a chart belongs in a
- * conversation: nobody asks for a histogram before asking what the file is.
- */
-var h = React.createElement;
-
-/* ---------------------------------------------------------------------------
- * CHARTS. Unchanged in substance, relocated in the product: a chart inside a
- * message rather than a section of a page.
- * ------------------------------------------------------------------------- */
-function useChart(draw, version) {
-  var ref = React.useRef(null);
-  React.useEffect(function () {
-    if (typeof Chart === "undefined" || ref.current === null) return;
-    var chart = new Chart(ref.current.getContext("2d"), draw());
-    return function () { chart.destroy(); };
-    // One dependency, and the reason is written where it was written before:
-    // an empty list means a re-read of the analysis repaints nothing, while a
-    // list that changes on every render stacks one chart per render.
-  }, [version]);
-  return ref;
-}
-
-function ChartNote(props) {
-  if (typeof Chart !== "undefined") return null;
-  return h("div", { className: "chartoff" },
-    h("p", { className: "font-semibold" },
-      "Charts unavailable — the numbers below are still exact."),
-    h("p", { className: "mt-1" },
-      "The charting library did not load. Two causes look identical from inside the browser and both were real here: " +
-      "the script was blocked by this page's Content-Security-Policy, or the CDN returned an error for that file. " +
-      "Open the developer console and look for a CSP violation or a 404 on chart.umd.js."));
-}
-
-function BarChart(props) {
   var points = (props.payload && props.payload.points) || [];
   var ref = useChart(function () {
     return {
@@ -866,42 +727,125 @@ function BarChart(props) {
 
 function LineChart(props) {
   var hours = (props.payload && props.payload.points) || [];
+  var fc = props.forecast || null;
+
+  // === THE PROJECTION IS APPENDED TO THE SAME AXIS, NOT DRAWN SEPARATELY ===
+  //
+  // The forecast continues the observed hours on one shared scale, which is what
+  // makes the interval band readable as a WIDENING RANGE rather than as a second
+  // chart. A separate panel would let the two scales disagree, and the reader
+  // would be comparing numbers they were never meant to compare.
+  var labels = hours.map(function (x) { return x.hour; });
+  var counts = hours.map(function (x) { return x.count; });
+  var datasets = [{
+    label: "Rows in the hour",
+    data: counts,
+    borderColor: "#3b5bdb",
+    backgroundColor: "rgba(59,91,219,0.12)",
+    fill: true,
+    tension: 0.25,
+    // The point colour carries the ENGINE'S verdict, not a visual guess.
+    pointRadius: hours.map(function (x) { return x.spike ? 6 : 3; }),
+    pointBackgroundColor: hours.map(function (x) { return x.spike ? "#d9480f" : "#3b5bdb"; })
+  }];
+
+  if (fc && fc.points && fc.points.length > 0) {
+    var predicted = fc.points;
+    // Pad the observed series with nulls so the projection starts exactly where
+    // the observations stop. Connecting the two is what makes it one timeline;
+    // a gap would read as two unrelated facts.
+    var pad = predicted.length;
+    var bridged = [];
+    for (var i = 0; i < pad; i += 1) {
+      bridged.push(i === 0 ? counts[counts.length - 1] : null);
+    }
+    for (var j = 0; j < predicted.length; j += 1) bridged.push(predicted[j].count);
+    labels = labels.concat(predicted.map(function (p) { return p.hour; }));
+    counts = counts.concat(bridged);
+
+    // THE BAND FIRST, so it is painted UNDER the projection line. Drawn after,
+    // its translucent fill would sit over the line and grey it out.
+    datasets.unshift({
+      label: "Forecast range",
+      data: hours.map(function () { return null; })
+        .concat(bridged.map(function (v) { return v === null ? null : v; }))
+        .map(function (v, k) { return v; }),
+      borderColor: "transparent",
+      backgroundColor: "rgba(217,72,15,0.14)",
+      fill: "-1",
+      pointRadius: 0,
+      tension: 0.25
+    });
+    // Replace the band's data with the interval upper/lower pair, which is what
+    // makes the fill a RANGE rather than a second line.
+    datasets[0].data = [];
+    var upper = [], lower = [];
+    for (var b = 0; b < bridged.length; b += 1) {
+      if (b < pad - 1) { upper.push(null); lower.push(null); continue; }
+      var pt = predicted[b - (pad - 1)];
+      upper.push(pt.upper); lower.push(pt.lower);
+    }
+    datasets[0].data = upper;
+    datasets[1] = {
+      label: "Forecast lower bound",
+      data: hours.map(function () { return null; }).concat(lower),
+      borderColor: "transparent",
+      backgroundColor: "rgba(217,72,15,0.14)",
+      fill: false,
+      pointRadius: 0,
+      tension: 0.25
+    };
+
+    datasets.push({
+      label: "Projected",
+      data: counts,
+      borderColor: "#d9480f",
+      backgroundColor: "rgba(217,72,15,0.10)",
+      // DASHED. This is the single most important property in the whole
+      // forecast: a solid line continuing past the last observation is
+      // indistinguishable from a measurement, and a reader has no way to check
+      // which is which.
+      borderDash: [6, 4],
+      fill: false,
+      tension: 0.25,
+      pointRadius: 3,
+      pointBackgroundColor: "#d9480f"
+    });
+  }
+
   var ref = useChart(function () {
     return {
       type: "line",
-      data: {
-        labels: hours.map(function (x) { return x.hour; }),
-        datasets: [{
-          label: "Rows in the hour",
-          data: hours.map(function (x) { return x.count; }),
-          borderColor: "#3b5bdb",
-          backgroundColor: "rgba(59,91,219,0.12)",
-          fill: true,
-          tension: 0.25,
-          // The point colour carries the ENGINE'S verdict, not a visual guess.
-          pointRadius: hours.map(function (x) { return x.spike ? 6 : 3; }),
-          pointBackgroundColor: hours.map(function (x) { return x.spike ? "#d9480f" : "#3b5bdb"; })
-        }]
-      },
+      data: { labels: labels, datasets: datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
+          legend: { display: fc && fc.points && fc.points.length > 0 },
           tooltip: {
             callbacks: {
               title: function (items) {
-                var x = hours[items[0].dataIndex];
-                return x ? x.hour.replace("T", " ") + ":00" : "";
+                var l = labels[items[0].dataIndex];
+                return l ? l.replace("T", " ") + ":00" : "";
               },
               label: function (ctx) {
-                var x = hours[ctx.dataIndex];
-                if (!x) return "";
-                var lines = [x.count.toLocaleString("en-US") + " rows in this hour"];
-                if (x.multiple !== null && x.multiple !== undefined) {
-                  lines.push(x.multiple.toFixed(1) + "x the mean hour");
+                var l = labels[ctx.dataIndex];
+                var x = hours.filter(function (h) { return h.hour === l; })[0];
+                if (x) {
+                  var lines = [x.count.toLocaleString("en-US") + " rows in this hour"];
+                  if (x.multiple !== null && x.multiple !== undefined) lines.push(x.multiple.toFixed(1) + "x the mean hour");
+                  lines.push(x.spike ? ("Flagged as a spike. " + (x.rule || "")) : "Within the usual range");
+                  return lines;
                 }
-                lines.push(x.spike ? ("Flagged as a spike. " + (x.rule || "")) : "Within the usual range");
-                return lines;
+                var p = fc && fc.points ? fc.points.filter(function (q) { return q.hour === l; })[0] : null;
+                if (p) {
+                  return [
+                    "PROJECTED: about " + p.count.toLocaleString("en-US") + " rows",
+                    "range " + p.lower.toLocaleString("en-US") + " to " + p.upper.toLocaleString("en-US"),
+                    "from the observed trend, not a measurement"
+                  ];
+                }
+                return "";
               }
             }
           }
@@ -940,11 +884,32 @@ function renderWidget(w, version) {
   }
 
   if (w.kind === "chart-line") {
+    // The forecast toggle lives here, beside the chart it changes, rather than
+    // in a toolbar. A control that alters one panel and sits in a different one
+    // is a control people stop finding.
+    var fc = D.forecast;
+    var sShow = React.useState(false);
+    var showForecast = sShow[0], setShowForecast = sShow[1];
     return h(WidgetCard, { title: w.title, note: w.note },
       h(ChartNote),
       (p.points || []).length === 0
         ? h("p", { className: "text-sm text-slate-500" }, "Nothing to plot.")
-        : h(LineChart, { payload: p, version: version })
+        : h(React.Fragment, null,
+            h(LineChart, { payload: p, version: version, forecast: showForecast ? fc : null }),
+            fc === null || fc === undefined
+              ? h("p", { className: "text-xs text-slate-400 mt-2" },
+                  "No forecast for this file: " + String((fc && fc.reason) || "there are no hourly readings."))
+              : h("div", { className: "mt-2 flex items-center gap-2" },
+                  h("input", {
+                    id: "forecast-toggle",
+                    type: "checkbox",
+                    checked: showForecast,
+                    onChange: function (e) { setShowForecast(e.target.checked); }
+                  }),
+                  h("label", { htmlFor: "forecast-toggle", className: "text-xs text-slate-600 cursor-pointer" },
+                    "Show forecast for the next " + (fc.points || []).length + " hours")
+                )
+          )
     );
   }
 
