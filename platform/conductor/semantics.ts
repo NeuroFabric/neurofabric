@@ -136,13 +136,33 @@ const DOMAINS: readonly Domain[] = [
     kind: "transaction",
     required: [
       { term: "purchase_amount", weight: 3 },
+      // THE ORDER-SHAPED MONEY COLUMN, which the list did not have.
+      //
+      // `order_value_usd`, `order_total`, `order_amount` are among the most
+      // common column names in any sales export, and `order_value_usd` matched
+      // NONE of the terms below -- `order_id` and `order_date` are different
+      // strings, and `amount` is not a substring of `order_value`. The file
+      // scored one hit and failed the confidence gate.
+      //
+      // The GATE was right and must not move: `customer_id` alone really is not
+      // a transaction, and relaxing the gate would make this file identifiable
+      // AND make every weakly-signalled file confidently mislabelled. What was
+      // missing was the vocabulary, not the strictness.
+      { term: "order_value", weight: 3 },
+      { term: "order_total", weight: 3 },
+      { term: "order_amount", weight: 3 },
+      { term: "line_total", weight: 3 },
+      { term: "unit_price", weight: 3 },
+      { term: "net_amount", weight: 3 },
+      { term: "gross_amount", weight: 3 },
+      { term: "transaction_id", weight: 3 },
+      { term: "transaction", weight: 2 },
       { term: "amount", weight: 1 },
       { term: "price", weight: 2 },
       { term: "total", weight: 1 },
       { term: "revenue", weight: 2 },
       { term: "order_id", weight: 3 },
       { term: "order_date", weight: 2 },
-      { term: "transaction_id", weight: 3 },
       { term: "customer_id", weight: 2 },
       { term: "product_sku", weight: 3 },
       { term: "sku", weight: 3 },
@@ -150,8 +170,13 @@ const DOMAINS: readonly Domain[] = [
       { term: "cart", weight: 2 },
       { term: "invoice", weight: 2 },
       { term: "basket", weight: 2 },
+      { term: "balance", weight: 1 },
     ],
-    supporting: ["region", "store", "currency", "discount", "ship_date", "channel", "line_item"],
+    // RETURNS AND REFUNDS. A returns flag is one of the few things that
+    // separates a retail export from a generic ledger, and it costs nothing to
+    // ask for: it is supporting evidence, never the load-bearing claim.
+    supporting: ["region", "store", "currency", "discount", "ship_date", "channel", "line_item",
+      "return", "refund", "returned", "is_returned", "account_id", "entry_type", "debit", "credit"],
     subject: "a customer transaction or sales record",
     detail: "tracking orders and what was bought",
   },
