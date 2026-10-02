@@ -100,6 +100,43 @@ const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
  * patch, for the same reason React is: a report about a production incident
  * must not change because somebody else published a package.
  */
+/**
+ * THE COMPOSER AND ITS OFFLINE REPLACEMENT, AS TEXT.
+ *
+ * Both are spliced into the browser source at generation time, so they must be
+ * strings rather than expressions: `h` is declared INSIDE the emitted source and
+ * does not exist in this module. Building them here also means an offline
+ * artifact does not merely HIDE the composer -- it does not contain it, which
+ * is what an export needs. An export gets emailed and opened by people with no
+ * server, so what the document contains matters as much as what it shows.
+ */
+const COMPOSER_SOURCE = String.raw`
+h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
+  h("form", {
+    className: "mx-auto max-w-3xl px-4 py-3 flex gap-2",
+    onSubmit: function (e) { e.preventDefault(); ask(); }
+  },
+    h("input", {
+      type: "text",
+      value: text,
+      placeholder: "Ask about this file, or say \u201ccol_1 is the duration\u201d",
+      "aria-label": "Ask a question, or correct a column",
+      onChange: function (e) { setText(e.target.value); }
+    }),
+    h("button", { type: "submit", disabled: busy }, busy ? "..." : "Ask")
+  )
+)
+`;
+
+const OFFLINE_SOURCE = String.raw`
+h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
+  h("p", { className: "mx-auto max-w-3xl px-4 py-3 text-xs text-slate-500" },
+    "This is a standalone export: it was generated as a file, not served, so it cannot be " +
+    "queried or take corrections. The conversation above is preserved; the analysis it refers " +
+    "to is fixed at export time.")
+)
+`;
+
 const CHART_VERSION = "4.4.1";
 /**
  * THE FILENAME WAS WRONG FOR AN ENTIRE RELEASE, AND THE OWNER FOUND IT.
@@ -234,6 +271,16 @@ export interface DashboardData {
    */
   readonly forecast: Forecast | null;
   /**
+   * A REPLAYED CONVERSATION, when this document is an export.
+   *
+   * Absent on a live page, where the transcript is state the user is building.
+   * Present on an export, where it is the reason the document exists.
+   */
+  readonly transcript?: readonly {
+    readonly role: "agent" | "user";
+    readonly text: string;
+  }[];
+  /**
    * Mappings this checkout has LEARNED, as role -> column.
    *
    * Carried in the payload rather than fetched, so the panel renders on first
@@ -288,6 +335,38 @@ export interface DashboardOptions {
    * live page shows the archive as it stands BEFORE the user says anything.
    */
   readonly learned?: Readonly<Record<string, string>>;
+  /**
+   * THE FILE AN OFFLINE ARTIFACT CAME FROM.
+   *
+   * `live.path` is the live page's own file, and it is the right answer there. An
+   * export is generated through the STANDALONE path -- deliberately, with no
+   * `live` -- because that is what makes it carry `connect-src 'none'` and no
+   * composer. The side effect of that safety property was that the export's
+   * payload said `source: null`: a document whose whole purpose is to be sent to
+   * somebody could not name the file it described, and the re-read guard
+   * (`if (!D.source) return;`) had nothing to work with.
+   *
+   * So provenance is stated separately from liveness. Naming a file does not
+   * make a page live, and this option deliberately cannot: it feeds the payload
+   * field only, and grants no endpoint and no composer.
+   */
+  readonly sourceName?: string;
+  /**
+   * A PREVIOUS CONVERSATION, replayed into the transcript.
+   *
+   * Used only by the export endpoint, and the reason it exists is that an export
+   * which buried a conversation under a chart would omit the thing people share.
+   *
+   * Each turn is TEXT. It is rendered through the same escape-first function the
+   * rest of the page uses, and it is never trusted as markup -- it came from a
+   * browser and the reader's browser is what parses it.
+   */
+  readonly transcript?: readonly {
+    readonly role: "agent" | "user";
+    readonly text: string;
+    readonly widgets?: readonly unknown[];
+    readonly suggestions?: readonly string[];
+  }[];
 }
 
 function thousands(value: number): string {
@@ -417,7 +496,7 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
     maxDepth: MAX_DEPTH,
     defaultDepth: DEFAULT_DEPTH,
-    source: options.live?.path ?? null,
+    source: options.live?.path ?? options.sourceName ?? null,
     live: options.live !== undefined,
     // Computed ONCE, here, by the same pure function the tests exercise. The
     // chart therefore draws the line this repository asserts on, rather than a
@@ -440,7 +519,7 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     purpose: analysis.purpose,
     // THE GREETING, from the router's own function. See DashboardData.greeting.
     greeting: greet(toConversationData({
-      source: options.live?.path ?? null,
+      source: options.live?.path ?? options.sourceName ?? null,
       totalRows: analysis.totalRows,
       purpose: analysis.purpose,
       columns: analysis.numerical.columns.map((c) => ({
@@ -457,6 +536,10 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
       })),
       learned: options.learned ?? rolesToMap(analysis),
     })),
+    // A SUPPLIED TRANSCRIPT REPLACES the opening message, because an export is a
+    // conversation somebody had, and replacing it with a fresh greeting would put
+    // "What would you like to know?" on a document nobody can answer.
+    transcript: options.transcript,
   };
 }
 
@@ -555,7 +638,7 @@ const CHAT_SOURCE = String.raw`
  */
 function refreshFromServer(setVersion, reportFailure) {
   if (!D.source) return;
-  fetch("/api/dashboard?path=" + encodeURIComponent(D.source))
+  fetch("__DASH_URL__?path=" + encodeURIComponent(D.source))
     .then(function (r) {
       if (!r.ok) throw new Error("the server answered " + r.status);
       return r.text();
@@ -1062,9 +1145,16 @@ function Message(props) {
 
 function App() {
   var sThread = React.useState(function () {
-    // The greeting is EMBEDDED, computed by the router's own greet() at
-    // generation time. On screen with no network round trip, and the sentence
-    // the user reads is the sentence this repository's tests assert on.
+    // THE OPENING TRANSCRIPT.
+    //
+    // On a live page this is the greeting, computed by the router's own
+    // greet() at generation time: on screen with no network round trip, and the
+    // sentence the user reads is the sentence this repository's tests assert on.
+    //
+    // On an EXPORT it is the conversation the export is sharing. The greeting is
+    // NOT shown as well -- it would put "What would you like to know?" at the top
+    // of a document nobody can answer.
+    if (D.transcript && D.transcript.length > 0) return D.transcript;
     return [{ role: "agent", text: D.greeting.text, widgets: D.greeting.widgets || [], suggestions: D.greeting.suggestions || [] }];
   });
   var thread = sThread[0], setThread = sThread[1];
@@ -1116,7 +1206,7 @@ function App() {
     // SERVER decides whether that turn is a question or a refused correction.
     var parsed = parseCorrection(said);
     if (parsed.ok) {
-      fetch("/api/feedback", {
+      fetch("__FEEDBACK_URL__", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: D.source, column: parsed.column, role: parsed.role })
@@ -1146,7 +1236,7 @@ function App() {
       return;
     }
 
-    fetch("/api/chat", {
+    fetch("__CHAT_URL__", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: D.source, message: said })
@@ -1200,41 +1290,7 @@ function App() {
       )
     ),
 
-    // THE COMPOSER, where a composer belongs -- AND ONLY WHERE THERE IS
-    // SOMETHING TO TALK TO.
-    //
-    // The chat-first pivot moved the composer out of a live-only sidebar and
-    // into the primary layout, which silently gave the STANDALONE artifact one
-    // too. That file is opened over file:// by people with no server behind it,
-    // and its own policy is connect-src 'none': every question it was asked
-    // would be refused by the document's own rules, and a text box that
-    // silently swallows every sentence is worse than no text box.
-    //
-    // So the gate is explicit and visible. The transcript still renders -- the
-    // greeting and the first-look widget are computed at generation time and
-    // need no server -- and the page says plainly why it cannot continue.
-    D.live
-      ? h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
-          h("form", {
-            className: "mx-auto max-w-3xl px-4 py-3 flex gap-2",
-            onSubmit: function (e) { e.preventDefault(); ask(); }
-          },
-            h("input", {
-              type: "text",
-              value: text,
-              placeholder: "Ask about this file, or say \\u201ccol_1 is the duration\\u201d",
-              "aria-label": "Ask a question, or correct a column",
-              onChange: function (e) { setText(e.target.value); }
-            }),
-            h("button", { type: "submit", disabled: busy },
-              busy ? "..." : "Ask")
-          )
-        )
-      : h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
-          h("p", { className: "mx-auto max-w-3xl px-4 py-3 text-xs text-slate-500" },
-            "This is a standalone report: it was generated as a file, not served, so it cannot be queried " +
-            "or take corrections. Open it through the agent to ask questions.")
-        )
+__COMPOSER__
   );
 }
 
@@ -1268,7 +1324,54 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
     .split("__DATA_ID__").join(DASHBOARD_DATA_ID)
     .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID)
     .split("__CHAT__").join("null")
-    .replace("function App() {", `${chat}\nfunction App() {`);
+    // THE COMPOSER IS SPLICED OUT, NOT HIDDEN.
+    //
+    // The composer is already gated on D.live at runtime, so an offline artifact
+    // never renders it. But "never rendered" is not "not there": the export
+    // would still carry the markup, the placeholder text and the handler, and a
+    // recipient reading the source would find a chat widget in a document with
+    // no server. An export is a thing you send to somebody, so what it contains
+    // matters as much as what it shows.
+    .split("__COMPOSER__").join(live ? COMPOSER_SOURCE : OFFLINE_SOURCE);
+
+  // THE CHAT IS INJECTED FIRST, AND THAT ORDER IS LOAD-BEARING.
+  //
+  // `refreshFromServer` -- and therefore `__DASH_URL__` -- lives in CHAT_SOURCE,
+  // not in APP_SOURCE. If the endpoint substitutions above run before this
+  // injection, the chat has not been concatenated yet, so the re-read token is
+  // never replaced: the LIVE page ships the literal string
+  //   fetch("__DASH_URL__?path=" + ...)
+  // which the browser resolves relative to the origin, 404s, and lands in the
+  // catch branch. The correction is saved and the panel updates, but the charts
+  // silently keep drawing the pre-correction analysis -- precisely the failure
+  // react-chat-refresh.test.ts exists to prevent, and the reason that test was
+  // left strict rather than relaxed. Every substitution must therefore follow
+  // every injection, so inject, THEN substitute.
+  const withChat = source.replace("function App() {", `${chat}\nfunction App() {`);
+
+  // THE ENDPOINTS ARE SPLICED, NOT HARD-CODED.
+  //
+  // An offline artifact -- and every export is one -- must not contain the
+  // string "/api/feedback" at all. The handler is already unreachable there
+  // (the composer is not rendered, and ask() returns on the live flag), and an
+  // unreachable fetch is still a fetch: it is code that reads as a feature in
+  // a document that has no server, and it is the thing a recipient would try
+  // to use. Resolving the URLs at generation time makes "offline" mean the
+  // network calls are absent from the source, not merely unreachable.
+  const resolved = withChat
+    .split("__FEEDBACK_URL__").join(live ? "/api/feedback" : "about:blank#offline")
+    .split("__CHAT_URL__").join(live ? "/api/chat" : "about:blank#offline")
+    .split("__DASH_URL__").join(live ? "/api/dashboard" : "about:blank#offline");
+
+  // A token surviving into the emitted document is a BUG, not a harmless
+  // artifact: whichever one it is, it means some injection ran after the
+  // substitution that was supposed to resolve it, and the recipient gets a
+  // string nobody meant to write. Fail at generation time, in the build, rather
+  // than in a browser that renders a 404 as a stale chart.
+  const unsubstituted = resolved.match(/__[A-Z_]+__/);
+  if (unsubstituted !== null) {
+    throw new Error(`dashboard generation left the token ${unsubstituted[0]} unresolved`);
+  }
 
   // The policy lives in dashboardCsp() so the meta tag and the HTTP header the
   // server sends cannot drift. See the note on that function.
@@ -1348,7 +1451,7 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
 <script src="${TAILWIND_CDN}"></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
-${source}
+${resolved}
 </script>
 </body>
 </html>

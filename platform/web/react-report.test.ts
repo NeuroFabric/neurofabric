@@ -140,7 +140,22 @@ test("the surface is interactive: the conversation changes what is rendered", ()
   // So the property asserted here is the one underneath both: does user input
   // change state, and does that state reach the render? A control that sets
   // state nothing reads is the exact failure -- it looks like the product works.
-  const src = appSourceOf(toReactDashboard(analysis, {}));
+  // ASSERTED ON THE LIVE PAGE, AND THAT MOVE IS THE POINT OF THIS EDIT.
+  //
+  // This used to assert the submit handler on the OFFLINE artifact. The export
+  // work changed what an offline artifact IS: the composer is now SPLICED OUT
+  // at generation time rather than gated at runtime, so the offline document
+  // contains no composer to assert on. Reading the old assertion as "broken"
+  // would have been wrong -- the control is not merely hidden there, it is
+  // absent from the source, which is a stronger property.
+  //
+  // The property this test actually cares about is untouched by that: does user
+  // input change state, and does that state reach the render? A composer that
+  // sets state nothing reads is the exact failure. That question is only
+  // meaningful where a composer exists, so it is now asked of the live page --
+  // and the offline document's own absence of the control is pinned separately,
+  // in react-chat.test.ts, so nothing is traded away here.
+  const src = appSourceOf(toReactDashboard(analysis, { live: { path: "operations.csv" } }));
   assert.match(src, /useState/, "the app must actually hold state");
   assert.match(src, /messages\.map|thread\.map/, "and the state must reach what is rendered");
   // The send path: user input -> state -> the answer that replaces the transcript.

@@ -219,15 +219,19 @@ test("the standalone dashboard still makes no network call at all", () => {
   // gain a composer that posts nowhere -- that is a control the user can see and
   // press, and it would fail silently in a way that reads as a broken product.
   //
-  // NOTE WHAT IS ASSERTED NOW. It used to assert the STRING "/api/feedback" was
-  // absent, which was true only while the chat lived in a live-only sidebar. The
-  // chat-first pivot moved the composer into the primary layout, so the shared
-  // `ask` function necessarily mentions both endpoints.
+  // NOTE WHAT IS ASSERTED NOW, AND WHY IT CHANGED TWICE. It first asserted the
+  // STRING "/api/feedback" was absent, which was true only while the chat lived
+  // in a live-only sidebar. The chat-first pivot moved the composer into the
+  // primary layout, so the shared `ask` function necessarily mentioned both
+  // endpoints and the test moved to asserting the GUARD.
   //
-  // So the property is asserted as the GUARD rather than the string: the control
-  // is not offered, and the call cannot be made. That is a stronger claim than
-  // the one it replaces, and it is the one that would actually survive a future
-  // edit -- a string check fails the moment somebody reuses the handler.
+  // The export work then made the guard unnecessary by removing the cause: the
+  // endpoints are now resolved at GENERATION time, and the composer is spliced
+  // out. So an offline artifact no longer merely refuses to phone home -- it
+  // contains no endpoint string and no composer at all. Asserting the old
+  // `D.live ?` ternary here would pin an implementation that no longer exists
+  // and would be a weaker claim than the one below, so the assertion follows
+  // the property: the machinery must be ABSENT from the source.
   const html = toReactDashboard(analysis, {});
   const src = appSourceOf(html);
   const csp = /content="([^"]*default-src[^"]*)"/.exec(html);
@@ -235,9 +239,14 @@ test("the standalone dashboard still makes no network call at all", () => {
   assert.match(csp[1]!, /connect-src 'none'/,
     "with no network permitted, so the offline artifact cannot phone home even if asked");
 
-  assert.match(src, /D\.live\s*\?/, "the composer is gated on the page being served, not merely hidden");
-  assert.match(src, /if \(!D\.live\) return;/,
-    "and a runtime guard, so no question can reach the network even if the control is reached");
+  for (const endpoint of ["/api/feedback", "/api/chat", "/api/dashboard"]) {
+    assert.ok(!src.includes(endpoint),
+      `an offline artifact must not contain ${endpoint} at all, reachable or not`);
+  }
+  assert.ok(!/onSubmit: function \(e\)/.test(src) && !src.includes("Ask a question"),
+    "nor the composer that would have used them -- absent, not merely hidden");
+  assert.ok(!src.includes("function refreshFromServer"),
+    "and no chat machinery, so there is no unguarded path to the network");
 });
 
 test("a live dashboard permits exactly one origin for the correction call", () => {

@@ -152,20 +152,20 @@ test("the standalone page is unaffected: no chat, no refresh, no second request"
   const src = appSourceOf(toReactDashboard(analysis, {}));
   assert.ok(!src.includes("/api/dashboard?path="),
     "an offline artifact must not contain a refresh it cannot perform");
-  // The CALL site is still here -- `ask` is shared code and cannot be rewritten
-  // per artifact -- but the DEFINITION is not spliced in, so calling it would
-  // throw. That combination is only safe because of the guard below, which is
-  // why the guard is the assertion rather than the string.
   assert.ok(!src.includes("function refreshFromServer"),
     "the re-read helper itself is not spliced into a standalone artifact");
   assert.ok(!src.includes("/api/dashboard?path="),
     "so there is nothing for a re-read to fetch");
-  // The [version] dependency is shared code, and that is correct: on a standalone
-  // page nothing ever bumps the version, so the effect runs exactly once. What
-  // matters is that the machinery cannot be REACHED, not that the hook differs.
-  assert.match(src, /if \(!D\.live\) return;/,
-    "and a runtime guard, because the endpoint strings live in the shared handler");
-  assert.match(src, /D\.live\s*\?/, "with the control itself not offered");
+  // WHAT CHANGED WITH THE EXPORT WORK, and it is a strengthening. The comment
+  // this replaces described the OLD arrangement: the call site survived in
+  // shared `ask` code, and only the DEFINITION was left out, so the combination
+  // was safe because of a runtime guard. That guard is now unnecessary, because
+  // the endpoints are resolved at generation time and neither the call sites nor
+  // the definition reach a standalone document. So there is no dangling call
+  // left to guard -- which is why the assertion is now ABSENCE, the same claim
+  // expressed without the thing it was compensating for.
+  assert.ok(!/D\.live\s*\?/.test(src) && !/onSubmit: function \(e\)/.test(src),
+    "and the composer control itself is spliced out, not merely gated");
 });
 
 test("THE EMITTED SOURCE CONTAINS NO LITERAL </script>, ever", () => {
