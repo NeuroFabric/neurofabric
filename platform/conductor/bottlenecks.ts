@@ -1,4 +1,11 @@
 import type { CsvReadResult } from "./capabilities.ts";
+import {
+  fencesFromQuartiles,
+  outliersFromSorted,
+  percentileSorted,
+  type FenceSummary,
+  type StreamColumnSnapshot,
+} from "./stream-profile.ts";
 import { profileGenericColumns, type ResolvedSchema } from "./schema-memory.ts";
 import { describePurpose, type Purpose } from "./semantics.ts";
 
@@ -520,12 +527,23 @@ export interface NumericColumnStat {
   readonly spread: number | null;
   /** Measured values beyond the Tukey fences. Zero when none, NOT null. */
   readonly outliers: number;
-  /** The most extreme value beyond a fence, so the flag carries its magnitude. */
-  readonly outlierMax: number | null;
   /** The most extreme value beyond a fence on the low side. */
   readonly outlierMin: number | null;
+  /** The most extreme value beyond a fence, so the flag carries its magnitude. */
+  readonly outlierMax: number | null;
   /** Values beyond the OUTER (3x) fence: the actionable ones. */
   readonly extremeOutliers: number;
+  /**
+   * TRUE when the QUARTILES behind these fences came from a sample of the column
+   * rather than from the column.
+   *
+   * It is absent for every column small enough to be held whole, which is every
+   * column a person is likely to open, and it is stated rather than smoothed over
+   * because a fence position estimated from 4096 of 500,000 values is a
+   * good estimate and NOT a measurement. The outlier COUNT beside it is exact
+   * either way: the reader verifies it against every row in a second pass.
+   */
+  readonly quantilesSampled?: boolean;
   /** The outer fence, so an extreme claim is as checkable as a marginal one. */
   readonly fenceExtremeLower: number | null;
   readonly fenceExtremeUpper: number | null;
@@ -714,12 +732,10 @@ const EXTREME_IQR_FACTOR = 3;
  * the same fence rather than a near miss and a suspicion that we invented one.
  */
 function percentile(sorted: readonly number[], p: number): number {
-  if (sorted.length === 0) return Number.NaN;
-  if (sorted.length === 1) return sorted[0];
-  const rank = (p / 100) * (sorted.length - 1);
-  const lo = Math.floor(rank);
-  const hi = Math.ceil(rank);
-  return sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+  // The arithmetic now lives with the streaming profile, and this is a delegate
+  // rather than a copy. A fence computed two ways is a fence a reader cannot
+  // check, and this one is quoted against pandas in the report.
+  return percentileSorted(sorted, p);
 }
 
 /**
@@ -760,25 +776,10 @@ const NO_OUTLIERS: OutlierResult = { outliers: 0, low: null, high: null, lower: 
  * than needing a branch.
  */
 function detectOutliers(values: readonly number[]): OutlierResult {
-  if (values.length < MIN_OUTLIER_SAMPLES) return NO_OUTLIERS;
-  const sorted = [...values].sort((a, b) => a - b);
-  const q1 = percentile(sorted, 25);
-  const q3 = percentile(sorted, 75);
-  const iqr = q3 - q1;
-  const lower = q1 - OUTLIER_IQR_FACTOR * iqr;
-  const upper = q3 + OUTLIER_IQR_FACTOR * iqr;
-  const extremeLower = q1 - EXTREME_IQR_FACTOR * iqr;
-  const extremeUpper = q3 + EXTREME_IQR_FACTOR * iqr;
-  let count = 0;
-  let extreme = 0;
-  let low: number | null = null;
-  let high: number | null = null;
-  for (const v of sorted) {
-    if (v < lower) { count += 1; low = v; }
-    else if (v > upper) { count += 1; high = v; }
-    if (v < extremeLower || v > extremeUpper) extreme += 1;
-  }
-  return { outliers: count, low, high, lower, upper, extreme, extremeLower, extremeUpper };
+  // ONE IMPLEMENTATION. The streamed path calls the same function over a
+  // reservoir, so a fence computed from the whole column and a fence computed
+  // from a sample of it cannot drift into two different definitions of "IQR".
+  return outliersFromSorted([...values].sort((a, b) => a - b));
 }
 
 /**
@@ -802,6 +803,13 @@ function detectOutliers(values: readonly number[]): OutlierResult {
 function numericalProfile(csv: CsvReadResult): { numerical: NumericalProfile; health: DataHealth } {
   const numericColumns = profileGenericColumns(csv.headers, csv.rows).filter((c) => c.kind === "numeric");
   const stats = numericColumns.map((c): NumericColumnStat => {
+    // THE STREAMED PATH, when the reader streamed. Classification still comes
+    // from the 200-row profile sample -- deciding whether a column is numeric
+    // does not need every row -- but the arithmetic below it is computed over the
+    // WHOLE FILE rather than over the retained window, which is the difference
+    // between a mean of 500,000 rows and a mean of the first 10,000.
+    const shot = csv.profile?.columns[c.column];
+    if (shot !== undefined) return streamedNumericStat(c.column, shot, csv.profile?.outliers?.[c.column]);
     let measured = 0;
     let empty = 0;
     let dirty = 0;
@@ -855,11 +863,62 @@ function numericalProfile(csv: CsvReadResult): { numerical: NumericalProfile; he
       columns: ordered.slice(0, MAX_NUMERIC_COLUMNS),
       numericColumns: stats.length,
       truncated: stats.length > MAX_NUMERIC_COLUMNS,
-      rows: csv.rows.length,
+      rows: csv.profile?.rowCount ?? csv.rows.length,
     },
     // Health is built from the FULL list, before the display cap. See DataHealth.
     health: dataHealth(ordered),
   };
+}
+
+/**
+ * A COLUMN DESCRIBED BY THE STREAM, rather than by an array of its values.
+ *
+ * This is the whole point of the streaming rewrite: on a file larger than the
+ * retention window, min, max, mean, the empty/dirty split and the fences are
+ * computed over EVERY row instead of over the ten thousand rows the analyser
+ * happened to keep. The arithmetic is the analyser's own, called on the
+ * reservoir -- `outliersFromSorted` is the same function the in-memory path uses,
+ * so a streamed fence and a computed fence cannot mean two different things.
+ *
+ * The cells are unchanged in KIND: a blank is still counted as empty before it is
+ * ever offered to `Number()` (because `Number("")` is 0, and a blank would become
+ * a measurement of unmeasured work), and an unparseable cell is still DIRTY rather
+ * than dropped. Only the extent of the arithmetic changed.
+ */
+function streamedNumericStat(
+  column: string,
+  shot: StreamColumnSnapshot,
+  fences: FenceSummary | undefined,
+): NumericColumnStat {
+  const f = fences ?? fencesFromQuartiles(shot.q1, shot.q3);
+  const shape = {
+    column,
+    measured: shot.measured,
+    missing: shot.empty + shot.dirty,
+    empty: shot.empty,
+    dirty: shot.dirty,
+    dirtyExamples: [...shot.dirtyExamples],
+    outliers: f.outliers,
+    outlierMin: f.low,
+    outlierMax: f.high,
+    fenceLower: f.lower,
+    fenceUpper: f.upper,
+    extremeOutliers: f.extreme,
+    fenceExtremeLower: f.extremeLower,
+    fenceExtremeUpper: f.extremeUpper,
+    method: (f.lower === null ? null : "IQR") as "IQR" | null,
+    // STATED, NOT SMOOTHED OVER. Absent whenever the reservoir held the column
+    // whole, which is every column under 4096 values.
+    ...(shot.exact ? {} : { quantilesSampled: true }),
+  };
+  if (shot.measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null, histogram: [] };
+  const min = shot.min ?? 0;
+  const max = shot.max ?? 0;
+  // The buckets come from the reservoir while the RANGE comes from the whole
+  // column, so a chart spanning the real min and max is drawn from a sample of
+  // the values inside it. `query.ts` refuses to present a bucket as a point
+  // value, so the honesty requirement is already carried downstream.
+  return { ...shape, min, max, mean: shot.mean ?? 0, spread: max - min, histogram: bucketOf(shot.sample, min, max) };
 }
 
 /**

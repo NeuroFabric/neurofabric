@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDescriptor } from "../core/types.ts";
+import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords } from "./stream-profile.ts";
 
 /**
  * The Stage 1 capability set: exactly two, because the acceptance scenario needs
@@ -37,10 +38,130 @@ export interface CsvReadResult {
    * difference between a good error message and a mystery.
    */
   problems: string[];
+  /**
+   * THE WHOLE-FILE PROFILE, or absent when the caller did not stream.
+   *
+   * Optional because the type is also built by hand in tests and by the web
+   * layer, and an absent profile must mean "fall back to the rows you have"
+   * rather than an exception at an analysis that was already going to work.
+   */
+  profile?: import("./stream-profile.ts").StreamProfile;
 }
 
 const MAX_ROWS_SCANNED = 10_000;
 const SAMPLE_ROWS = 50;
+
+/**
+ * THE RETAINED WINDOW, and the honest name for it.
+ *
+ * Every stage of the old reader scaled with the FILE: the whole text, then an
+ * array of cells per row, then an object per row. This is the one bounded piece
+ * of row retention left, and it is what keeps the row-wise work -- cross-column
+ * checks, the renderer's sample, the profile of a 200-row sample -- behaving
+ * exactly as before.
+ *
+ * It is a CAP, not a sample: the first N rows, in order. Which is why the profile
+ * beside it matters. The statistics now cover every row in the file while this
+ * window keeps only what genuinely needs records.
+ */
+const RETAINED_ROWS = MAX_ROWS_SCANNED;
+
+/**
+ * READ A CSV AS A STREAM.
+ *
+ * The replacement for `readFile(path, "utf8")`, and the change is not stylistic:
+ * the old call put the entire export in memory as one string before a single row
+ * was parsed, so a 60 MB file was a 60 MB string -- twice, once for the text and
+ * once for the cells parsed out of it. Nothing downstream could undo that,
+ * because by the time the parse finished the file was already resident.
+ *
+ * WHAT IS PRESERVED, because a reader is a PARSER first and a memory strategy
+ * second: quoted fields, escaped quotes, a mid-field quote, CRLF, blank lines
+ * that are not records, a final record without a terminator, a file that ends
+ * inside a quoted field, empty and duplicated headers, ragged rows, and the
+ * exact wording of every one of those problems. `reader-shape.test.ts` asserts
+ * that wording against a real export, and a streaming reader that quietly changed
+ * what counts as a record would trade a crash for a wrong number.
+ *
+ * WHAT CHANGED, and it is a fix rather than a loss: `rowCount` is now the number
+ * of rows in the FILE rather than the number that survived the 10,000-row parse
+ * cap. The old value made a 500,000-row export report "10,001 rows read", with
+ * nothing on the page to say the other 489,999 were never looked at.
+ */
+async function streamCsvRead(target: string): Promise<CsvReadResult> {
+  const problems: string[] = [];
+  const note = (message: string): void => {
+    if (problems.length < MAX_PROBLEMS) problems.push(message);
+  };
+
+  const profile = new FileProfile(target, { retain: RETAINED_ROWS });
+  let headers: string[] = [];
+  let sawHeader = false;
+  let rowCount = 0;
+
+  await streamCsvRecords(target, (record) => {
+    if (!sawHeader) {
+      sawHeader = true;
+      headers = record.cells.map((cell) => cell.trim());
+      profile.setHeaders(record.cells);
+      headers.forEach((header, index) => {
+        if (header.length === 0) note(`column ${index + 1} has no header name`);
+      });
+      const duplicate = headers.find((header, index) => header.length > 0 && headers.indexOf(header) !== index);
+      if (duplicate !== undefined) note(`the header "${duplicate}" appears more than once`);
+      return;
+    }
+    rowCount += 1;
+    // Raggedness is a property of the FILE, so it is checked over all of it. The
+    // old parser stopped looking at row 10,001 and reported a tidy file for
+    // everything past it. The message count is capped, because a file ragged on
+    // every row must not produce half a million strings.
+    if (record.cells.length !== headers.length) {
+      note(`row ${record.line} has ${record.cells.length} value(s) but the header declares ${headers.length}`);
+    }
+    profile.push(record.cells);
+  }, { problems });
+
+  if (!sawHeader) {
+    return { path: target, headers: [], rowCount: 0, columns: [], sample: [], rows: [], problems: [...problems, "the file has no rows"] };
+  }
+
+  const rows = profile.rows();
+  const snapshot = profile.snapshot();
+  // THE FENCES, resolved over the WHOLE file rather than the retained window.
+  //
+  // This is the one place the reader spends a second pass, and it is what makes
+  // the per-column statistics mean something on an export larger than the
+  // retention cap: the quartiles come from the reservoir, and the COUNTS are then
+  // verified against every row so a figure the user reads as "how many bad cells
+  // do I have" is a measurement of the file rather than of 4096 of its rows.
+  snapshot.outliers = await resolveOutliers(target, snapshot);
+  const columns = headers.map((name) => {
+    const shot = snapshot.columns[name];
+    // The same rule as the in-memory reader: numeric only when EVERY value
+    // present in the column parses as a number. One "N/A" makes it a text column,
+    // because that is a fact about the producer rather than a value to drop.
+    const present = (shot?.seen ?? 0) - (shot?.empty ?? 0);
+    if (present === 0) return { name, kind: "empty" as const };
+    if ((shot?.measured ?? 0) !== present) return { name, kind: "text" as const };
+    return {
+      name, kind: "number" as const,
+      min: shot?.min ?? undefined, max: shot?.max ?? undefined, sum: shot?.sum ?? undefined,
+    };
+  });
+
+  return {
+    path: target,
+    headers,
+    // THE TRUTH, not the size of the window this reader kept.
+    rowCount,
+    columns,
+    sample: rows.slice(0, SAMPLE_ROWS),
+    rows,
+    problems,
+    profile: snapshot,
+  };
+}
 
 /**
  * A deliberately small CSV reader: quoted fields, escaped quotes, CRLF.
@@ -111,12 +232,17 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][]; p
   return { headers, rows: body, problems };
 }
 
-function columnKind(values: string[]): "number" | "text" | "empty" {
-  const present = values.filter((v) => v.trim().length > 0);
-  if (present.length === 0) return "empty";
-  const numeric = present.filter((v) => Number.isFinite(Number(v)));
-  return numeric.length === present.length ? "number" : "text";
-}
+/**
+ * A deliberately small CSV reader, over a STRING.
+ *
+ * It stays, and it is now the SECOND reader rather than the only one, because
+ * two callers genuinely cannot stream: the browser upload path hands over text
+ * it has already read, and the tests exercise the parser's rules directly. What
+ * is important is that there is only ONE set of rules -- `streamCsvRecords`
+ * implements these same rules byte for byte -- rather than one parser for files
+ * and a different one for uploads, which is how a parser ends up with two
+ * answers about the same file.
+ */
 
 export async function csvRead(input: { path: string }, boundary?: { boundary?: { check(p: string): { allowed: boolean } } }): Promise<CsvReadResult> {
   const target = String(input.path ?? "");
@@ -124,24 +250,7 @@ export async function csvRead(input: { path: string }, boundary?: { boundary?: {
     const verdict = boundary.boundary.check(target);
     if (!verdict.allowed) throw new Error(`csv_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
   }
-  const text = await readFile(target, "utf8");
-  const { headers, rows, problems } = parseCsv(text);
-  const allRows = rows.map((cells) =>
-    Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""])),
-  );
-  const sample = allRows.slice(0, SAMPLE_ROWS);
-  const columns = headers.map((name, index) => {
-    const values = rows.map((cells) => cells[index] ?? "");
-    const kind = columnKind(values);
-    if (kind !== "number") return { name, kind };
-    const numbers = values.map(Number).filter(Number.isFinite);
-    return {
-      name, kind,
-      min: Math.min(...numbers), max: Math.max(...numbers),
-      sum: numbers.reduce((a, b) => a + b, 0),
-    };
-  });
-  return { path: target, headers, rowCount: rows.length, columns, sample, rows: allRows, problems };
+  return streamCsvRead(target);
 }
 
 /**
