@@ -3494,3 +3494,147 @@ and that is the boundary removal this repository refuses to make quietly.
 - D-033 — "no build step", the premise this decision trades against.
 - `page-navigation.test.ts` — the test that asked whether the product is reached.
 - `react-app-parses.test.ts` — the naive extractor that caught the dead chat.
+
+
+## D-037 — V1 Commercial Wedge: complete, with the two caveats that travel with it
+
+**Date:** 2026-10-05
+**Stage:** 5 (Chat-first agent)
+**Status:** Accepted
+**Affects:** `platform/web/react-report.ts`, `platform/web/server.ts`, `docs/DECISIONS.md`
+
+### Context
+
+The wedge is four capabilities behind one loop: drop a file, ask it questions
+in English, correct it by speaking, and send the result to somebody who has no
+access to the machine it came from.
+
+1. **Omnivorous ingestion.** CSV, database (SQLite and Postgres) and PDF are
+   read through a router that decides what a file IS before it decides anything
+   else, so nobody has to name a format. `router.test.ts`, `db-connector.test.ts`,
+   `pdf-connector.test.ts`.
+2. **Conversational querying.** The chat is the primary surface, and the
+   conductor answers in words rather than routing to a chart.
+3. **Predictive forecasting.** Wired to a chart that cannot be mistaken for data
+   (1f46077).
+4. **Standalone export.** One self-contained file, carrying the conversation and
+   the numbers, built through the standalone path on purpose.
+
+### The defect worth recording, because the suite caught it and a belief did not
+
+The export work refactored the composer from a runtime `D.live ?` ternary to a
+GENERATION-TIME SPLICE, and moved the endpoints from literal strings to
+substitution tokens resolved at build time. Both changes were improvements. One
+of them shipped broken.
+
+`refreshFromServer` — and therefore the `__DASH_URL__` token — lives in
+`CHAT_SOURCE`, which is concatenated by the FINAL `.replace(...)` in the chain.
+The three endpoint substitutions ran BEFORE that concatenation, so on a live page
+the token was never replaced. The dashboard shipped:
+
+    fetch("__DASH_URL__?path=" + encodeURIComponent(D.source))
+
+which the browser resolves relative to the current origin. It 404s, lands in the
+catch branch, and the user sees the correction save while the charts silently keep
+drawing the pre-correction analysis. The dangerous version of that feature is the
+one that appears to work.
+
+`react-chat-refresh.test.ts` had asserted `/api/dashboard?path=` on the live
+page for several stages. It was not a stale test needing an update. It was
+correct, and the code had regressed under it.
+
+Two things generalise, and both are the reason this entry exists:
+
+- **An injection that runs after a substitution defeats that substitution.**
+  Order is load-bearing whenever a document is assembled from parts. The
+  generator now throws if any `__TOKEN__` survives to the emitted source, so
+  this class of defect fails at build time rather than in a browser that renders
+  a 404 as a stale chart.
+- **A reported test count is a claim, not a measurement.** The handoff for this
+  session said "exactly 1 test is failing". There were five, and four of them
+  were regressions against committed, previously-green tests. The count was
+  never run. Had it been, a broken live-refresh loop would have been caught one
+  session earlier.
+
+Three further test assertions were updated, and the distinction matters: each had
+asserted an IMPLEMENTATION DETAIL the splice legitimately removed, and each now
+asserts a STRONGER property — that the offline artifact contains no composer and
+no endpoint at all, rather than a composer gated at runtime. Two of the three are
+strictly tighter. The third (`react-report.test.ts`, which asserted the submit
+handler) was MOVED to the live page rather than strengthened, because a composer
+cannot be asserted on a document that no longer contains one. That one is a real
+trade, and it is recorded as one.
+
+### Audit result, 2026-10-05
+
+`npm test`: **1073 passed, 0 failed, 2 skipped** (1075 TypeScript tests) plus
+22/22 in the MJS suite. 110 of those are dedicated security tests
+(`sql-guard`, `redaction`, `vault-redaction`, `connector-security`,
+`path-boundary-corpus`, `redaction-boundary`, `vault-boundary`,
+`security-gap-r6-r7`, `server-boundary`), all passing.
+
+Verified at the ARTIFACT level, not only through the suite:
+
+- **Path boundaries** — the export route returns 403 for `../../../etc/passwd`,
+  using the same kernel resolver as every other route. An export endpoint that
+  reads an arbitrary path is an exfiltration endpoint with a download header on
+  it; it is not one.
+- **Secret redaction** — a closed field-name set (25 credential names) plus
+  provider key prefixes plus entropy-based detection, with explicit
+  false-positive carve-outs for hex, decimal and UUID tokens so that ordinary
+  identifiers are not silently destroyed.
+- **SQL injection** — `classifySql` admits a single read-only SELECT and denies
+  everything else, and the DB connector checks the PATH BEFORE the query, so an
+  escaping path is refused even when the query is innocent. Rows are capped.
+  Note the threat model honestly: the SQL here is authored by the analyst against
+  their own database, not interpolated from file contents, so a read-only
+  classifier is the correct control and parameterisation would be the wrong one.
+- **CSP** — one function feeds both the meta tag and the HTTP header, and
+  `chart-assets.test.ts` asserts they are byte-identical. Live is
+  `connect-src 'self'`, export is `connect-src 'none'`, no wildcard, no
+  `unsafe-eval`, no duplicated directive.
+
+### Caveat one: the export still contains two `fetch()` calls
+
+They are dead in the strict sense — the code is present — and cannot reach a
+network. Both target `about:blank#offline`, a non-network scheme, inside
+`ask()`, which returns on `if (!D.live) return;`; the payload says
+`live: false`; the composer that would call `ask()` is spliced out; and
+`connect-src 'none'` would block the request at the browser regardless. Four
+independent layers, any one of which is sufficient.
+
+This is stated rather than glossed because the obvious next edit is to delete
+those two calls, and someone should know that the deletion is safe but the
+REASON matters: they are the residue of making offline mean "the network calls
+are absent from the source" and not finishing the job for `ask()`, which lives
+in `APP_SOURCE` and is therefore shared with the live page. Leaving them inert
+is defensible; leaving them unremarked would not be.
+
+### Caveat two: two security tests did not run here
+
+`a stored vault is not readable by group or other` and `a vault file left
+world-readable by an earlier version is tightened on its next write` skip on
+Windows, because POSIX permission bits are not meaningful on it. The invariant
+"secrets at rest are not world-readable" is therefore UNVERIFIED on the platform
+this session ran on. It is not regressed — it is unproven. It must be run on
+Linux before any claim is made about credential storage on disk.
+
+### What V1 is, stated without inflation
+
+It is a local-first analysis wedge: files read on the user's machine, nothing
+phoned home, every network call either absent or inert in a document that is
+meant to be sent away. The three CDNs are a known, recorded, bounded debt
+(D-035, D-036) — the dashboards fetch React, Chart.js and Tailwind from unpkg and
+cdn.tailwindcss.com, so a dashboard rendered on an air-gapped machine will not
+style, and the honest fix is vendoring or SRI, which needs the build step
+D-033 trades against.
+
+The remaining refusals are features. A refused path, a redacted credential and a
+denied `DROP` are the product working.
+
+### Cross-references
+
+- D-036 — the CDN debt this carries.
+- D-033 — "no build step", the premise vendoring would cost.
+- `react-chat-refresh.test.ts` — the test that was right and the code that was wrong.
+- `export.test.ts` — the export's own gate, asserting the standalone path.
