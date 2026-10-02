@@ -22,7 +22,7 @@ export const PAGE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bottleneck report</title>
+<title>Data agent</title>
 <style>
   :root { color-scheme: light dark; }
   body { font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #16181d; }
@@ -50,7 +50,7 @@ export const PAGE_HTML = `<!doctype html>
 </head>
 <body>
 <main>
-  <h1>Bottleneck report</h1>
+  <h1>Data agent</h1>
   <p class="sub">Drop a CSV export. It is read through the governed kernel pipeline, and every refusal you see below is the kernel&rsquo;s own.</p>
 
   <div id="drop" tabindex="0" role="button" aria-label="Drop a CSV file or press Enter to choose one">

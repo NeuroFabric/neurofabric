@@ -1,5 +1,6 @@
 import type { CsvReadResult } from "./capabilities.ts";
 import { profileGenericColumns, type ResolvedSchema } from "./schema-memory.ts";
+import { describePurpose, type Purpose } from "./semantics.ts";
 
 /**
  * BOTTLENECK ANALYSIS for Stage 2.
@@ -173,6 +174,8 @@ export interface HourlyProfile {
 }
 
 export interface BottleneckAnalysis {
+  /** What the engine believes this file IS. See semantics.ts. */
+  readonly purpose: Purpose;
   readonly totalRows: number;
   readonly errorRows: number;
   readonly errorRate: number;
@@ -1107,6 +1110,16 @@ export function analyseBottlenecks(
     : { unit: "record", unitPlural: "record(s)", headingUnit: "Record", thresholdLabel: statesThreshold ? "over limit" : null };
   return {
     totalRows: total,
+    /**
+     * WHAT THIS FILE IS, before any statistic about it.
+     *
+     * Computed from the headers and a bounded sample, so it costs the same on a
+     * million rows as on three, and it is available to everything downstream
+     * that has to SAY SOMETHING about the file -- the greeting, the report
+     * title, the headings. See semantics.ts for why it is a hypothesis with
+     * evidence attached rather than a bare label.
+     */
+    purpose: describePurpose({ headers: csv.headers, rows: csv.rows }),
     errorRows,
     errorRate: total === 0 ? 0 : errorRows / total,
     bySource: rank(sources),

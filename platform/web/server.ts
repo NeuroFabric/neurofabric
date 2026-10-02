@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
+import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { parseCsv, csvRead } from "../conductor/capabilities.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
@@ -47,6 +48,23 @@ import type { CsvReadResult } from "../conductor/capabilities.ts";
  *   - escapes nothing itself: the report is returned as data, and the page
  *     escapes before it renders (see `page.ts`).
  */
+
+/**
+ * What the title helper falls back to before an analysis exists.
+ *
+ * A `Purpose` of "unknown" is the honest default, and it is used because
+ * some call sites need a title BEFORE the kernel has run: the file name is
+ * known and nothing else is. Building a Purpose-shaped value rather than
+ * passing undefined keeps `titleFor` total, because a helper that can be
+ * called in the wrong order is a helper that eventually will be.
+ */
+const UNKNOWN_PURPOSE: Purpose = {
+  kind: "unknown",
+  statement: "This file has not been read yet.",
+  confidence: "none",
+  evidence: [],
+  columns: [],
+};
 
 export interface WedgeOptions {
   /** The data workspace. This is the ONLY place a file may be read from. */
@@ -161,6 +179,15 @@ function toResponse(result: ConductorResult): Record<string, unknown> {
       source: result.report.schema.source,
       learnedRoles: result.report.schema.learnedRoles,
     },
+    /**
+     * WHAT THE FILE IS, and how sure the engine is.
+     *
+     * Carried in the response rather than left inside the analysis because it is
+     * the first thing the interface has to say. It travels with its `evidence`
+     * and its `confidence` so a client that renders it is showing the engine's
+     * reasoning and its uncertainty, not a bare label it can present as fact.
+     */
+    purpose: result.report?.analysis.purpose,
     kernelEvents: result.kernelEvents,
     progress: result.progress,
   };
@@ -247,7 +274,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           if (result.status !== "DELIVERED" || result.report === undefined) {
             sendJson(response, statusFor(result), toResponse(result));
@@ -259,7 +289,13 @@ export function createWedgeServer(options: WedgeOptions): Server {
           // header and the meta tag cannot disagree. See dashboardCsp().
           const DASHBOARD_CSP = dashboardCsp(true);
           const html = toReactDashboard(result.report.analysis, {
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // The analysis EXISTS here, unlike at the `conductor.run` call above,
+            // so this is the one site where the title can carry the file's actual
+            // purpose rather than just its name.
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: result.report.analysis.purpose }),
             // The one opt-in that widens the page. It is what lets the chat
             // reach /api/feedback, and it is scoped to this route alone.
             live: { path: target },
@@ -337,7 +373,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           sendJson(response, statusFor(result), toResponse(result));
           return;
@@ -436,7 +475,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           sendJson(response, statusFor(result), { ...toResponse(result), feedback: { reason: applied.reason, roles: applied.roles ?? {} } });
           return;
