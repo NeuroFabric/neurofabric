@@ -64,6 +64,42 @@ const REACT_VERSION = "18.3.1";
 const REACT_CDN = `https://unpkg.com/react@${REACT_VERSION}/umd`;
 const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
 
+/**
+ * Chart.js, pinned, and the one dependency the artifact loads besides React.
+ *
+ * === WHY A CHART LIBRARY AT ALL, GIVEN "NO BUILD STEP" IS THE PREMISE ===
+ *
+ * The Phase 3 SVG charts were static: an image of the answer. They were the
+ * right call then and they are still what the tables underneath these charts
+ * are -- the data is always readable as text, so the library is an enhancement
+ * and never the only way to see a number.
+ *
+ * Chart.js is UMD with an imperative entry point and needs no compilation, which
+ * is the only reason it is usable here at all. Recharts, the more natural React
+ * choice, is a component library that must be BUILT against React; adopting it
+ * would mean shipping Babel output or hand-rolling a component tree around
+ * something that is already imperative, and the whole premise of this artifact
+ * is that there is no toolchain.
+ *
+ * === THE STANDING EXCEPTION, STATED RATHER THAN GLOSSED ===
+ *
+ * This widens the page's script sources to a third party on a machine that has
+ * just been trusted to read the user's files. Pinning the version stops silent
+ * drift; it does not stop a compromised publisher. The mitigation is the same
+ * isolation argument as React's: this artifact is generated separately, reads
+ * only the JSON block beside it, and its only outbound call is the correction
+ * the user typed. Vendoring or subresource-integrity pinning would close the
+ * gap properly and both need the build this repository does not have -- so this
+ * is recorded as accepted debt with a named trigger to revisit it, not described
+ * as solved.
+ *
+ * 4.4.1 is the last 4.x line before the 4.5 rebuilds; pinned as a major-plus-
+ * patch, for the same reason React is: a report about a production incident
+ * must not change because somebody else published a package.
+ */
+const CHART_VERSION = "4.4.1";
+const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.min.js`;
+
 /** How many anomalies the dashboard shows before the depth toggle is needed. */
 const DEFAULT_DEPTH = 5;
 const MAX_DEPTH = 10;
@@ -85,6 +121,21 @@ export interface Anomaly {
    * rather than "one".
    */
   readonly factor: number | null;
+}
+
+/** One hour of the day, as the engine measured it. */
+export interface TimelinePoint {
+  /** ISO hour key, "2026-09-30T13". Sorts chronologically as a string. */
+  readonly hour: string;
+  readonly count: number;
+  /** Fraction of all readable rows, so a quiet hour is not shown as a crisis. */
+  readonly share: number;
+  /** count / meanPerHour, or null when there is no mean to divide by. */
+  readonly multiple: number | null;
+  /** The engine's own verdict against its own mean. */
+  readonly spike: boolean;
+  /** Why it was flagged, in a phrase. Null when it was not. */
+  readonly rule: string | null;
 }
 
 export interface DashboardData {
@@ -115,6 +166,17 @@ export interface DashboardData {
    * a no-op -- it is a confidently wrong report.
    */
   readonly source: string | null;
+  /**
+   * The shape of the day: one point per hour the engine measured.
+   *
+   * Taken verbatim from `analysis.hourly` rather than recomputed here. A chart
+   * that bucketed hours its own way would disagree with the report printed
+   * beside it, and a reader comparing the two would be right to wonder which
+   * one the tool believes. It is also the difference between a spike and an
+   * impression: `spike` is the ENGINE'S verdict, against its own mean, not a
+   * peak this file noticed by looking for one.
+   */
+  readonly timeline: readonly TimelinePoint[];
   /**
    * Mappings this checkout has LEARNED, as role -> column.
    *
@@ -273,6 +335,14 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     maxDepth: MAX_DEPTH,
     defaultDepth: DEFAULT_DEPTH,
     source: options.live?.path ?? null,
+    timeline: analysis.hourly.hours.map((h) => ({
+      hour: h.key,
+      count: h.count,
+      share: h.share,
+      multiple: h.multiple,
+      spike: h.isSpike,
+      rule: h.rule,
+    })),
     // Seeded from the analysis itself. A role the engine filled while profiling
     // IS a mapping it holds, whether or not a person confirmed it, and the chat
     // has to start from what the engine believes or the first correction looks
@@ -452,6 +522,189 @@ function num(v) {
   return String(Math.round(v * 1000) / 1000);
 }
 
+
+/**
+ * THE CHARTS. Two marks for two different questions.
+ *
+ * A bar for "which category costs the most" -- a comparison of independent
+ * things, where the LENGTH is the value and the order is the answer.
+ *
+ * A line for "when did this go wrong" -- a series over time, where the SHAPE is
+ * the answer and any single point is nearly meaningless on its own. Rendering
+ * hours as bars would invite the reader to compare two hours, which is the one
+ * comparison this data cannot support: an hour with 40 rows and an hour with 3
+ * rows are not 13x worse, they are 40 rows and 3 rows.
+ *
+ * === WHY THE LIBRARY IS FEATURE-DETECTED, EVERY TIME ===
+ *
+ * Chart.js arrives from a CDN, on a machine that may be offline, behind a proxy
+ * that blocks unpkg, or on a network where the request simply failed. The
+ * tables and the chat are the product; the charts are the garnish. So every use
+ * is guarded, and a missing library costs two pictures rather than the report.
+ *
+ * === WHY THE CHART IS CREATED IN AN EFFECT AND DESTROYED ON CLEANUP ===
+ *
+ * Chart.js draws into a <canvas>, and React does not know what is inside one.
+ * Creating the chart during render -- which is the obvious way to write it --
+ * means every re-render (a severity filter, a depth toggle, a learned mapping)
+ * builds ANOTHER chart on the same canvas. They stack: bars double, then
+ * triple, and the only symptom is a chart that quietly gets fatter and darker
+ * the more you use the page. The teardown is the whole fix.
+ */
+function useChart(draw) {
+  var ref = React.useRef(null);
+  React.useEffect(function () {
+    // Feature-detect, do not assume. See the note above.
+    if (typeof Chart === "undefined" || ref.current === null) return;
+    var chart = new Chart(ref.current.getContext("2d"), draw());
+    return function () { chart.destroy(); };
+    // Deliberately empty: the chart depends on the DATA, not on the render
+    // count. Re-running this on every render is exactly the stacking bug.
+  }, []);
+  return ref;
+}
+
+function ChartNote(props) {
+  if (typeof Chart !== "undefined") return null;
+  return React.createElement("p", { className: "empty chartoff" },
+    props.children || "The charting library could not be loaded, so these are shown as tables below. Everything else on this page works.");
+}
+
+function BarChart() {
+  var points = D.ranking.slice(0, D.maxDepth);
+  var ref = useChart(function () {
+    return {
+      type: "bar",
+      data: {
+        labels: points.map(function (r) { return r.key; }),
+        datasets: [{
+          label: "Rows",
+          data: points.map(function (r) { return r.count; }),
+          backgroundColor: "#3b5bdb",
+          borderRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              // The category AND the count. A bar chart whose tooltip says only
+              // "40" has told the reader nothing they could not see.
+              label: function (ctx) {
+                var p = points[ctx.dataIndex];
+                return p.count.toLocaleString("en-US") + " rows, " +
+                  Math.round((p.count / Math.max(1, D.totalRows)) * 100) + "% of the file";
+              }
+            }
+          }
+        },
+        scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    };
+  });
+  return React.createElement("div", { className: "canvasbox" },
+    React.createElement("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
+}
+
+function LineChart() {
+  var hours = D.timeline;
+  var ref = useChart(function () {
+    return {
+      type: "line",
+      data: {
+        labels: hours.map(function (h) { return h.hour; }),
+        datasets: [{
+          label: "Rows in the hour",
+          data: hours.map(function (h) { return h.count; }),
+          borderColor: "#3b5bdb",
+          backgroundColor: "rgba(59,91,219,0.12)",
+          fill: true,
+          tension: 0.25,
+          // Point colour carries the ENGINE'S verdict, not a visual guess. A
+          // reader can see at a glance which peaks the engine called abnormal,
+          // and hovering says why.
+          pointRadius: hours.map(function (h) { return h.spike ? 6 : 3; }),
+          pointBackgroundColor: hours.map(function (h) { return h.spike ? "#d9480f" : "#3b5bdb"; })
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          tooltip: {
+            callbacks: {
+              // THE POINT OF THE WHOLE EXERCISE: the exact count, the hour it
+              // belongs to, and whether the engine considered it abnormal.
+              // A spike you cannot interrogate is just a bump.
+              label: function (ctx) {
+                var h = hours[ctx.dataIndex];
+                if (!h) return "";
+                var lines = [h.count.toLocaleString("en-US") + " rows in this hour"];
+                if (h.multiple !== null && h.multiple !== undefined) {
+                  lines.push(h.multiple.toFixed(1) + "x the mean hour");
+                }
+                lines.push(h.spike ? ("Flagged as a spike. " + (h.rule || "")) : "Within the usual range");
+                return lines;
+              },
+              title: function (items) {
+                var h = hours[items[0].dataIndex];
+                return h ? h.hour.replace("T", " ") + ":00" : "";
+              }
+            }
+          }
+        },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    };
+  });
+  return React.createElement("div", { className: "canvasbox" },
+    React.createElement("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
+}
+
+
+/** The ranking as a table. The chart is an enhancement; this is the fact. */
+function renderRankingTable(rank) {
+  return React.createElement("table", { className: "fallback" },
+    React.createElement("thead", null, React.createElement("tr", null,
+      React.createElement("th", null, "Category"),
+      React.createElement("th", null, "Rows"),
+      React.createElement("th", null, "Share")
+    )),
+    React.createElement("tbody", null, rank.map(function (r) {
+      return React.createElement("tr", { key: r.key },
+        React.createElement("td", null, esc(r.key)),
+        React.createElement("td", null, r.count.toLocaleString("en-US")),
+        React.createElement("td", null, Math.round((r.count / Math.max(1, D.totalRows)) * 100) + "%")
+      );
+    }))
+  );
+}
+
+/** The hours as a table, spikes marked. Never chart-only data. */
+function renderTimelineTable() {
+  return React.createElement("table", { className: "fallback" },
+    React.createElement("thead", null, React.createElement("tr", null,
+      React.createElement("th", null, "Hour"),
+      React.createElement("th", null, "Rows"),
+      React.createElement("th", null, "Vs mean"),
+      React.createElement("th", null, "Verdict")
+    )),
+    React.createElement("tbody", null, D.timeline.map(function (h) {
+      return React.createElement("tr", { key: h.hour, className: h.spike ? "critical" : "" },
+        React.createElement("td", null, esc(h.hour.replace("T", " ") + ":00")),
+        React.createElement("td", null, h.count.toLocaleString("en-US")),
+        React.createElement("td", null,
+          h.multiple === null || h.multiple === undefined ? "-" : h.multiple.toFixed(1) + "x"),
+        React.createElement("td", null, h.spike ? "Spike" : "Normal")
+      );
+    }))
+  );
+}
+
 function App() {
   var sSev = React.useState("all");
   var sev = sSev[0], setSev = sSev[1];
@@ -491,6 +744,26 @@ function App() {
       }),
       React.createElement("span", { className: "depthlabel" },
         "Top " + depth + (rank.length < D.ranking.length ? " of " + D.ranking.length : ""))
+    ),
+    React.createElement("section", null,
+      React.createElement("h2", null, "Where the rows are"),
+      React.createElement(ChartNote, null),
+      D.ranking.length === 0
+        ? React.createElement("p", { className: "empty" }, "This file has no categorical ranking to plot.")
+        : React.createElement(React.Fragment, null,
+            React.createElement(BarChart),
+            React.createElement(React.Fragment, null, renderRankingTable(rank))
+          )
+    ),
+    React.createElement("section", null,
+      React.createElement("h2", null, "The shape of the day"),
+      D.timeline.length === 0
+        ? React.createElement("p", { className: "empty" },
+            "No readable timestamps in this file, so there is no day to plot. The engine could not tell when these rows happened.")
+        : React.createElement(React.Fragment, null,
+            React.createElement(LineChart),
+            React.createElement(React.Fragment, null, renderTimelineTable())
+          )
     ),
     React.createElement("section", null,
       React.createElement("h2", null, "Worst " + depth),
@@ -626,6 +899,11 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   .controls label { font-size: .82rem; color: #5b616e; }
   select { font: inherit; padding: .25rem .4rem; border: 1px solid #b9bfcc; border-radius: 6px; background: #fff; }
   .depthlabel { font-size: .82rem; color: #5b616e; }
+  .canvasbox { position: relative; height: 17rem; margin: .8rem 0 1.2rem; }
+  .canvasbox canvas { width: 100% !important; height: 100% !important; }
+  .chartoff { padding: .6rem .8rem; background: #fdf0d5; color: #7a5300; border-radius: 6px; }
+  table.fallback { margin-top: .4rem; }
+  table.fallback th, table.fallback td { font-size: .84rem; }
   .rank { list-style: none; padding: 0; margin: 0; }
   .rank li { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr auto; gap: .6rem; align-items: center; padding: .18rem 0; }
   .rank .k { font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -663,6 +941,7 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
 <script id="${DASHBOARD_DATA_ID}" type="application/json">${embedJson(data)}</script>
 <script crossorigin src="${REACT_CDN}/react.production.min.js"></script>
 <script crossorigin src="${REACT_DOM_CDN}/react-dom.production.min.js"></script>
+<script crossorigin src="${CHART_CDN}"></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
 ${source}
