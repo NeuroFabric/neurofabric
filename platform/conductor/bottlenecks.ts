@@ -521,6 +521,11 @@ export interface NumericColumnStat {
   readonly outlierMax: number | null;
   /** The most extreme value beyond a fence on the low side. */
   readonly outlierMin: number | null;
+  /** Values beyond the OUTER (3x) fence: the actionable ones. */
+  readonly extremeOutliers: number;
+  /** The outer fence, so an extreme claim is as checkable as a marginal one. */
+  readonly fenceExtremeLower: number | null;
+  readonly fenceExtremeUpper: number | null;
   /**
    * The fences used, published so the judgement can be checked.
    *
@@ -556,7 +561,19 @@ export interface ColumnHealth {
   readonly column: string;
   readonly dirty: number;
   readonly empty: number;
+  /**
+   * Beyond the OUTER (3x IQR) fence only.
+   *
+   * The conventional 1.5x count is deliberately NOT here. A 1.5x fence flags
+   * roughly 1.4 per cent of a normal distribution by definition, so on the
+   * Owner's 4,000-value noise matrix it named 37 outliers across 17 columns and
+   * buried the one real finding. The marginal count is still computed and still
+   * printed in the numerical table, where comparing columns is the point; this
+   * section is the automated warning, and a warning that fires on ordinary
+   * variation is not one.
+   */
   readonly outliers: number;
+  readonly marginalOutliers: number;
   /** The most extreme outlier value, so the warning carries a magnitude. */
   readonly worstValue: number | null;
   /** The fence that value cleared, so the claim can be checked. */
@@ -608,6 +625,24 @@ const MIN_OUTLIER_SAMPLES = 8;
 const OUTLIER_IQR_FACTOR = 1.5;
 
 /**
+ * Tukey's OUTER fence. The difference between "unusual" and "wrong".
+ *
+ * FOUND BY RUNNING THE OWNER'S OWN FILE, not by reasoning about it.
+ * random_data_with_issue.csv is 200 rows of standard-normal noise, 4,000 values
+ * across 20 columns, and a 1.5x-IQR fence flags roughly 1.4 per cent of a normal
+ * distribution BY DEFINITION. It reported 37 outliers across 17 columns. That is
+ * statistically correct and completely useless as a report: the one genuine
+ * finding, col_15 at 9,999,999.99, was one clause among seventeen and a reader
+ * learned nothing from the other sixteen.
+ *
+ * So both fences are computed. At 3x IQR a normal distribution flags about 3 in
+ * 10,000, so a clean random file reports NOTHING while col_15 still stands out
+ * by six orders of magnitude. The health section reports only this one, because
+ * an automated warning that fires on ordinary variation is not a warning.
+ */
+const EXTREME_IQR_FACTOR = 3;
+
+/**
  * The p-th percentile by linear interpolation between closest ranks (type 7).
  *
  * INTERPOLATION, not the nearest-rank rule used for the hourly p95, and the
@@ -642,22 +677,47 @@ function percentile(sorted: readonly number[], p: number): number {
  * flagged. That is the correct answer and it falls out of the arithmetic rather
  * than needing a branch.
  */
-function detectOutliers(values: readonly number[]): { outliers: number; low: number | null; high: number | null; lower: number | null; upper: number | null } {
-  if (values.length < MIN_OUTLIER_SAMPLES) return { outliers: 0, low: null, high: null, lower: null, upper: null };
+interface OutlierResult {
+  readonly outliers: number;
+  readonly low: number | null;
+  readonly high: number | null;
+  readonly lower: number | null;
+  readonly upper: number | null;
+  /** Beyond the 3x outer fence: the actionable ones. */
+  readonly extreme: number;
+  readonly extremeLower: number | null;
+  readonly extremeUpper: number | null;
+}
+
+const NO_OUTLIERS: OutlierResult = { outliers: 0, low: null, high: null, lower: null, upper: null, extreme: 0, extremeLower: null, extremeUpper: null };
+
+/**
+ * THE CONSTANT COLUMN IS THE DEGENERATE CASE worth naming, because it is the one
+ * most likely to produce Infinity or a spurious flag. IQR is then zero, every
+ * fence sits on the single value, every value equals them, and nothing is
+ * flagged. That is the correct answer and it falls out of the arithmetic rather
+ * than needing a branch.
+ */
+function detectOutliers(values: readonly number[]): OutlierResult {
+  if (values.length < MIN_OUTLIER_SAMPLES) return NO_OUTLIERS;
   const sorted = [...values].sort((a, b) => a - b);
   const q1 = percentile(sorted, 25);
   const q3 = percentile(sorted, 75);
   const iqr = q3 - q1;
   const lower = q1 - OUTLIER_IQR_FACTOR * iqr;
   const upper = q3 + OUTLIER_IQR_FACTOR * iqr;
+  const extremeLower = q1 - EXTREME_IQR_FACTOR * iqr;
+  const extremeUpper = q3 + EXTREME_IQR_FACTOR * iqr;
   let count = 0;
+  let extreme = 0;
   let low: number | null = null;
   let high: number | null = null;
   for (const v of sorted) {
     if (v < lower) { count += 1; low = v; }
     else if (v > upper) { count += 1; high = v; }
+    if (v < extremeLower || v > extremeUpper) extreme += 1;
   }
-  return { outliers: count, low, high, lower, upper };
+  return { outliers: count, low, high, lower, upper, extreme, extremeLower, extremeUpper };
 }
 
 /**
@@ -717,7 +777,12 @@ function numericalProfile(csv: CsvReadResult): { numerical: NumericalProfile; he
       if (value > max) max = value;
     }
     const outliers = detectOutliers(values);
-    const tail = { outliers: outliers.outliers, outlierMin: outliers.low, outlierMax: outliers.high, fenceLower: outliers.lower, fenceUpper: outliers.upper, method: (outliers.lower === null ? null : "IQR") as "IQR" | null };
+    const tail = {
+    outliers: outliers.outliers, outlierMin: outliers.low, outlierMax: outliers.high,
+    fenceLower: outliers.lower, fenceUpper: outliers.upper,
+    extremeOutliers: outliers.extreme, fenceExtremeLower: outliers.extremeLower, fenceExtremeUpper: outliers.extremeUpper,
+    method: (outliers.lower === null ? null : "IQR") as "IQR" | null,
+  };
     const shape = { column: c.column, measured, missing: empty + dirty, empty, dirty, dirtyExamples: [...examples], ...tail };
     if (measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null };
     return { ...shape, min, max, mean: sum / measured, spread: max - min };
@@ -749,7 +814,8 @@ function dataHealth(all: readonly NumericColumnStat[]): DataHealth {
       column: c.column,
       dirty: c.dirty,
       empty: c.empty,
-      outliers: c.outliers,
+      outliers: c.extremeOutliers,
+      marginalOutliers: c.outliers,
       worstValue: c.outlierMax ?? c.outlierMin,
       fence: c.outlierMax !== null ? c.fenceUpper : c.outlierMin !== null ? c.fenceLower : null,
       examples: c.dirtyExamples,
