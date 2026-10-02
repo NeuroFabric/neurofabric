@@ -1,5 +1,6 @@
 import { parseCorrection, type ParsedCorrection } from "../web/chat-parse.ts";
 import { resolveQuery } from "./query.ts";
+import { findCrossColumnAnomalies, type CrossColumnAnomaly } from "./multivariate.ts";
 import type { Purpose } from "./semantics.ts";
 
 /**
@@ -74,6 +75,16 @@ export interface ConversationData {
     readonly rule: string | null;
   }[];
   readonly learned: Readonly<Record<string, string>>;
+  /**
+   * The rows, for the questions that cannot be answered from a summary.
+   *
+   * Optional, and the reason is the same as `columns[].histogram`: a caller that
+   * has not wired it must get an honest "I cannot check that", never a
+   * fabricated "no anomalies". Answering "nothing found" from data that was
+   * never examined is the one failure this product must not make -- it reads as
+   * a clean bill of health for a file nobody looked at.
+   */
+  readonly rows?: readonly Record<string, unknown>[];
 }
 
 /**
@@ -386,6 +397,22 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
+  // ---- 5b. THE DISCORDANCE, BEFORE THE FINDINGS ----
+  //
+  // THE ORDER IS LOAD-BEARING. This sits above the findings branch on purpose:
+  // that branch matches on `anomal`, and "are there any complex anomalies?"
+  // contains it. A branch added below would be unreachable, and the question
+  // would answer something true and unrelated. If these two are ever reordered,
+  // this test fails and the question quietly stops working.
+  // NO TRAILING \b, and that is not sloppiness. A pattern like
+  // /\b(discord)\b/ cannot match "discordant": after "discord" the next
+  // character is a word character, so there is no boundary, and the branch
+  // silently never fires. The alternatives below are deliberately unanchored
+  // at the end so a PREFIX of the word is enough.
+  if (/(discord|contradict|relational|out of step|inconsistent pair|complex anomal|cross.column|two column|both column)/.test(lower)) {
+    return discordanceAnswer(data);
+  }
+
   // ---- 6. THE FINDINGS ----
   if (/\b(wrong|problem|issue|anomal|findings|broken|bad|error|clean|wrong with)\b/.test(lower)) {
     const severe = data.anomalies.filter((a) => a.severity === "critical");
@@ -439,6 +466,79 @@ export function replyTo(data: ConversationData, message: string): Reply {
     "I cannot answer that from what I have measured. I report what the engine found in this file -- " +
     "the shape of the day, the categories, the findings and how I read each column -- and I will not invent a figure " +
     "to fill the gap.");
+}
+
+/**
+ * "ARE THERE ROWS WHERE TWO COLUMNS DISAGREE?"
+ *
+ * The only question in this file that cannot be answered from a summary, which
+ * is why it needs the rows. It pairs up the numeric columns, runs the MAD
+ * cross-column check on each pair, and reports the pair that found the most --
+ * so a user asking one question gets the strongest available answer rather than
+ * a search over every pair.
+ *
+ * THE PAIR SEARCH IS BOUNDED, and the bound is a product decision rather than a
+ * performance one. Reporting all pairs would be noisier and less useful: with
+ * six columns there are fifteen pairs, and a user told about eleven of them
+ * learns nothing. The most discordant pair is the finding; the rest are
+ * arithmetic.
+ *
+ * Each reported row is stated in the user's terms -- "row 46", the columns, and
+ * which way each is wrong -- because a finding a user cannot locate is a
+ * finding they cannot act on.
+ */
+function discordanceAnswer(data: ConversationData): Reply {
+  if (data.rows === undefined || data.rows.length === 0) {
+    return decline(
+      "I cannot check for rows that disagree with each other from the summary I was given -- " +
+      "that needs the rows themselves, and I do not have them here. " +
+      "I can still show you the per-column findings, the categories, and how I read each column.");
+  }
+
+  const numeric = data.columns.map((c) => c.name).filter((n) => n !== undefined).slice(0, 6);
+  let best: { a: CrossColumnAnomaly; x: string; y: string } | null = null;
+  for (let i = 0; i < numeric.length; i++) {
+    for (let j = i + 1; j < numeric.length; j++) {
+      const found = findCrossColumnAnomalies({ rows: data.rows, columns: [numeric[i]!, numeric[j]!] });
+      if (found.length > 0 && (best === null || found[0]!.strength > best.a.strength)) {
+        best = { a: found[0]!, x: numeric[i]!, y: numeric[j]! };
+      }
+    }
+  }
+
+  if (best === null) {
+    return {
+      kind: "answer",
+      text: `No. Across ${rows(data.totalRows)}, no row has two numeric columns that contradict each other -- ` +
+        "every row that is high in one is also high in the other, or low in both. " +
+        "Rows that are merely large are a different question, and I answer that one from the per-column findings.",
+      widgets: [],
+      suggestions: ["what is wrong with this file?", "what are the top categories"],
+    };
+  }
+
+  const { a, x, y } = best;
+  const all = findCrossColumnAnomalies({ rows: data.rows, columns: [x, y] });
+  const n = all.length;
+  // "1 row contradicts ITSELF", "3 rows contradict THEMSELVES". A finding
+  // about a handful of rows, described in the singular, reads as a grammar
+  // mistake and costs the reader a beat of doubt about the rest of it.
+  return {
+    kind: "answer",
+    text: `Yes. ${n} row${n === 1 ? "" : "s"} contradict${n === 1 ? "s" : ""} ` +
+      `${n === 1 ? "itself" : "themselves"}: ` +
+      `${a.x.column} is unusually ${a.x.z > 0 ? "high" : "low"} (${fmtNum(a.x.value)}) while ` +
+      `${a.y.column} is unusually ${a.y.z > 0 ? "high" : "low"} (${fmtNum(a.y.value)}), which do not go together. ` +
+      `Row ${a.row + 1} is the clearest: ${a.x.column} ${a.x.z.toFixed(1)} robust deviations from its median, ` +
+      `${a.y.column} ${a.y.z.toFixed(1)}. ` +
+      "A row like that is usually a join that went wrong or a field measured in the wrong unit, rather than a real observation.",
+    widgets: [],
+    suggestions: ["what is wrong with this file?", "how did you read the columns?"],
+  };
+}
+
+function fmtNum(v: number): string {
+  return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString("en-US") : String(Math.round(v * 100) / 100);
 }
 
 function decline(why: string): Reply {

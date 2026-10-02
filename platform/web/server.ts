@@ -719,6 +719,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 multiple: h.multiple, spike: h.isSpike, rule: h.rule,
               })),
               learned: schemaForChat?.roles ?? {},
+              // The rows, for the questions a summary cannot answer. Without
+              // these the cross-column check has nothing to run on, and the
+              // agent must say so rather than claim a file is clean.
+              rows: rowsForChat,
             }, message),
           });
           return;
