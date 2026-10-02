@@ -45,7 +45,7 @@ show me the busiest hour
 what is the peak time
 ```
 
-> ✅ *"The busiest hour is 2026-09-01 09:00, with 79 rows — 1.0% of the readable
+> ✅ *"The busiest hour is 2026-09-03 17:00, with 70 rows — 1.0% of the readable
 > rows."* — with a line chart of rows by hour.
 
 If the engine flagged that hour, it says so: *"The engine flagged it: 2.5x the
@@ -78,8 +78,8 @@ what is the average latency_ms?
 mean of request_bytes
 ```
 
-> ✅ *"The mean of latency_ms is 106.61, over 8,155 measured values. It ranges
-> from 12.4 to 3,186."*
+> ✅ *"The mean of latency_ms is 108.1, over 7,232 measured values. It ranges
+> from 13.7 to 3,190."*
 
 Naming the column is **required**:
 
@@ -123,8 +123,8 @@ before assuming the feature is broken. The engine's underlying router can list
 the numeric columns for you, but that message does not currently reach the user
 through the chat endpoint; it is noted in the handover as a fix.
 
-> ✅ *"At least 48 of the 8,155 measured values in latency_ms are above 1,000,
-> and at most 48. The threshold falls inside a bucket spanning 1,000 to 1,123,
+> ✅ *"At least 48 of the 7,232 measured values in latency_ms are above 1,000,
+> and at most 48. The threshold falls inside a bucket spanning 1,000 to 1,125,
 > so I cannot narrow it further without the raw values."*
 
 **Why "at least … and at most".** The engine keeps a histogram, not every raw
@@ -135,35 +135,35 @@ the product: **it will not pretend to a precision it does not have.**
 
 If you omit the column, or misspell it, the sentence is declined as above.
 
-### 2.5 The top categories — **and a real limitation**
+### 2.5 The top categories
 
 ```
 What are the top categories?
 ```
 
-> ⚠️ On all three bundled demo files this currently answers: *"I could not find
-> a categorical column in this file, so there is nothing to rank."*
+> ✅ *"4 distinct values in the category column. The largest is `partner-api`
+> with 1,420 rows."*
 
-**This is not a phrasing problem, and no rephrasing fixes it.** The engine
-resolves the category role **only** by column *name*, against a fixed list:
+**The column must be named for the engine to see it.** The category role
+resolves by *exact* column name against a fixed list:
 
 > `alert_code` · `alertcode` · `alert_type` · `alertType` · `category` ·
 > `event_type` · `type`
 
 …and the column must hold **more than one distinct value**. A name that matches
-but holds a single value is deliberately demoted, because ranking by it yields
-one bucket containing everything — a table that looks like an answer and is not
-one.
+but holds a single value is deliberately demoted: ranking by it yields one
+bucket containing everything, which is a table that looks like an answer and is
+not one.
 
-So this question works only on a file with one of those names. Note the
-asymmetry: the demo files carry `channel`, `endpoint`, `entry_type` and
-`status_code`, none of which are in the list.
+So a column called `channel` or `endpoint`, however obviously categorical, is
+invisible to this question. **The demo files name it `category`** for exactly
+this reason.
 
-**Correcting the column does not currently unlock it.** Saying
-`channel is the category` is accepted and remembered as a correction, but the
-categories question still declines afterwards. That is a genuine gap, tracked in
-the handover, and it is documented here rather than left to be discovered in a
-customer demo.
+**It has to be a real grouping, not an identifier.** A category column whose
+values are all unique will answer truthfully and uselessly — *"the largest is
+`TRANSFER-001470`, with 1 rows"* — which is a correct answer to a meaningless
+question. The demo ledger keeps document references in a separate `reference`
+column for this reason.
 
 ### 2.6 Two more, offered to you as suggestions
 
@@ -306,31 +306,33 @@ band is how much the model has been missing by so far, widened with distance.
 
 ### The forecast requires a continuous hourly series
 
-**This is the rule that catches people.** The engine refuses to project across a
-gap in the timeline, and says exactly which hour broke it:
+**This is the rule that catches people.** The engine refuses to project when any
+two observed hours are not adjacent, and it names the exact break:
 
 > ❌ *"The hours in this file are not continuous — 2026-09-26T13 and
 > 2026-09-26T15 are not adjacent. A missing hour is missing data, not a quiet
 > hour, so I will not project across it."*
 
-The reasoning is sound: an hour with no rows in a sparse file is missing data,
-not a genuinely quiet hour, and projecting across it would silently corrupt
-every point after the gap.
+Two things to know about it:
 
-### Observed behaviour on the bundled demo files
+- The check runs over **every** observed hour, not a trailing window. A 24-hour
+  continuous run inside a gapped file still refuses.
+- The engine plots on the **UTC** hour axis. If your timestamps carry no zone
+  marker, they are read as local time and rendered as UTC, which shifts them —
+  and, on a half-hour offset, can split one of your hours across two of the
+  engine's and leave a hole. **Write timestamps with an explicit `Z`.** The demo
+  files do, and it is the reason they forecast.
 
-| File | Forecast | Why |
+### The bundled demo files — all three forecast
+
+| File | Hours | Forecast |
 |---|---|---|
-| `service-mesh-access.csv` | ✅ **12 points**, from 193 observed hours | hourly coverage is complete |
-| `e-commerce-transactions.csv` | ❌ declines | hourly gaps |
-| `financial-ledger.csv` | ❌ declines | hourly gaps |
-
-So two of the three demo datasets do **not** demonstrate forecasting. That is a
-gap in the demo data rather than in the feature, and it is flagged in the
-handover; the generator should be revised to emit complete hourly coverage.
+| `e-commerce-transactions.csv` | 720 contiguous | ✅ 12 points |
+| `service-mesh-access.csv` | 192 contiguous | ✅ 12 points |
+| `financial-ledger.csv` | 720 contiguous | ✅ 12 points |
 
 When it succeeds, it reports its provenance: *"12 hours projected by damped
-exponential smoothing with a local linear trend, from the 193 observed hours."*
+exponential smoothing with a local linear trend, from the 720 observed hours."*
 
 ---
 
@@ -426,6 +428,19 @@ network.
 Regenerating is byte-identical — the generator is seeded, so two people demoing
 the same file see the same chart.
 
+The generator refuses to emit a file that cannot demonstrate the product. It
+checks, against the written bytes, that the timeline is one unbroken run of
+hours, that there are at least 12 of them, that timestamps carry an explicit
+zone, and that `category` is a real grouping rather than a column of unique
+identifiers. If any of those fail, generation fails — which is how the
+timezone bug below was caught.
+
+| File | Rows | Hours | What it shows |
+|---|---|---|---|
+| `e-commerce-transactions.csv` | 5,539 | 720 | a 250,000 order against a p99 of 215 |
+| `service-mesh-access.csv` | 7,232 | 192 | a 4×IQR latency spike at 14:00 on day 5 |
+| `financial-ledger.csv` | 3,513 | 720 | 60 accounts, 7 ending overdrawn |
+
 ---
 
 ## Known limitations on this build
@@ -433,15 +448,13 @@ the same file see the same chart.
 Stated plainly, because finding these in a customer demo is worse than reading
 them here.
 
-1. **"What are the top categories?" does not work on the bundled demo files.**
-   The category role resolves only by a fixed set of column *names* (§2.5).
-2. **A correction does not currently unlock the categories question**, though it
-   is accepted and remembered (§2.5).
-3. **Two of three demo files produce no forecast**, because their hourly series
-   has gaps (§4).
-4. **Threshold counts are reported as a range**, not a single number, whenever
+1. **Threshold counts are reported as a range**, not a single number, whenever
    the threshold falls inside a histogram bucket (§2.4). This is intended.
-5. **Secret file permissions are unproven on Windows** (§6).
-6. **A wrong or missing column name yields a generic decline** rather than the
+2. **Secret file permissions are unproven on Windows** (§6).
+3. **A wrong or missing column name yields a generic decline** rather than the
    list of valid columns (§2.4). The router can produce that list; the message
    does not currently reach the user.
+4. **A column named anything other than one of the eight category names is
+   invisible to the top-categories question**, and correcting it to `category`
+   does not currently change that (§2.5). Name the column `category` and the
+   question works.
