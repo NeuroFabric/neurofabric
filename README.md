@@ -241,7 +241,18 @@ step is involved.
 
 ## Dependency status
 
-The platform has no external runtime dependencies and no network calls
-of its own. Model access is entirely Pi's concern.
+The platform has no external runtime dependencies and makes no network
+calls of its own. Model access is entirely Pi's concern.
+
+One exception, stated precisely because the sentence above is otherwise
+read as absolute: the **interactive dashboard** (D-033) is a generated
+standalone page that loads React and ReactDOM from a pinned CDN version. That
+is a browser-side request made by the generated document, on the reader's
+machine, when they open a report — not a call the platform makes. The
+platform still runs with an empty `node_modules`, the generated app makes no
+network calls of its own, and the kernel's own page at `/` still loads
+nothing remote and keeps `default-src 'none'`. What the CDN exception does
+**not** protect against is publisher compromise, which is recorded as open
+risk in D-033 rather than described as handled.
 
 OmniRoute/ is a local-only checkout and is not part of this repository.
