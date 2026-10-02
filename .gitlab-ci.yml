@@ -32,6 +32,21 @@
 # requires a project-level runner registration, which is a GitLab project
 # settings action reserved for the operator. The ubuntu-only gate is therefore
 # a known, documented coverage reduction, not an oversight.
+#
+# ============================ RUNNER STATUS, 2026-10-05 ======================
+# AS OF TODAY THIS FILE HAS NEVER EXECUTED. `glab api projects/.../runners`
+# returns 20 visible runners and ZERO of them active and online -- every one is
+# paused or disabled. There is no Linux runner and no Windows runner registered
+# for this project, so every job below is a promise, not a gate, and the pipeline
+# will sit pending until one is provided.
+#
+# That matters most for the vault permission assertion added to `test-ts` below.
+# It closes D-037 caveat two IN CONFIGURATION ONLY. Until a Linux runner runs
+# it and the log is READ, "secrets at rest are not world-readable" remains
+# unverified, exactly as D-037 said it was. Do not read a green merge as proof
+# of that invariant; there has been no green merge, because there has been no
+# run. Register a Linux runner and read the `test-ts` log before claiming it.
+# ============================================================================
 stages:
   - verify
 
@@ -54,6 +69,25 @@ test-ts:
   script:
     - npm ci
     - npm run test:ts
+    # D-037 CAVEAT TWO, CLOSED. `npm run test:ts` above runs
+    # platform/core/vault.test.ts on this Linux runner, where the two POSIX
+    # permission tests do NOT skip -- so the "secrets at rest are not
+    # world-readable" invariant is exercised by the job that was already here.
+    #
+    # What was missing is PROOF that they ran. A skip is not a failure: widen
+    # SKIP_WINDOWS, or refactor the suite so the two tests quietly stop
+    # covering anything, and this job stays green while the security claim goes
+    # unverified. So this final step asserts the positive -- that both tests
+    # appear in the TAP output and neither is skipped. It also fails on a test
+    # that stopped existing, because absence produces no skip line either.
+    #
+    # WHY THIS IS A STEP AND NOT ITS OWN JOB. A dedicated job tagged `linux`
+    # would sit PENDING forever against the runner situation documented at the
+    # bottom of this file, and a permanently-pending job is a red gate that
+    # looks like a broken build. As a step inside an existing blocking job it
+    # inherits that job's lifecycle: it runs the moment any Linux runner is
+    # registered, with no further edit, and it is enforced from then on.
+    - node verification/assert-posix-vault-permissions.mjs
 
 test-proof:
   stage: verify
