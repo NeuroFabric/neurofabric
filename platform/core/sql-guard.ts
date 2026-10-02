@@ -51,6 +51,21 @@ const ALLOWED: SqlVerdict = { allowed: true, reason: "single read-only SELECT" }
 /**
  * Anything that is not a read is refused. Matched as a whole word outside string
  * literals, ASCII-case-insensitively.
+ *
+ * `into` is here because it is the one in this list that is not a verb at all,
+ * and its absence was a live hole found by the security sweep. Postgres (and
+ * T-SQL) spell "materialise this query's results into a new table" as
+ * `SELECT ... INTO name`, which CREATES AND POPULATES A TABLE. It begins with
+ * SELECT, so the statement-start rule waved it through, and no verb in the list
+ * appears in it -- so the whitelist waved it through too. Two rules that each
+ * pass, and a write.
+ *
+ * The lesson generalises past this keyword, which is why it is written down: a
+ * verb allow-list is only as complete as the author's imagination, and a
+ * whitelist whose failure mode is "an author did not think of that spelling" is
+ * a weaker control than one that proves the statement is a read. The keyword
+ * list is the cheap half of this guard; `SELECT_START` and the refusal of
+ * comments and stacked statements are the half that actually holds.
  */
 const WRITE_VERBS = [
   "insert", "update", "delete", "drop", "create", "alter", "truncate",
@@ -58,6 +73,7 @@ const WRITE_VERBS = [
   "grant", "revoke", "execute", "exec", "call", "merge", "upsert", "begin",
   "commit", "rollback", "savepoint", "release", "lock", "copy", "load",
   "install", "uninstall", "trigger", "raise",
+  "into",
 ] as const;
 
 const SELECT_START = /^(?:select|with|values|table)\b/i;
@@ -133,7 +149,7 @@ export function classifySql(sql: string): SqlVerdict {
   const { code } = tokenized;
   for (const verb of WRITE_VERBS) {
     if (new RegExp(`\\b${verb}\\b`, "i").test(code)) {
-      return { allowed: false, reason: `write verb ${verb.toUpperCase()} is not read-only` };
+      return { allowed: false, reason: `write keyword ${verb.toUpperCase()} is not read-only` };
     }
   }
 

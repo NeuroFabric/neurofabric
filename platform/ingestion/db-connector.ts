@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 import { classifySql, type SqlVerdict } from "../core/sql-guard.ts";
+import { resolveWithinRoot } from "../core/workspace.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
 
@@ -80,6 +81,46 @@ export class SqlRefused extends Error {
 }
 
 /**
+ * A PATH REFUSAL, kept as its own type and not folded into SqlRefused.
+ *
+ * Two different guards produce two different verdicts and a caller has to be
+ * able to tell them apart: one of them is about WHAT you asked for, the other
+ * is about WHERE you asked from it. Conflating them would make a filesystem
+ * refusal report a SQL reason, and the operator would go looking for a bad query
+ * in a request that never ran one.
+ */
+export class DatabasePathRefused extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`database read refused by the workspace boundary: ${reason}`);
+    this.name = "DatabasePathRefused";
+    this.reason = reason;
+  }
+}
+
+/**
+ * THE PATH BOUNDARY, AND IT IS NOT OPTIONAL.
+ *
+ * Found by the security sweep: this connector was written a session before the
+ * PDF one and never got the check the PDF one has, so `querySqlite` would open
+ * any file on the disk. Two front doors, two different security postures, and
+ * the weaker one is the older one -- which is the argument for requiring them
+ * to be identical rather than for adding a check to whichever file is in front
+ * of you.
+ *
+ * It calls the kernel's own `resolveWithinRoot` -- the same function the text
+ * read and the PDF read use -- so this is one implementation with three call
+ * sites, not three implementations. `root` defaults to the process working
+ * directory rather than being optional-and-skipped, because a boundary a caller
+ * can leave unset is a boundary that will be left unset.
+ */
+export function assertDatabaseInsideWorkspace(input: { readonly file: unknown; readonly root: string }): string {
+  const verdict = resolveWithinRoot(input.root, input.file);
+  if (!verdict.allowed) throw new DatabasePathRefused(verdict.reason ?? "path is outside every allowed root");
+  return verdict.resolvedPath as string;
+}
+
+/**
  * THE GUARD, CALLED DIRECTLY.
  *
  * Every entry point runs this before touching a database, so the connector is
@@ -129,7 +170,11 @@ function toCsvResult(headers: readonly string[], rows: ReadonlyArray<Record<stri
  * used. Belt and braces here means "two independent reasons this cannot modify
  * your data", not "the same check twice".
  */
-export function querySqlite(input: { readonly file: string; readonly query: string }): QueryResult {
+export function querySqlite(input: { readonly file: string; readonly query: string; readonly root?: string }): QueryResult {
+  // The path is checked BEFORE the query, so an escaping path is refused even
+  // when the query is perfectly innocent -- the order the PDF connector uses,
+  // and the only order in which there is no window between deciding and opening.
+  const file = assertDatabaseInsideWorkspace({ file: input.file, root: input.root ?? process.cwd() });
   assertReadOnly(input.query);
   // `createRequire` rather than a bare `require`, because this module is ESM and
   // has no `require` in scope. The module is still resolved LAZILY, so a host
@@ -140,7 +185,7 @@ export function querySqlite(input: { readonly file: string; readonly query: stri
       close(): void;
     };
   };
-  const db = new sqlite.DatabaseSync(input.file, { readOnly: true });
+  const db = new sqlite.DatabaseSync(file, { readOnly: true });
   try {
     const statement = db.prepare(input.query.endsWith(";") ? input.query : `${input.query}${ROW_LIMIT_CLAUSE}`);
     const raw = statement.all() as Array<Record<string, unknown>>;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
 import { parseCsv, csvRead } from "../conductor/capabilities.ts";
+import { resolveWithinRoot } from "../core/workspace.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
 
 /**
@@ -20,6 +21,25 @@ import type { CsvReadResult } from "../conductor/capabilities.ts";
  * second control plane: it would drift from the policy, it would be invisible in
  * the event stream, and a hole in it would be a hole in the boundary that no
  * test of the kernel could see. So there is nothing here to bypass.
+ *
+ * AND THAT CLAIM WAS FALSE FOR ONE ROUTE, which is the most useful thing this
+ * file has to say. The security sweep found that `/api/feedback` called
+ * `readCsvFor(path.resolve(cwd, target))` -- a direct `readFile` with no boundary
+ * check anywhere on the way to it -- so a POST could read any file on the disk
+ * and apply a correction to it. The exploit was demonstrated, not theorised: the
+ * red test watched the correction come back in the response body.
+ *
+ * The read is fixed now, and the fix is `resolveWithinRoot`: the kernel's own
+ * function, called directly. It is still not a second control plane, because it
+ * is not a second IMPLEMENTATION -- it is the same one the policy uses and the
+ * PDF and database connectors use. Four call sites, one function.
+ *
+ * But the deeper lesson is the one worth keeping. This file was safe on one
+ * route and unsafe on the other, and review had passed it, because the header
+ * told every reader that there was nothing here to find. A documented guarantee
+ * of absence is load-bearing: it changes where people look. Claiming "no
+ * validation of its own" is only safe while it is true on every branch, and it
+ * has to be checked on the branches a reviewer has no reason to open.
  *
  * WHAT IT DOES DO, and the reason each is here rather than in the kernel:
  *   - binds to 127.0.0.1 only, because this tool reads the user's files;
@@ -238,7 +258,32 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           }
 
-          const csv = await readCsvFor(path.resolve(cwd, target));
+          // THE PATH IS GOVERNED BEFORE IT IS READ. This is the one place in the
+          // file that resolves a path itself, and it is here because a correction
+          // needs the file's HEADER ROW to know whether the column being
+          // corrected exists at all -- which the Conductor does not need, and
+          // which therefore cannot be borrowed from the report route.
+          //
+          // The resolution is the kernel's own, not a hand-rolled prefix test, so
+          // a sibling directory sharing a name prefix, a `..` climb, a
+          // backslash form, and a symlink out are all refused by exactly the
+          // logic that governs every other read. And the refusal is a 403, the
+          // same as `/api/report` returns for the same path, because the two
+          // routes must not be distinguishable by whether they check.
+          const resolved = resolveWithinRoot(cwd, target);
+          if (!resolved.allowed) {
+            sendJson(response, 403, {
+              status: "FAILED",
+              failure: {
+                code: "PATH_OUTSIDE_WORKSPACE",
+                reason: `path boundary violation: ${resolved.reason ?? "the file is outside the workspace"}`,
+                kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+              },
+            });
+            return;
+          }
+
+          const csv = await readCsvFor(resolved.resolvedPath as string);
           if (csv === undefined) {
             sendJson(response, 400, {
               status: "FAILED",
