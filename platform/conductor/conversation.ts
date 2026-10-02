@@ -1,6 +1,9 @@
 import { parseCorrection, type ParsedCorrection } from "../web/chat-parse.ts";
 import { resolveQuery } from "./query.ts";
 import { findCrossColumnAnomalies, type CrossColumnAnomaly } from "./multivariate.ts";
+import { route } from "./agent-router.ts";
+import { barWidget, findingsWidget, lineWidget, type Widget } from "./subagents/widgets.ts";
+import { adaptiveSuggestions } from "./subagents/suggestions.ts";
 import type { Purpose } from "./semantics.ts";
 
 /**
@@ -37,6 +40,24 @@ import type { Purpose } from "./semantics.ts";
 
 /** What the interface is given, once, when the conversation opens. */
 export interface ConversationData {
+  /**
+   * The engine's projection, when it produced one.
+   *
+   * Present so the CONDUCTOR can route a forward-looking question to the
+   * forecasting agent. Optional because forecasting legitimately refuses across a
+   * gap in the timeline, and an agent asked about a projection that does not
+   * exist must give the engine's reason rather than a bare "no".
+   */
+  readonly forecast?: {
+    readonly ok: boolean;
+    readonly method: string;
+    readonly points: readonly {
+      readonly hour: string; readonly value: number; readonly lower: number; readonly upper: number;
+    }[];
+    readonly explanation: string;
+    readonly reason: string | null;
+    readonly lastObservedHour: string | null;
+  } | null;
   readonly source: string | null;
   readonly totalRows: number;
   readonly purpose: Purpose;
@@ -96,13 +117,16 @@ export interface ConversationData {
  * is a value a user dropped and this product exists to read. So a widget is a
  * discriminant plus a payload, and the renderer owns all the markup.
  */
-export interface Widget {
-  readonly kind: "chart-line" | "chart-bar" | "histogram" | "findings" | "columns" | "mappings" | "capabilities";
-  readonly title: string;
-  readonly note?: string;
-  /** The data. Shape depends on `kind`; the renderer branches, nothing else. */
-  readonly payload: unknown;
-}
+/**
+ * RE-EXPORTED, NOT REDECLARED.
+ *
+ * The interface used to be defined here because this module used to build every
+ * widget itself. It does not any more -- the subagents do -- and a second
+ * structurally identical declaration is a type error rather than a duplicate.
+ * Re-exporting keeps every existing import path working, so sharing the
+ * definition costs no caller a change.
+ */
+export type { Widget } from "./subagents/widgets.ts";
 
 export interface Reply {
   readonly kind: "answer" | "correction";
@@ -151,28 +175,10 @@ export const CAPABILITIES: readonly { readonly label: string; readonly ask: stri
  * day the chips become a gate the refusal this phase removed comes straight
  * back through the suggestions instead of the router.
  */
-function adaptiveSuggestions(data: ConversationData, answered = ""): readonly string[] {
-  const chips: { ask: string; weight: number }[] = [];
-  const seen = answered.trim().toLowerCase();
-
-  const offer = (ask: string, weight: number) => {
-    const a = ask.trim().toLowerCase();
-    // Same intent, different words: "what is wrong" must not be offered back to
-    // someone who just asked it.
-    if (seen !== "" && (a === seen || a.includes(seen) || seen.includes(a))) return;
-    chips.push({ ask, weight });
-  };
-
-  const severe = data.anomalies.filter((a) => a.severity === "critical").length;
-  if (severe > 0) offer("what is wrong with this file?", 100);
-  if (data.purpose.kind === "unknown") offer("tell me what this file is for", 90);
-  if (data.timeline.length > 0) offer("show me the worst hour", 60);
-  if (data.ranking.length > 0) offer("what are the top categories", 55);
-  if (data.columns.length >= 2) offer("are there any complex anomalies?", 50);
-  offer("how did you read the columns?", 40);
-  offer("show me the columns", 30);
-
-  return chips.sort((a, b) => b.weight - a.weight).slice(0, 4).map((c) => c.ask);
+function adaptiveSuggestionsRemoved(data: ConversationData, answered = ""): readonly string[] {
+  // MOVED TO subagents/suggestions.ts. Kept as a symbol only so any remaining
+  // caller resolves; the body is deleted below.
+  return adaptiveSuggestions(data, answered);
 }
 
 /** `nl` is the only number this module is willing to invent. */
@@ -241,53 +247,13 @@ export function greet(data: ConversationData): Reply {
 // The router
 // ---------------------------------------------------------------------------
 
-/** Everything a widget needs, pulled from the data. */
-function lineWidget(data: ConversationData): Widget {
-  return {
-    kind: "chart-line",
-    title: "Rows by hour",
-    note: "Orange points are spikes the engine flagged against its own mean. Hover for the exact count.",
-    payload: { points: data.timeline },
-  };
-}
-
-function barWidget(data: ConversationData): Widget {
-  // THE CAP LIVES HERE, NOT AT THE CALLER.
-  //
-  // It used to be applied by whichever code built the ConversationData, which
-  // means it held only for the paths that remembered. A caller that passed the
-  // full ranking got a chart of every distinct value in the column -- and a
-  // column of free-text keys can have thousands, which renders as a grey stripe
-  // rather than a chart.
-  //
-  // Applying it where the WIDGET is built means every caller gets the same
-  // promise, and the assertion lives with the reason. Nothing is lost: the
-  // analysis still holds every category, and `show me all categories` is a
-  // question the router can grow a widget for.
-  const points = data.ranking.slice(0, BAR_DEPTH);
-  const hidden = data.ranking.length - points.length;
-  return {
-    kind: "chart-bar",
-    title: "Record categories",
-    note: hidden > 0
-      ? `How many rows fall in each category. Showing the top ${BAR_DEPTH} of ${data.ranking.length}.`
-      : "How many rows fall in each category.",
-    payload: { points, hidden },
-  };
-}
-
-/** How many bars a category chart draws. Ten fits without becoming a texture. */
-const BAR_DEPTH = 10;
-
-/** Every kind of value the chat can render, as a ranked list. */
-function findingsWidget(data: ConversationData): Widget {
-  return {
-    kind: "findings",
-    title: "Findings",
-    note: `${rows(data.anomalies.length)} in total, worst first.`,
-    payload: { anomalies: data.anomalies },
-  };
-}
+// THE WIDGET BUILDERS ARE IN subagents/widgets.ts.
+//
+// They were defined here for as long as this module built every answer itself.
+// The conductor now delegates to three subagents that each need them, and three
+// copies of "what a bar chart is" is three definitions -- one of which would
+// have capped at five bars and another at ten, and the tests would have had to
+// pick a winner. The shared module owns the cap and the shape.
 
 /**
  * Route one sentence.
@@ -306,6 +272,19 @@ export function replyTo(data: ConversationData, message: string): Reply {
   // ---- 1. A CORRECTION, recognised by the one parser the browser also runs ----
   const parsed = parseCorrection(text);
   if (parsed.ok) return acceptCorrection(data, parsed);
+
+  // === THE CONDUCTOR, AFTER THE CORRECTION PARSER AND BEFORE ANY BRANCH ====
+  //
+  // Correction comes first because a schema correction is a COMMAND, not a
+  // question, and every agent here would try to answer it as one.
+  //
+  // Everything after this point used to be eight numbered branches, each owning
+  // both the decision and the answer. The decision now lives in
+  // `agent-router.ts` as data -- so adding a capability means adding an agent
+  // rather than inserting a conditional above five others and hoping the new one
+  // is not shadowed by an existing regex.
+  const routed = route(text, data);
+  if (routed.reply !== undefined) return routed.reply;
   // === IS THIS A CORRECTION ATTEMPT, OR A QUESTION? ===
   //
   // `parseCorrection` handled the ACCEPTED forms. This decides whether a FAILED

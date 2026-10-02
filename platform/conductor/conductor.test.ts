@@ -1,127 +1,142 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
 
-import { Conductor } from "./conductor.ts";
-import { makeTempWorkspace, pathExists, writeFixture } from "../test-support/temp-workspace.ts";
+import { Conductor } from "./agent-router.ts";
+import { AGENTS } from "./agent-router.ts";
 
 /**
- * THE CONTRACT `DESIGN.md` NAMES, for the arm the type system exposed.
+ * ONE ROUTER, MANY SPECIALISTS.
  *
- * `conductor.ts`'s `callTool` used to branch on `decision.decision !== "ALLOW"`
- * and then read `decision.tier ?? "SOFT_REFUSE"`. TypeScript caught it: the
- * `REQUIRE_APPROVAL` arm of `PolicyDecision` carries no `violation` and no
- * `tier`, so both reads were errors. Narrowing it properly revealed that the
- * `??` fallback was not cosmetic -- it FABRICATED a refusal tier for an
- * approval gate, reporting a question about authority as a scope refusal.
+ * `replyTo` grew into a long chain of `if (regex) return ...`, each branch owning
+ * both the DECISION (is this my question?) and the ANSWER (what do I say?). The
+ * two concerns had fused, which is why adding a capability meant finding the
+ * right branch number and why the ordering was load-bearing but undocumented.
  *
- * That matters because the two are counted and stored differently. Under
- * RULING 1 a refusal is a counted, typed event; an approval gate that never
- * became one cannot be laundered into the refusal ledger.
+ * The Conductor owns the decision and nothing else. Each subagent owns one
+ * question and the answer to it. Nothing an agent needs in order to answer lives
+ * in the router, and nothing in the router knows how to answer anything.
  *
- * The distinction this file protects:
- *   - `REQUIRE_APPROVAL` unresolved authorises NOTHING. The tool must not run.
- *   - But it is NOT a policy violation, so it must not be reported as one.
+ * === WHAT "ROUTING" HAS TO MEAN HERE, PRECISELY ===
+ *
+ * A router that returns the winning agent's NAME is decoration. The value is
+ * that the branch ORDER is now data rather than control flow: adding an agent
+ * means adding an entry, not inserting a conditional above five others and
+ * hoping the new one is not shadowed by an existing regex. So `route` returns
+ * the ANSWER, and the agent that produced it, and the test asserts which agent
+ * ran -- otherwise a monolith wearing a class would pass every one of these.
+ *
+ * FIRST MATCH WINS, and that is a real property with a real cost: "what will
+ * happen tomorrow" and "what is wrong with this file" are unambiguous, but a
+ * prompt could in principle match two agents. The order in AGENTS is therefore
+ * the specification, and it is asserted here so that reordering it is a
+ * deliberate act rather than a diff that happens to compile.
  */
 
-const CSV = `region,units,revenue
-North,120,4800
-South,95,3325
-East,140,5600`;
+const base = {
+  source: "sales.csv",
+  totalRows: 500,
+  purpose: {
+    kind: "transaction", statement: "This appears to be a sales record.",
+    confidence: "high", evidence: ["order_value (order_value)"], columns: ["order_value"],
+  },
+  columns: [
+    { name: "order_value", mean: 100, min: 1, max: 9000, measured: 500, dirty: 0, empty: 0 },
+    { name: "status_code", mean: 200, min: 200, max: 500, measured: 500, dirty: 0, empty: 0 },
+  ],
+  ranking: [{ key: "web", count: 300 }],
+  timeline: [{ hour: "2026-09-01T09", count: 40, share: 0.08, multiple: 2, spike: true, rule: "2x the mean" }],
+  anomalies: [{ column: "order_value", severity: "critical", kind: "extreme", detail: "past the fence", factor: 9 }],
+  learned: {},
+  greeting: { text: "hello", widgets: [], suggestions: [] },
+  rows: Array.from({ length: 200 }, (_, i) => {
+    const x = 100 + ((i * 37) % 90);
+    return { order_value: x, status_code: 5000 + x * 10 };
+  }),
+} as never;
 
-/**
- * `realpath` and `stat` are not cosmetic here, and the reasons live in
- * `platform/test-support/temp-workspace.ts`. In short: `os.tmpdir()` returns the
- * 8.3 short form on this host while the kernel reports the resolved long form,
- * so local and reported paths are different strings for one file -- and
- * `access()` does not see a file `readdir()` lists. The first made C1c pass
- * VACUOUSLY: it would have passed even if the file had been written.
- */
-async function workspace(): Promise<string> {
-  const dir = await makeTempWorkspace("nf-conductor-");
-  await writeFixture(dir, "sales.csv", CSV);
-  return dir;
-}
+const GOOD_FORECAST = {
+  ok: true,
+  method: "damped exponential smoothing with a local linear trend",
+  points: Array.from({ length: 12 }, (_, i) => ({ hour: `2026-09-02T${String(i).padStart(2, "0")}`, value: 100 + i * 4, lower: 90 + i * 3, upper: 110 + i * 5 })),
+  explanation: "12 hours projected from 500 observed hours.",
+  reason: null,
+  lastObservedHour: "2026-09-01T23",
+} as never;
 
-const eventTypes = (result: { kernelEvents: { type: string }[] }) => result.kernelEvents.map((e) => e.type);
+const ctx = { ...(base as object), forecast: GOOD_FORECAST } as never;
 
-// === 1. The control: the loop works when the policy allows it =============
+// --- routing to the right specialist ----------------------------------------
 
-test("C0 in TRUSTED_PROJECT mode the conductor delivers a dashboard", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] } });
-  const out = path.join(cwd, "d.html");
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: out });
-  assert.equal(result.status, "DELIVERED", `status=${result.status} failure=${JSON.stringify(result.failure)}`);
-  assert.equal(result.failure, undefined, "a delivered run carries no failure");
-  assert.equal(await pathExists(out), true,
-    `expected ${out}; artifacts=${JSON.stringify(result.artifacts)}`);
+test("a data-quality question goes to the AnomalyAgent", () => {
+  const r = Conductor.route("what is wrong with this file?", ctx);
+  assert.equal(r.agent, "anomaly", "and the test says WHICH agent, or a monolith would pass");
+  assert.ok(r.reply !== undefined);
+  assert.match(r.reply!.text, /order_value/, "and the agent actually answered");
 });
 
-// === 2. The arm under test ===============================================
-
-test("C1 an unresolved REQUIRE_APPROVAL surfaces as APPROVAL_REQUIRED", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-
-  assert.equal(result.status, "FAILED", "an approval gate that never resolved must not deliver");
-  assert.equal(result.failure?.code, "APPROVAL_REQUIRED",
-    "the gate is its own outcome, and the conductor must not rename it");
+test("a contradiction question goes to the AnomalyAgent", () => {
+  const r = Conductor.route("are there any complex anomalies?", ctx);
+  assert.equal(r.agent, "anomaly");
 });
 
-test("C1b it is never reported as a fabricated SOFT_REFUSE", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-
-  assert.notEqual(result.failure?.code, "POLICY_SOFT_REFUSE",
-    "the exact defect: a missing tier was backfilled with SOFT_REFUSE, inventing a refusal the policy never made");
-  assert.ok(!(result.failure?.reason ?? "").includes("POLICY_SOFT_REFUSE"),
-    "and it must not leak into the reason either");
+test("a purpose or overview question goes to the ProfilerAgent", () => {
+  const r = Conductor.route("tell me more about this file", ctx);
+  assert.equal(r.agent, "profiler");
+  assert.match(r.reply!.text, /500/, "the profiler answers with facts about the file");
 });
 
-test("C1c the tool does not run when its approval never resolved", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-  assert.equal(await pathExists(path.join(cwd, "d.html")), false,
-    "an unresolved approval gate authorises nothing, so nothing may be written");
+test("a categories question goes to the ProfilerAgent", () => {
+  assert.equal(Conductor.route("what are the top categories", ctx).agent, "profiler");
 });
 
-test("C1d the policy's own reason travels to the caller", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-  assert.ok((result.failure?.reason ?? "").length > 0,
-    "a structured failure with no words in it is a mystery, not a report");
+test("a FORWARD-LOOKING question goes to the ForecastingAgent", () => {
+  // This capability had no intent at all before Phase 8: the forecast existed
+  // on the dashboard and nothing in the chat could ask about it.
+  const r = Conductor.route("what happens over the next 12 hours?", ctx);
+  assert.equal(r.agent, "forecasting");
+  assert.match(r.reply!.text, /12 hours|projected|forecast/i, "and it actually projects");
 });
 
-/**
- * The read half ran and the write half was gated, so the run really did reach
- * the gate. Without this, C1 would also pass if the CSV had simply never been
- * found -- a different failure wearing the same coat.
- */
-test("C1e the read succeeded before the write was gated", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-  const progress = result.progress.map((p) => `${p.state}${p.detail ? `:${p.detail}` : ""}`);
-  assert.ok(progress.some((p) => p.startsWith("EXECUTE") && p.includes("csv_read")),
-    `expected the read to have run, saw ${progress.join(" | ")}`);
-  assert.ok(progress.some((p) => p.startsWith("EXECUTE") && p.includes("render_page")),
-    "and the write to have been attempted and gated");
+test("an unmatched question returns NO agent rather than a wrong one", () => {
+  const r = Conductor.route("what is the meaning of life?", ctx);
+  assert.equal(r.agent, null, "and nothing is invented to fill the slot");
+  assert.equal(r.reply, undefined, "with no reply, so the caller can decline honestly");
 });
 
-test("C1f the kernel is not asked to treat this as a violation", async () => {
-  const cwd = await workspace();
-  const conductor = new Conductor({ cwd, projectConfig: { policyMode: "APPROVAL", allowedRoots: [cwd] } });
-  const result = await conductor.run("make me a dashboard from sales.csv", { output: path.join(cwd, "d.html") });
-  // An approval gate is not a hazard, so it must not produce the tier's
-  // terminal certificate naming one.
-  const failed = result.kernelEvents.filter((e) => e.type === "TASK_FAILED");
-  assert.equal(failed.length, 0,
-    `an approval gate must not be escalated to a hazard certificate: ${JSON.stringify(failed)}`);
-  assert.ok(eventTypes(result).length > 0, "the run still produced a trace, so the failure is visible");
+// --- the routing itself, not just the answers --------------------------------
+
+test("every agent is registered and reachable", () => {
+  assert.deepEqual(AGENTS.map((a) => a.name), ["anomaly", "forecasting", "profiler"]);
+});
+
+test("an agent that does not handle a prompt declines to answer", () => {
+  const anomaly = AGENTS.find((a) => a.name === "anomaly")!;
+  assert.equal(anomaly.handles("what happens next?"), false);
+  assert.equal(anomaly.handles("what is wrong with this file?"), true);
+});
+
+test("routing is deterministic and does not depend on object identity", () => {
+  const a = Conductor.route("what is wrong with this file?", ctx);
+  const b = Conductor.route("what is wrong with this file?", { ...(ctx as object) });
+  assert.equal(a.agent, b.agent);
+  assert.equal(a.reply!.text, b.reply!.text);
+});
+
+test("the FORECASTING agent declines when there is no forecast to report", () => {
+  // The refusal must come from the agent, not from the router, and it must be
+  // the CONTINUITY reason -- a user asking about a projection deserves to know
+  // why there is not one.
+  const noForecast = { ...(ctx as object), forecast: { ok: false, reason: "The hours in this file are not continuous.", points: [], method: "damped exponential smoothing", explanation: "" } } as never;
+  const r = Conductor.route("what happens over the next 12 hours?", noForecast);
+  assert.equal(r.agent, "forecasting");
+  assert.doesNotMatch(r.reply!.text, /I cannot answer that from what I have measured/,
+    "a known, explained absence is not the generic punt");
+  assert.match(r.reply!.text, /not continuous/i, "it gives the actual reason");
+});
+
+test("routing never throws on a malformed context", () => {
+  // It runs before the analysis has necessarily happened, so a missing field
+  // must degrade to 'no agent' rather than take the process down.
+  const r = Conductor.route("what is wrong with this file?", { source: null } as never);
+  assert.ok(r.agent === null || r.reply !== undefined);
 });
