@@ -422,6 +422,53 @@ var EXAMPLES = function () {
 };
 
 /**
+ * RE-READ THE ANALYSIS, so the charts describe the file as it now reads.
+ *
+ * The dashboard document IS the data carrier: it is generated from the same
+ * analysis the server just regenerated. Re-fetching it and re-reading its JSON
+ * block means the charts are drawn from exactly the payload a first load would
+ * have produced, rather than from a second serialisation of the same analysis
+ * that could quietly drift from the first.
+ *
+ * 'Object.assign(D, ...)' rather than a second variable, and that is the whole
+ * point. Every chart and every table reads 'D.ranking' and 'D.timeline'; a
+ * fresh object consulted only by the chat would update the panel and leave the
+ * pictures stale, which is precisely the bug this function exists to remove.
+ *
+ * A FAILURE IS REPORTED, never swallowed. The dangerous version of this feature
+ * is the one that appears to work: the correction is saved, the panel says so,
+ * the re-read fails, and the user is left looking at charts that no longer
+ * describe their file while believing the change took. They would have to guess.
+ */
+function refreshFromServer(setVersion, reportFailure) {
+  if (!D.source) return;
+  fetch("/api/dashboard?path=" + encodeURIComponent(D.source))
+    .then(function (r) {
+      if (!r.ok) throw new Error("the server answered " + r.status);
+      return r.text();
+    })
+    .then(function (html) {
+      var open = html.indexOf('id="' + DATA_ID + '"');
+      if (open < 0) throw new Error("the refreshed page carried no data block");
+      var from = html.indexOf(">", open) + 1;
+      var to = html.indexOf("<\/script>", from);
+      if (to < 0) throw new Error("the refreshed data block was not closed");
+      // The SAME escaping as the server's embedJson, so the text round-trips.
+      var next = JSON.parse(html.slice(from, to)
+        .replace(/\\u003c/g, "<").replace(/\\u003e/g, ">").replace(/\\u0026/g, "&"));
+      Object.assign(D, next);
+      setVersion(function (v) { return v + 1; });
+    })
+    .catch(function (error) {
+      reportFailure(
+        "Your correction was saved, but the charts could not refresh (" +
+        (error && error.message ? error.message : "unknown error") +
+        "). They are still showing the previous reading of this file. Reload to see the new one."
+      );
+    });
+}
+
+/**
  * THE CONVERSATION. One sentence in, one honest answer out.
  *
  * Kept OUT of the base app on purpose, because it is absent from a standalone
@@ -483,6 +530,9 @@ function ChatPanel() {
       // keeps their place in a report they are part way through reading.
       setLearned(fb.roles || {});
       say("engine", fb.reason || (parsed.column + " is now the " + parsed.role), true);
+      refreshFromServer(setVersion, function (why) {
+        say("engine", why, false);
+      });
     }).catch(function (error) {
       setBusy(false);
       say("engine", "the server did not answer: " + error.message, false);
@@ -542,6 +592,8 @@ function ChatPanel() {
 const APP_SOURCE = String.raw`
 var D = JSON.parse(document.getElementById("__DATA_ID__").textContent);
 var SEV = ["critical", "warning", "info"];
+// The id of this page's own data block, for the post-correction re-read.
+var DATA_ID = "__DATA_ID__";
 var LABEL = { critical: "Critical", warning: "Warning", info: "Info" };
 
 function esc(t) {
@@ -591,16 +643,30 @@ function num(v) {
  * triple, and the only symptom is a chart that quietly gets fatter and darker
  * the more you use the page. The teardown is the whole fix.
  */
-function useChart(draw) {
+function useChart(draw, version) {
   var ref = React.useRef(null);
   React.useEffect(function () {
     // Feature-detect, do not assume. See the note above.
     if (typeof Chart === "undefined" || ref.current === null) return;
     var chart = new Chart(ref.current.getContext("2d"), draw());
     return function () { chart.destroy(); };
-    // Deliberately empty: the chart depends on the DATA, not on the render
-    // count. Re-running this on every render is exactly the stacking bug.
-  }, []);
+    // \u2757 ONE DEPENDENCY, AND IT IS THE WHOLE ARGUMENT FOR IT. \u2757
+    //
+    // This list was empty on purpose: recreating the chart on every render is
+    // the stacking bug -- each one leaves another drawing on the same canvas.
+    //
+    // But an empty list also means the chart keeps the canvas it was born with,
+    // so a correction that re-reads the analysis repaints NOTHING. The user
+    // confirms their column is fixed, the panel updates, and the bar chart goes
+    // on categorising by the old column -- which, for everything they can see,
+    // is true.
+    //
+    // So the list holds 'version', which the chat bumps exactly once per
+    // successful correction. Ordinary re-renders (a filter, a disclosure, a
+    // severity change) do not change it, so the no-stacking guarantee survives;
+    // a real new analysis does, so the chart repaints. The teardown above is
+    // what stops the old chart being left underneath the new one.
+  }, [version]);
   return ref;
 }
 
@@ -610,7 +676,7 @@ function ChartNote(props) {
     props.children || "The charting library could not be loaded, so these are shown as tables below. Everything else on this page works.");
 }
 
-function BarChart() {
+function BarChart(props) {
   var points = D.ranking.slice(0, D.maxDepth);
   var ref = useChart(function () {
     return {
@@ -645,12 +711,12 @@ function BarChart() {
         scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
       }
     };
-  });
+  }, props.version);
   return React.createElement("div", { className: "canvasbox" },
     React.createElement("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
 }
 
-function LineChart() {
+function LineChart(props) {
   var hours = D.timeline;
   var ref = useChart(function () {
     return {
@@ -700,7 +766,7 @@ function LineChart() {
         scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
       }
     };
-  });
+  }, props.version);
   return React.createElement("div", { className: "canvasbox" },
     React.createElement("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
 }
@@ -782,6 +848,9 @@ function App() {
   var deep = sDeep[0], setDeep = sDeep[1];
   var sShowAll = React.useState(false);
   var showAll = sShowAll[0], setShowAll = sShowAll[1];
+  // Bumped by the chat after a correction re-reads the analysis. See useChart.
+  var sVersion = React.useState(0);
+  var version = sVersion[0], setVersion = sVersion[1];
 
   var depth = deep ? D.maxDepth : D.defaultDepth;
   var shown = D.anomalies.filter(function (a) { return sev === "all" || a.severity === sev; });
@@ -874,7 +943,7 @@ function App() {
             D.ranking.length === 0
               ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
                   "No categorical column in this file, so there is nothing to rank.")
-              : h(BarChart)
+              : h(BarChart, { version: version })
           ),
           h("section", { className: "rounded-xl border border-slate-200 bg-white p-4" },
             h("h2", { className: "text-sm font-semibold text-slate-900" }, "Rows by hour"),
@@ -884,7 +953,7 @@ function App() {
             D.timeline.length === 0
               ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
                   "No readable timestamps, so there is no day to plot.")
-              : h(LineChart)
+              : h(LineChart, { version: version })
           )
         ),
 

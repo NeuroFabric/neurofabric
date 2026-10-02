@@ -120,7 +120,7 @@ test("the summary numbers lead, so the file is characterised in one glance", () 
   assert.match(src, /"Spike hours"/, "and the engine's own spike verdict");
 
   const statAt = src.indexOf("Rows read");
-  const chartAt = src.indexOf("h(BarChart)");
+  const chartAt = src.indexOf("BarChart, { version");
   assert.ok(statAt > 0 && chartAt > 0, "both the stat row and the bar chart must exist");
   assert.ok(statAt < chartAt, "the headline numbers come before the charts");
 });
