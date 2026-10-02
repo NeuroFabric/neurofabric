@@ -3,7 +3,9 @@ import path from "node:path";
 
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
+import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { parseCsv, csvRead } from "../conductor/capabilities.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
 
@@ -47,6 +49,23 @@ import type { CsvReadResult } from "../conductor/capabilities.ts";
  *   - escapes nothing itself: the report is returned as data, and the page
  *     escapes before it renders (see `page.ts`).
  */
+
+/**
+ * What the title helper falls back to before an analysis exists.
+ *
+ * A `Purpose` of "unknown" is the honest default, and it is used because
+ * some call sites need a title BEFORE the kernel has run: the file name is
+ * known and nothing else is. Building a Purpose-shaped value rather than
+ * passing undefined keeps `titleFor` total, because a helper that can be
+ * called in the wrong order is a helper that eventually will be.
+ */
+const UNKNOWN_PURPOSE: Purpose = {
+  kind: "unknown",
+  statement: "This file has not been read yet.",
+  confidence: "none",
+  evidence: [],
+  columns: [],
+};
 
 export interface WedgeOptions {
   /** The data workspace. This is the ONLY place a file may be read from. */
@@ -161,6 +180,15 @@ function toResponse(result: ConductorResult): Record<string, unknown> {
       source: result.report.schema.source,
       learnedRoles: result.report.schema.learnedRoles,
     },
+    /**
+     * WHAT THE FILE IS, and how sure the engine is.
+     *
+     * Carried in the response rather than left inside the analysis because it is
+     * the first thing the interface has to say. It travels with its `evidence`
+     * and its `confidence` so a client that renders it is showing the engine's
+     * reasoning and its uncertainty, not a bare label it can present as fact.
+     */
+    purpose: result.report?.analysis.purpose,
     kernelEvents: result.kernelEvents,
     progress: result.progress,
   };
@@ -171,6 +199,120 @@ function statusFor(result: ConductorResult): number {
   if (result.status === "DELIVERED") return 200;
   const tier = result.failure?.kernelReasonCode;
   return tier === undefined ? 400 : 403;
+}
+
+/**
+ * A FILENAME SAFE TO PUT IN A HEADER.
+ *
+ * The basename is user data -- it came off somebody's disk -- and it is about to
+ * be interpolated into a quoted header parameter. A name carrying a quote, a
+ * newline or a backslash could terminate the filename early or split the header,
+ * which is a response-splitting primitive wearing an innocent hat. Anything
+ * outside a conservative set is replaced, so the value stays recognisable
+ * without being able to escape its own quotes.
+ */
+function headerSafeName(target: string): string {
+  const base = path.basename(target).replace(/\\.[^.]+$/, "") || "analysis";
+  const safe = base.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+|-+$/g, "");
+  return `${(safe === "" ? "analysis" : safe)}-analysis.html`;
+}
+
+/**
+ * BUILD THE EXPORT THROUGH THE STANDALONE GENERATOR.
+ *
+ * Note what is NOT passed: no `live`. That single omission is the whole safety
+ * argument for this endpoint -- it produces a document with
+ * `connect-src 'none'` and no composer, because the standalone page has no
+ * endpoints to talk to and does not pretend otherwise.
+ *
+ * The transcript is rendered into the greeting's slot so the export OPENS with
+ * what was discussed, rather than burying a conversation under a chart. Every
+ * turn is escaped with the same function the whole page uses, because the text
+ * came from a browser and the reader's browser is what parses it.
+ */
+async function toStandaloneExport(
+  analysis: BottleneckAnalysis,
+  target: string,
+  learned: Readonly<Record<string, string>>,
+  thread: readonly { role: string; text: string }[],
+): Promise<string> {
+  // Imported lazily, exactly as the dashboard route does. The module pulls in
+  // the whole dashboard template, and this route is not on the hot path.
+  const { toReactDashboard } = await import("./react-report.ts");
+  return toReactDashboard(analysis, {
+    title: `Exported analysis: ${path.basename(target)}`,
+    // PROVENANCE WITHOUT LIVENESS. The export names the file it describes so the
+    // recipient can see where the numbers came from. It deliberately does NOT
+    // pass `live`, which is the single omission that makes this artifact safe to
+    // email: no composer, no endpoint, `connect-src 'none'`. Naming a file must
+    // never be the thing that turns an offline document into a live one.
+    sourceName: target,
+    // The conversation becomes the opening of the export. It is rendered as
+    // plain escaped text -- never as markup -- because this file is going to be
+    // opened by somebody with no relationship to the workspace it came from.
+    learned,
+    // Narrowed to the union the payload declares. The filter above has
+    // already rejected anything that is not one of the two roles, but the type
+    // cannot see that, and widening it back to string would be worse.
+    transcript: thread.map((turn) => ({
+      role: turn.role === "user" ? "user" : "agent",
+      text: turn.text,
+      widgets: [],
+      suggestions: [],
+    })),
+  });
+}
+
+/**
+ * The findings, worst first, in the shape the conversation router expects.
+ *
+ * One projection so `/api/chat` and the dashboard's embedded greeting cannot
+ * disagree about what the findings ARE -- a conversation whose opening message
+ * and its answer to "what is wrong with this file" describe different data is
+ * worse than no conversation.
+ */
+function anomaliesFor(analysis: BottleneckAnalysis): {
+  column: string; severity: "critical" | "warning" | "info"; kind: string; detail: string; factor: number | null;
+}[] {
+  const byName = new Map(analysis.numerical.columns.map((c) => [c.column, c]));
+  const out: {
+    column: string; severity: "critical" | "warning" | "info"; kind: string; detail: string; factor: number | null;
+  }[] = [];
+  for (const health of analysis.health.columns) {
+    const stat = byName.get(health.column);
+    const factor = (value: number | null, fence: number | null): number | null => {
+      if (fence === null || fence === 0 || value === null) return null;
+      const ratio = Math.abs(value / fence);
+      return Number.isFinite(ratio) ? ratio : null;
+    };
+    if (health.outliers > 0 && health.worstValue !== null) {
+      out.push({
+        column: health.column, severity: "critical", kind: "extreme value",
+        detail: `${Math.abs(health.worstValue).toLocaleString("en-US")} against a fence of ${Math.round(health.fence ?? 0).toLocaleString("en-US")}`,
+        factor: factor(health.worstValue, health.fence),
+      });
+    } else if (stat?.outliers !== undefined && stat.outliers > 0 && stat.outlierMax !== null) {
+      out.push({
+        column: health.column, severity: "warning", kind: "marginal value",
+        detail: `${stat.outliers} value(s) past the 1.5x fence, worst ${stat.outlierMax.toLocaleString("en-US")}`,
+        factor: factor(stat.outlierMax, stat.fenceExtremeUpper ?? null),
+      });
+    }
+    if (health.dirty > 0) {
+      out.push({
+        column: health.column, severity: "warning", kind: "type mismatch",
+        detail: `${health.dirty} cell(s) hold something that is not a number${health.examples.length > 0 ? `, e.g. ${health.examples.join(", ")}` : ""}`,
+        factor: null,
+      });
+    }
+    if (health.empty > 0) {
+      out.push({
+        column: health.column, severity: "info", kind: "missing values",
+        detail: `${health.empty} empty cell(s)`, factor: null,
+      });
+    }
+  }
+  return out;
 }
 
 export function createWedgeServer(options: WedgeOptions): Server {
@@ -247,16 +389,28 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           if (result.status !== "DELIVERED" || result.report === undefined) {
             sendJson(response, statusFor(result), toResponse(result));
             return;
           }
 
-          const { toReactDashboard } = await import("./react-report.ts");
+          const { toReactDashboard, dashboardCsp } = await import("./react-report.ts");
+          // The SAME function that builds the document's meta policy, so the
+          // header and the meta tag cannot disagree. See dashboardCsp().
+          const DASHBOARD_CSP = dashboardCsp(true);
           const html = toReactDashboard(result.report.analysis, {
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // The analysis EXISTS here, unlike at the `conductor.run` call above,
+            // so this is the one site where the title can carry the file's actual
+            // purpose rather than just its name.
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: result.report.analysis.purpose }),
             // The one opt-in that widens the page. It is what lets the chat
             // reach /api/feedback, and it is scoped to this route alone.
             live: { path: target },
@@ -266,8 +420,25 @@ export function createWedgeServer(options: WedgeOptions): Server {
             "content-type": "text/html; charset=utf-8",
             "content-length": Buffer.byteLength(html),
             "cache-control": "no-store",
-            // The page declares its own policy in a meta tag; these headers are
-            // the ones that apply to the document itself.
+            // THE POLICY IS SENT AS A HEADER, NOT ONLY AS A META TAG.
+            //
+            // The generated document has carried its own <meta http-equiv> policy
+            // since D-033, and a header is strictly better for three reasons. A
+            // meta policy is only honoured if it appears before any resource the
+            // page loads, so a future edit that moves it down the document
+            // silently disarms it. It cannot be seen by anything inspecting a
+            // response. And it cannot be tested from the server side -- which is
+            // how a dashboard spent a release failing to draw its charts.
+            //
+            // The value is identical to the meta tag's, and a test asserts the
+            // two agree, because a header and a meta tag that drift is a page
+            // whose real policy is whichever one the author forgot about.
+            //
+            // The CDN origins are named EXPLICITLY. There is no wildcard and no
+            // 'unsafe-eval': the charting library, React and Tailwind are three
+            // known files, and permitting anything wider would grant every
+            // script on the internet the ability to rewrite this page.
+            "content-security-policy": DASHBOARD_CSP,
             "x-content-type-options": "nosniff",
             "referrer-policy": "no-referrer",
           });
@@ -317,9 +488,224 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           sendJson(response, statusFor(result), toResponse(result));
+          return;
+        }
+
+        if (request.method === "POST" && url.pathname === "/api/export") {
+          // ONE FILE, SOMEONE ELSE CAN OPEN.
+          //
+          // A POST, not the GET the shape of this feature suggested, and the
+          // reason is not a preference: the CONVERSATION lives in the browser's
+          // React state. A GET can carry a path; it cannot carry the transcript
+          // the user is looking at, and an export that silently omitted the
+          // conversation would omit the one thing this feature exists to share.
+          //
+          // So the browser posts its thread and the SERVER renders. That also
+          // avoids a second implementation of "what an export is" living in the
+          // page -- which is how this product ended up with a chart that 404ed
+          // and a chat that was dead markup in the browser.
+          //
+          // THE ARTIFACT IS THE STANDALONE ONE. No 'live' option, so it carries
+          // connect-src 'none' and NO COMPOSER. An export gets emailed and opened
+          // by people with no server: a chat widget inside it would be a visible
+          // control wired to endpoints that do not exist, failing silently and
+          // reading as a broken product. export.test.ts asserts it.
+          const raw = await readBody(request);
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "the request body is not valid JSON" },
+            });
+            return;
+          }
+          const body = (parsed as { path?: unknown; thread?: unknown } | null);
+          const target = body?.path;
+          if (typeof target !== "string" || target.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no file path was supplied, so there is nothing to export" },
+            });
+            return;
+          }
+
+          // The transcript is RENDERED AS TEXT, never trusted as markup. It
+          // originates in a browser that typed it, but the recipient's browser is
+          // what parses it, and the export may well be opened years later by
+          // someone who never met the workspace boundary above.
+          const thread: { role: string; text: string }[] = [];
+          if (Array.isArray(body?.thread)) {
+            for (const turn of body!.thread as unknown[]) {
+              const t = turn as { role?: unknown; text?: unknown };
+              if (t && typeof t.text === "string" && (t.role === "agent" || t.role === "user")) {
+                thread.push({ role: t.role, text: t.text.slice(0, 4000) });
+              }
+            }
+            if (thread.length > 200) thread.length = 200;
+          }
+
+          // An export endpoint that reads an arbitrary path is an exfiltration
+          // endpoint with a download header on it. Same kernel function, same
+          // refusal, as every other route.
+          const resolvedExport = resolveWithinRoot(cwd, target);
+          if (!resolvedExport.allowed) {
+            sendJson(response, 403, {
+              status: "FAILED",
+              failure: {
+                code: "PATH_OUTSIDE_WORKSPACE",
+                reason: `path boundary violation: ${resolvedExport.reason ?? "the file is outside the workspace"}`,
+                kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+              },
+            });
+            return;
+          }
+
+          const csvForExport = await readCsvFor(resolvedExport.resolvedPath as string);
+          if (csvForExport === undefined) {
+            // NOT exported as an empty document. An empty export reads to the
+            // recipient as "your file was clean", which is the precise outcome
+            // this product exists not to produce.
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: `the file ${path.basename(target)} could not be read` },
+            });
+            return;
+          }
+
+          const rowsForExport = csvForExport.rows.map((cells) =>
+            Object.fromEntries(csvForExport.headers.map((h, i) => [h, cells[i] ?? ""])));
+          const { resolveSchemaMemory: resolveForExport } = await import("../conductor/schema-memory.ts");
+          const schemaForExport = await resolveForExport({
+            cwd, headers: csvForExport.headers, rows: rowsForExport,
+            defaultsRoot: options.defaultsRoot ?? installRoot,
+          });
+          const analysisForExport = analyseBottlenecks(csvForExport, schemaForExport);
+
+          const { toReactDashboard } = await import("./react-report.ts");
+          const html = await toStandaloneExport(analysisForExport, target, schemaForExport?.roles ?? {}, thread);
+
+          response.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": Buffer.byteLength(html),
+            // A filename the recipient can recognise. The basename is escaped so
+            // a file called \" on disk cannot inject a quote into the header.
+            "content-disposition": `attachment; filename="${headerSafeName(target)}"`,
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(html);
+          return;
+        }
+
+        if (request.method === "POST" && url.pathname === "/api/chat") {
+          // ONE SENTENCE IN, ONE ANSWER OUT.
+          //
+          // The router lives HERE and not in the page, deliberately. The parser
+          // was serialised into the browser because it is one small pure
+          // function; the router is a module that imports the analysis types and
+          // the correction parser, and a copy of it in the page would be a second
+          // implementation that agrees until somebody edits one. That has already
+          // happened twice in this product -- a parser in two places, a title in
+          // four -- so the thing that decides what a sentence MEANS stays in one
+          // file, and the tests exercise it there.
+          //
+          // It is also, plainly, not a language model: it is a deterministic
+          // router over an analysis already computed. It declines rather than
+          // improvise, and an unanswerable question comes back with NO widget,
+          // because a widget is a number and there is no number to give.
+          const raw = await readBody(request);
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "the request body is not valid JSON" },
+            });
+            return;
+          }
+          const chat = (parsed as { path?: unknown; message?: unknown } | null);
+          const target = chat?.path;
+          const message = chat?.message;
+          if (typeof target !== "string" || target.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no file path was supplied" },
+            });
+            return;
+          }
+          if (typeof message !== "string") {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no question was supplied" },
+            });
+            return;
+          }
+
+          // The same kernel function every other route uses. A chat endpoint that
+          // reached a path by its own rules would be a second control plane, which
+          // is exactly what this server's own header says it must not have.
+          const resolvedChat = resolveWithinRoot(cwd, target);
+          if (!resolvedChat.allowed) {
+            sendJson(response, 403, {
+              status: "FAILED",
+              failure: {
+                code: "PATH_OUTSIDE_WORKSPACE",
+                reason: `path boundary violation: ${resolvedChat.reason ?? "the file is outside the workspace"}`,
+                kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+              },
+            });
+            return;
+          }
+
+          const csvForChat = await readCsvFor(resolvedChat.resolvedPath as string);
+          if (csvForChat === undefined) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: `the file ${path.basename(target)} could not be read` },
+            });
+            return;
+          }
+
+          const rowsForChat = csvForChat.rows.map((cells) =>
+            Object.fromEntries(csvForChat.headers.map((h, i) => [h, cells[i] ?? ""])));
+          const { resolveSchemaMemory } = await import("../conductor/schema-memory.ts");
+          const { replyTo } = await import("../conductor/conversation.ts");
+          const schemaForChat = await resolveSchemaMemory({
+            cwd, headers: csvForChat.headers, rows: rowsForChat,
+            defaultsRoot: options.defaultsRoot ?? installRoot,
+          });
+          const analysisForChat = analyseBottlenecks(csvForChat, schemaForChat);
+
+          sendJson(response, 200, {
+            status: "OK",
+            reply: replyTo({
+              source: target,
+              totalRows: analysisForChat.totalRows,
+              purpose: analysisForChat.purpose,
+              columns: analysisForChat.numerical.columns.map((c) => ({
+                name: c.column, mean: c.mean, min: c.min, max: c.max,
+                measured: c.measured, dirty: c.dirty, empty: c.empty,
+        // Buckets, so the agent can COUNT rather than only route.
+        histogram: c.histogram,
+              })),
+              anomalies: anomaliesFor(analysisForChat),
+              ranking: analysisForChat.categories.slice(0, 10).map((c) => ({ key: c.key, count: c.count })),
+              timeline: analysisForChat.hourly.hours.map((h) => ({
+                hour: h.key, count: h.count, share: h.share,
+                multiple: h.multiple, spike: h.isSpike, rule: h.rule,
+              })),
+              learned: schemaForChat?.roles ?? {},
+            }, message),
+          });
           return;
         }
 
@@ -416,7 +802,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             mode: "bottleneck",
             format: "markdown",
             output: path.join(cwd, "workspace", "bottleneck-report.md"),
-            title: `Bottleneck report: ${path.basename(target)}`,
+            // ONE TITLE, FROM THE ENGINE'S OWN READING OF THE FILE.
+            // titleFor names the FILE, which is always true; the purpose travels
+            // separately, in the greeting, as a hypothesis with its evidence.
+            title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           sendJson(response, statusFor(result), { ...toResponse(result), feedback: { reason: applied.reason, roles: applied.roles ?? {} } });
           return;

@@ -4,6 +4,7 @@ import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
 import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
+import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
 import { resolveSchemaMemory, type ResolvedSchema } from "./schema-memory.ts";
 import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
@@ -328,11 +329,20 @@ export class Conductor {
       this.emit("EXECUTE", "no stored schema matched; inferring from column names");
     }
     const analysis = analyseBottlenecks(csv, schema);
+    // ONE TITLE, COMPUTED ONCE, for the artifact and the returned Markdown.
+    //
+    // It used to be the string "Bottleneck report: <file>", written out at four
+    // call sites. It is a hypothesis about the file's shape, applied to every
+    // file including the sales exports and access logs where it was simply
+    // wrong. The title now names the FILE -- which is always true and never a
+    // guess -- and the purpose travels separately, in the greeting, where it is
+    // shown as a claim with its evidence attached.
+    const title = options.title ?? titleFor({ fileName: path.basename(input), purpose: analysis.purpose });
 
     this.emit("EXECUTE", "render_bottleneck_report");
     const written = await this.callTool("report-1", "render_bottleneck_report", {
       path: options.output ?? path.join(this.cwd, "workspace", "bottleneck-report.md"),
-      title: options.title ?? `Bottleneck report: ${path.basename(input)}`,
+      title,
       csv, workspaceCwd: this.cwd, defaultsRoot: this.options.defaultsRoot,
       format: options.format ?? "markdown",
     });
@@ -353,7 +363,7 @@ export class Conductor {
     // The Markdown is produced from the SAME analysis object the artifact was
     // rendered from, so the text in the response and the file on disk cannot
     // disagree about what was found.
-    const markdown = toBottleneckMarkdown(analysis, options.title ?? `Bottleneck report: ${path.basename(input)}`);
+    const markdown = toBottleneckMarkdown(analysis, title);
     return {
       status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
       report: { markdown, analysis, schema }, kernelEvents: taskEvents(), progress: this.progress,

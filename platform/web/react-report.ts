@@ -1,5 +1,8 @@
 import type { BottleneckAnalysis, ColumnHealth, NumericColumnStat } from "../conductor/bottlenecks.ts";
 import { synthesize } from "../conductor/synthesis.ts";
+import { greet, type Reply, type ConversationData } from "../conductor/conversation.ts";
+import { forecast, type Forecast } from "../conductor/forecasting.ts";
+import type { Purpose } from "../conductor/semantics.ts";
 import { parseCorrection } from "./chat-parse.ts";
 
 /**
@@ -97,8 +100,70 @@ const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
  * patch, for the same reason React is: a report about a production incident
  * must not change because somebody else published a package.
  */
+/**
+ * THE COMPOSER AND ITS OFFLINE REPLACEMENT, AS TEXT.
+ *
+ * Both are spliced into the browser source at generation time, so they must be
+ * strings rather than expressions: `h` is declared INSIDE the emitted source and
+ * does not exist in this module. Building them here also means an offline
+ * artifact does not merely HIDE the composer -- it does not contain it, which
+ * is what an export needs. An export gets emailed and opened by people with no
+ * server, so what the document contains matters as much as what it shows.
+ */
+const COMPOSER_SOURCE = String.raw`
+h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
+  h("form", {
+    className: "mx-auto max-w-3xl px-4 py-3 flex gap-2",
+    onSubmit: function (e) { e.preventDefault(); ask(); }
+  },
+    h("input", {
+      type: "text",
+      value: text,
+      placeholder: "Ask about this file, or say \u201ccol_1 is the duration\u201d",
+      "aria-label": "Ask a question, or correct a column",
+      onChange: function (e) { setText(e.target.value); }
+    }),
+    h("button", { type: "submit", disabled: busy }, busy ? "..." : "Ask")
+  )
+)
+`;
+
+const OFFLINE_SOURCE = String.raw`
+h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
+  h("p", { className: "mx-auto max-w-3xl px-4 py-3 text-xs text-slate-500" },
+    "This is a standalone export: it was generated as a file, not served, so it cannot be " +
+    "queried or take corrections. The conversation above is preserved; the analysis it refers " +
+    "to is fixed at export time.")
+)
+`;
+
 const CHART_VERSION = "4.4.1";
-const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.min.js`;
+/**
+ * THE FILENAME WAS WRONG FOR AN ENTIRE RELEASE, AND THE OWNER FOUND IT.
+ *
+ * This was `chart.umd.min.js`, which does NOT exist in Chart.js v4. It returns a
+ * 404. v4 ships ONE UMD bundle, `chart.umd.js`, and it is already minified --
+ * the `min` suffix is a v3 convention that was dropped when the package moved to
+ * a bundled build.
+ *
+ * The Owner saw "The charting library could not be loaded", which is this
+ * repository's own ChartNote fallback rendering because `typeof Chart` was
+ * undefined. Every test passed throughout, for the same reason the dashboard was
+ * invisible in the previous session: each asserted the page CONTAINS a pinned
+ * Chart.js reference, and a 404 is a perfectly well-formed reference.
+ *
+ * TWO LESSONS, both now tests rather than comments:
+ *   - A pinned CDN URL is only pinned if someone checks that it RESOLVES. No test
+ *     here makes a network call, so the guarantee is written down as the exact
+ *     filename with its provenance, and `chart-assets.test.ts` pins the shape.
+ *   - The Owner reported this as "the CSP blocked your charting CDN". The CSP
+ *     was innocent -- script-src already named https://unpkg.com, and the tag
+ *     carried the right origin. A wrong path and a blocked path look IDENTICAL
+ *     from inside the page: a global that never arrives. Diagnosing "the policy
+ *     is too tight" first is the natural move and it would have taken the fix in
+ *     the wrong direction, which is why the fallback now names both causes.
+ */
+const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.js`;
 
 /**
  * Tailwind's Play CDN, pinned for the same reason as everything else here.
@@ -149,6 +214,15 @@ export interface TimelinePoint {
 
 export interface DashboardData {
   readonly title: string;
+  /**
+   * WHAT THE FILE IS, carried so the conversation can open with it.
+   *
+   * The whole pivot hangs on this field: a chat-first interface has to say
+   * something the user does not already know, and "here is your file's
+   * statistics" is not that. It travels with its confidence so the greeting can
+   * hedge visibly rather than asserting a guess.
+   */
+  readonly purpose: Purpose;
   /** One sentence about the file as a whole. The synthesis engine's job. */
   readonly headline: string;
   readonly totalRows: number;
@@ -187,12 +261,59 @@ export interface DashboardData {
    */
   readonly timeline: readonly TimelinePoint[];
   /**
+   * THE FORECAST, or null when there was not enough continuous history to make
+   * one.
+   *
+   * Null is a real answer and the common one: projecting from a handful of
+   * hourly points is arithmetic, and a chart that drew a confident line through
+   * four points would be the single most misleading thing this product could
+   * render. The UI shows the REASON rather than quietly hiding the control.
+   */
+  readonly forecast: Forecast | null;
+  /**
+   * A REPLAYED CONVERSATION, when this document is an export.
+   *
+   * Absent on a live page, where the transcript is state the user is building.
+   * Present on an export, where it is the reason the document exists.
+   */
+  readonly transcript?: readonly {
+    readonly role: "agent" | "user";
+    readonly text: string;
+  }[];
+  /**
    * Mappings this checkout has LEARNED, as role -> column.
    *
    * Carried in the payload rather than fetched, so the panel renders on first
    * paint and the standalone artifact still shows what it already knows.
    */
   readonly learned: Readonly<Record<string, string>>;
+  /**
+   * THE OPENING MESSAGE, computed at GENERATION TIME by the router's own
+   * `greet`.
+   *
+   * Embedded rather than fetched so the conversation is on screen the instant
+   * the document loads, and so the sentence a user reads is the sentence this
+   * repository's tests assert on. A greeting assembled inside the page would be a
+   * second implementation of a claim about somebody's data -- which is how this
+   * product ended up with a parser in two places and a title in four.
+   */
+  readonly greeting: Reply;
+  /**
+   * TRUE only when this page is served from the origin that owns `/api/chat` and
+   * `/api/feedback`.
+   *
+   * The composer is gated on it, and that gate is a security property rather
+   * than a nicety. A standalone artifact is a file anybody can open; giving it a
+   * composer means a visible control wired to an endpoint that does not exist,
+   * which fails silently and reads as a broken product. It also means a network
+   * call in a document whose entire policy is `connect-src 'none'` -- a page that
+   * tries, and is refused by its own rules, the moment it opens.
+   *
+   * This regression was introduced by the chat-first pivot, which moved the
+   * composer from a live-only sidebar into the primary layout, and was caught by
+   * the standalone-page tests that the previous release had already written.
+   */
+  readonly live: boolean;
 }
 
 export interface DashboardOptions {
@@ -214,6 +335,38 @@ export interface DashboardOptions {
    * live page shows the archive as it stands BEFORE the user says anything.
    */
   readonly learned?: Readonly<Record<string, string>>;
+  /**
+   * THE FILE AN OFFLINE ARTIFACT CAME FROM.
+   *
+   * `live.path` is the live page's own file, and it is the right answer there. An
+   * export is generated through the STANDALONE path -- deliberately, with no
+   * `live` -- because that is what makes it carry `connect-src 'none'` and no
+   * composer. The side effect of that safety property was that the export's
+   * payload said `source: null`: a document whose whole purpose is to be sent to
+   * somebody could not name the file it described, and the re-read guard
+   * (`if (!D.source) return;`) had nothing to work with.
+   *
+   * So provenance is stated separately from liveness. Naming a file does not
+   * make a page live, and this option deliberately cannot: it feeds the payload
+   * field only, and grants no endpoint and no composer.
+   */
+  readonly sourceName?: string;
+  /**
+   * A PREVIOUS CONVERSATION, replayed into the transcript.
+   *
+   * Used only by the export endpoint, and the reason it exists is that an export
+   * which buried a conversation under a chart would omit the thing people share.
+   *
+   * Each turn is TEXT. It is rendered through the same escape-first function the
+   * rest of the page uses, and it is never trusted as markup -- it came from a
+   * browser and the reader's browser is what parses it.
+   */
+  readonly transcript?: readonly {
+    readonly role: "agent" | "user";
+    readonly text: string;
+    readonly widgets?: readonly unknown[];
+    readonly suggestions?: readonly string[];
+  }[];
 }
 
 function thousands(value: number): string {
@@ -343,7 +496,13 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
     maxDepth: MAX_DEPTH,
     defaultDepth: DEFAULT_DEPTH,
-    source: options.live?.path ?? null,
+    source: options.live?.path ?? options.sourceName ?? null,
+    live: options.live !== undefined,
+    // Computed ONCE, here, by the same pure function the tests exercise. The
+    // chart therefore draws the line this repository asserts on, rather than a
+    // second implementation living in the page -- the arrangement that has
+    // produced two of this product's worst incidents.
+    forecast: forecastFor(analysis),
     timeline: analysis.hourly.hours.map((h) => ({
       hour: h.key,
       count: h.count,
@@ -357,7 +516,72 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     // has to start from what the engine believes or the first correction looks
     // like it is starting from nothing.
     learned: options.learned ?? rolesToMap(analysis),
+    purpose: analysis.purpose,
+    // THE GREETING, from the router's own function. See DashboardData.greeting.
+    greeting: greet(toConversationData({
+      source: options.live?.path ?? options.sourceName ?? null,
+      totalRows: analysis.totalRows,
+      purpose: analysis.purpose,
+      columns: analysis.numerical.columns.map((c) => ({
+        name: c.column, mean: c.mean, min: c.min, max: c.max,
+        measured: c.measured, dirty: c.dirty, empty: c.empty,
+        // Buckets, so the agent can COUNT rather than only route.
+        histogram: c.histogram,
+      })),
+      anomalies,
+      ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
+      timeline: analysis.hourly.hours.map((h) => ({
+        hour: h.key, count: h.count, share: h.share,
+        multiple: h.multiple, spike: h.isSpike, rule: h.rule,
+      })),
+      learned: options.learned ?? rolesToMap(analysis),
+    })),
+    // A SUPPLIED TRANSCRIPT REPLACES the opening message, because an export is a
+    // conversation somebody had, and replacing it with a fresh greeting would put
+    // "What would you like to know?" on a document nobody can answer.
+    transcript: options.transcript,
   };
+}
+
+/**
+ * THE FORECAST, or null when the history cannot support one.
+ *
+ * A thin wrapper rather than an inline call so the "why not" is in ONE place.
+ * `forecast()` already refuses below twelve hourly points and across a gap, and
+ * it refuses for good reasons; repeating those reasons here would be a second
+ * copy that drifts. This adds only the decision about what the CHART does with
+ * a refusal: nothing is drawn, and the reason travels with the payload so the
+ * interface can say WHY instead of leaving a switch that mysteriously does
+ * nothing.
+ *
+ * NOTE ON THE HORIZON. Twelve hours is chosen because that is a shift, and a
+ * shift is the unit a person reading an operations log already thinks in. It is
+ * not tuned against any dataset, and no test in this repository asserts that
+ * twelve is the RIGHT number -- only that a forecast produced with it is
+ * internally consistent and honestly bounded.
+ */
+function forecastFor(analysis: BottleneckAnalysis): Forecast | null {
+  if (analysis.hourly.hours.length === 0) return null;
+  return forecast(analysis.hourly.hours.map((h) => ({
+    hour: h.key,
+    count: h.count,
+    share: h.share,
+    multiple: h.multiple,
+    spike: h.isSpike,
+    rule: h.rule,
+  })), { horizon: 12 });
+}
+
+/**
+ * THE SHAPE THE ROUTER AND THE PAGE AGREE ON.
+ * One projection, so the greeting computed here and the answers the server
+ * computes later are answers about the same object. Two projections would be two
+ * chances for a widget to disagree with itself -- and a chat where the opening
+ * message and the answer to "what is wrong with this file" describe different
+ * data is worse than no chat.
+ */
+export function toConversationData(input: ConversationData): ConversationData {
+  return input;
 }
 
 /**
@@ -378,7 +602,7 @@ function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
 
 
 /**
- * THE CHAT SOURCE, held separately so it can be spliced in ONLY for a live page.
+ * THE RE-READ HELPER, spliced in ONLY for a live page.
  *
  * Two constraints shaped this being its own constant rather than more lines of
  * APP_SOURCE:
@@ -393,34 +617,6 @@ function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
  *     generation time, instead of in the browser. Nothing below uses that form.
  */
 const CHAT_SOURCE = String.raw`
-
-/**
- * THE INVITATION, and the roles it lists.
- *
- * The chat failed for one reason above all others before this: a bare text box
- * invites a user who does not know the engine's vocabulary to invent some. The
- * parser REFUSES words it does not know, correctly -- "amount" is not a role --
- * so an unprimed user types a reasonable sentence, is refused, and concludes
- * the feature is broken.
- *
- * So the panel says what it accepts, and offers sentences that work. The roles
- * below are the parser's own list, duplicated here deliberately rather than read
- * from the module: this source is serialised for the browser and cannot import.
- * The chat tests assert the two agree, so a drift fails the build.
- */
-var EXAMPLES = function () {
-  return React.createElement("div", { className: "rounded-lg bg-slate-50 border border-slate-200 p-2.5" },
-    React.createElement("p", { className: "text-xs font-medium text-slate-700 mb-1" },
-      "Notice a wrong column? Tell me:"),
-    React.createElement("p", { className: "text-xs text-slate-500 leading-relaxed" },
-      "\u201ccol_1 is the duration\u201d"),
-    React.createElement("p", { className: "text-xs text-slate-500 leading-relaxed" },
-      "\u201calert_code should be the category\u201d"),
-    React.createElement("p", { className: "mt-1.5 text-[11px] text-slate-400 leading-relaxed" },
-      "Roles: category, time, source, duration, threshold, alias, status, message.")
-  );
-};
-
 /**
  * RE-READ THE ANALYSIS, so the charts describe the file as it now reads.
  *
@@ -442,7 +638,7 @@ var EXAMPLES = function () {
  */
 function refreshFromServer(setVersion, reportFailure) {
   if (!D.source) return;
-  fetch("/api/dashboard?path=" + encodeURIComponent(D.source))
+  fetch("__DASH_URL__?path=" + encodeURIComponent(D.source))
     .then(function (r) {
       if (!r.ok) throw new Error("the server answered " + r.status);
       return r.text();
@@ -468,116 +664,6 @@ function refreshFromServer(setVersion, reportFailure) {
     });
 }
 
-/**
- * THE CONVERSATION. One sentence in, one honest answer out.
- *
- * Kept OUT of the base app on purpose, because it is absent from a standalone
- * report. That file gets opened by people with no server behind it, and a chat
- * box that can only fail is worse than no chat box -- it reads as a broken
- * product rather than an absent feature.
- */
-function ChatPanel() {
-  var sText = React.useState("");
-  var sLog = React.useState([]);
-  var sBusy = React.useState(false);
-  var sLearned = React.useState(D.learned || {});
-  var text = sText[0], setText = sText[1];
-  var log = sLog[0], setLog = sLog[1];
-  var busy = sBusy[0], setBusy = sBusy[1];
-  var learned = sLearned[0], setLearned = sLearned[1];
-
-  function say(who, body, ok) {
-    setLog(function (l) { return l.concat([{ who: who, body: body, ok: ok }]); });
-  }
-
-  function send(event) {
-    if (event) event.preventDefault();
-    var sentence = String(text).trim();
-    if (sentence === "" || busy) return;
-    say("you", sentence, true);
-
-    var parsed = parseCorrection(sentence);
-    // A REFUSAL IS A COMPLETE ANSWER. Nothing leaves the page: a sentence the
-    // engine cannot read is not a correction, and posting it anyway would put
-    // an unvalidated mapping in front of the user dressed as a decision.
-    if (!parsed.ok) {
-      setText("");
-      say("engine", parsed.reason, false);
-      return;
-    }
-
-    setBusy(true);
-    // The body is a MAPPING, not the file. Three fields, and the tests hold it
-    // to three: this page has just read somebody's CSV, and a correction must
-    // never become a way to send it anywhere.
-    fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: D.source, column: parsed.column, role: parsed.role })
-    }).then(function (res) {
-      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
-    }).then(function (r) {
-      setBusy(false);
-      if (!r.ok) {
-        var failure = (r.body && r.body.failure) || {};
-        say("engine", failure.reason || "the correction was refused", false);
-        return;
-      }
-      var fb = r.body.feedback || {};
-      // THE REFRESH. The server has already re-profiled and regenerated the
-      // report; all that is left is to show the consequence. Replacing the
-      // learned map in state re-renders the panel WITHOUT a reload, so the user
-      // keeps their place in a report they are part way through reading.
-      setLearned(fb.roles || {});
-      say("engine", fb.reason || (parsed.column + " is now the " + parsed.role), true);
-      refreshFromServer(setVersion, function (why) {
-        say("engine", why, false);
-      });
-    }).catch(function (error) {
-      setBusy(false);
-      say("engine", "the server did not answer: " + error.message, false);
-    });
-  }
-
-  var keys = Object.keys(learned).sort();
-  return React.createElement("aside", { className: "chat w-80 shrink-0 sticky top-6 rounded-xl border border-slate-200 bg-white p-4", "aria-label": "Chat and feedback" },
-    React.createElement("h2", { className: "text-sm font-semibold" }, "Chat"),
-    React.createElement("p", { className: "mt-1 text-xs text-slate-500" },
-      "About " + esc(D.source) + ". Correct the engine in plain English and the report rebuilds itself."),
-    React.createElement("div", { className: "log my-3 max-h-72 overflow-y-auto space-y-2", role: "log" },
-      log.length === 0
-        ? h(EXAMPLES, null)
-        : log.map(function (m, i) {
-            return h("p", { key: i, className: "text-xs leading-relaxed " + (m.ok ? "text-slate-600" : "text-rose-700 bg-rose-50 rounded-md px-2 py-1") },
-              h("strong", { className: "font-semibold" }, m.who === "you" ? "You: " : "Engine: "),
-              esc(m.body));
-          })
-    ),
-    React.createElement("form", { className: "composer flex gap-2", onSubmit: send },
-      React.createElement("input", {
-        type: "text",
-        value: text,
-        placeholder: "col_1 is the duration",
-        className: "min-w-0 flex-1 rounded-lg border border-slate-300 px-2.5 py-2 text-sm",
-        "aria-label": "Describe the correction in plain English",
-        onChange: function (e) { setText(e.target.value); }
-      }),
-      React.createElement("button", {
-        type: "submit", disabled: busy,
-        className: "shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-      }, busy ? "..." : "Send")
-    ),
-    React.createElement("h3", { className: "mt-4 mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500" }, "Learned mappings"),
-    keys.length === 0
-      ? React.createElement("p", { className: "text-xs text-slate-400" }, "Nothing learned yet.")
-      : React.createElement("ul", { className: "learned" }, keys.map(function (k) {
-          return React.createElement("li", { key: k },
-            React.createElement("span", { className: "role" }, esc(k)),
-            React.createElement("span", { className: "arrow" }, "\u2192"),
-            React.createElement("span", { className: "colname" }, esc(learned[k])));
-        }))
-  );
-}
 `;
 
 /**
@@ -672,12 +758,19 @@ function useChart(draw, version) {
 
 function ChartNote(props) {
   if (typeof Chart !== "undefined") return null;
-  return React.createElement("p", { className: "empty chartoff" },
-    props.children || "The charting library could not be loaded, so these are shown as tables below. Everything else on this page works.");
+  return React.createElement("div", { className: "chartoff" },
+    React.createElement("p", { className: "font-semibold" },
+      "Charts unavailable — the numbers below are still exact."),
+    React.createElement("p", { className: "mt-1" },
+      "The charting library did not load. Two causes look identical from inside the browser and both were real here: " +
+      "the script was blocked by this page's Content-Security-Policy, or the CDN returned an error for that file. " +
+      "Open the developer console and look for a CSP violation or a 404 on chart.umd.js."),
+    React.createElement("p", { className: "mt-1" },
+      props.children || "Every figure on this page is available as a table underneath."));
 }
 
 function BarChart(props) {
-  var points = D.ranking.slice(0, D.maxDepth);
+  var points = (props.payload && props.payload.points) || [];
   var ref = useChart(function () {
     return {
       type: "bar",
@@ -698,10 +791,9 @@ function BarChart(props) {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              // The category AND the count. A bar chart whose tooltip says only
-              // "40" has told the reader nothing they could not see.
               label: function (ctx) {
                 var p = points[ctx.dataIndex];
+                if (!p) return "";
                 return p.count.toLocaleString("en-US") + " rows, " +
                   Math.round((p.count / Math.max(1, D.totalRows)) * 100) + "% of the file";
               }
@@ -712,53 +804,131 @@ function BarChart(props) {
       }
     };
   }, props.version);
-  return React.createElement("div", { className: "canvasbox" },
-    React.createElement("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
+  return h("div", { className: "canvasbox" },
+    h("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
 }
 
 function LineChart(props) {
-  var hours = D.timeline;
+  var hours = (props.payload && props.payload.points) || [];
+  var fc = props.forecast || null;
+
+  // === THE PROJECTION IS APPENDED TO THE SAME AXIS, NOT DRAWN SEPARATELY ===
+  //
+  // The forecast continues the observed hours on one shared scale, which is what
+  // makes the interval band readable as a WIDENING RANGE rather than as a second
+  // chart. A separate panel would let the two scales disagree, and the reader
+  // would be comparing numbers they were never meant to compare.
+  var labels = hours.map(function (x) { return x.hour; });
+  var counts = hours.map(function (x) { return x.count; });
+  var datasets = [{
+    label: "Rows in the hour",
+    data: counts,
+    borderColor: "#3b5bdb",
+    backgroundColor: "rgba(59,91,219,0.12)",
+    fill: true,
+    tension: 0.25,
+    // The point colour carries the ENGINE'S verdict, not a visual guess.
+    pointRadius: hours.map(function (x) { return x.spike ? 6 : 3; }),
+    pointBackgroundColor: hours.map(function (x) { return x.spike ? "#d9480f" : "#3b5bdb"; })
+  }];
+
+  if (fc && fc.points && fc.points.length > 0) {
+    var predicted = fc.points;
+    // Pad the observed series with nulls so the projection starts exactly where
+    // the observations stop. Connecting the two is what makes it one timeline;
+    // a gap would read as two unrelated facts.
+    var pad = predicted.length;
+    var bridged = [];
+    for (var i = 0; i < pad; i += 1) {
+      bridged.push(i === 0 ? counts[counts.length - 1] : null);
+    }
+    for (var j = 0; j < predicted.length; j += 1) bridged.push(predicted[j].count);
+    labels = labels.concat(predicted.map(function (p) { return p.hour; }));
+    counts = counts.concat(bridged);
+
+    // THE BAND FIRST, so it is painted UNDER the projection line. Drawn after,
+    // its translucent fill would sit over the line and grey it out.
+    datasets.unshift({
+      label: "Forecast range",
+      data: hours.map(function () { return null; })
+        .concat(bridged.map(function (v) { return v === null ? null : v; }))
+        .map(function (v, k) { return v; }),
+      borderColor: "transparent",
+      backgroundColor: "rgba(217,72,15,0.14)",
+      fill: "-1",
+      pointRadius: 0,
+      tension: 0.25
+    });
+    // Replace the band's data with the interval upper/lower pair, which is what
+    // makes the fill a RANGE rather than a second line.
+    datasets[0].data = [];
+    var upper = [], lower = [];
+    for (var b = 0; b < bridged.length; b += 1) {
+      if (b < pad - 1) { upper.push(null); lower.push(null); continue; }
+      var pt = predicted[b - (pad - 1)];
+      upper.push(pt.upper); lower.push(pt.lower);
+    }
+    datasets[0].data = upper;
+    datasets[1] = {
+      label: "Forecast lower bound",
+      data: hours.map(function () { return null; }).concat(lower),
+      borderColor: "transparent",
+      backgroundColor: "rgba(217,72,15,0.14)",
+      fill: false,
+      pointRadius: 0,
+      tension: 0.25
+    };
+
+    datasets.push({
+      label: "Projected",
+      data: counts,
+      borderColor: "#d9480f",
+      backgroundColor: "rgba(217,72,15,0.10)",
+      // DASHED. This is the single most important property in the whole
+      // forecast: a solid line continuing past the last observation is
+      // indistinguishable from a measurement, and a reader has no way to check
+      // which is which.
+      borderDash: [6, 4],
+      fill: false,
+      tension: 0.25,
+      pointRadius: 3,
+      pointBackgroundColor: "#d9480f"
+    });
+  }
+
   var ref = useChart(function () {
     return {
       type: "line",
-      data: {
-        labels: hours.map(function (h) { return h.hour; }),
-        datasets: [{
-          label: "Rows in the hour",
-          data: hours.map(function (h) { return h.count; }),
-          borderColor: "#3b5bdb",
-          backgroundColor: "rgba(59,91,219,0.12)",
-          fill: true,
-          tension: 0.25,
-          // Point colour carries the ENGINE'S verdict, not a visual guess. A
-          // reader can see at a glance which peaks the engine called abnormal,
-          // and hovering says why.
-          pointRadius: hours.map(function (h) { return h.spike ? 6 : 3; }),
-          pointBackgroundColor: hours.map(function (h) { return h.spike ? "#d9480f" : "#3b5bdb"; })
-        }]
-      },
+      data: { labels: labels, datasets: datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
+          legend: { display: fc && fc.points && fc.points.length > 0 },
           tooltip: {
             callbacks: {
-              // THE POINT OF THE WHOLE EXERCISE: the exact count, the hour it
-              // belongs to, and whether the engine considered it abnormal.
-              // A spike you cannot interrogate is just a bump.
-              label: function (ctx) {
-                var h = hours[ctx.dataIndex];
-                if (!h) return "";
-                var lines = [h.count.toLocaleString("en-US") + " rows in this hour"];
-                if (h.multiple !== null && h.multiple !== undefined) {
-                  lines.push(h.multiple.toFixed(1) + "x the mean hour");
-                }
-                lines.push(h.spike ? ("Flagged as a spike. " + (h.rule || "")) : "Within the usual range");
-                return lines;
-              },
               title: function (items) {
-                var h = hours[items[0].dataIndex];
-                return h ? h.hour.replace("T", " ") + ":00" : "";
+                var l = labels[items[0].dataIndex];
+                return l ? l.replace("T", " ") + ":00" : "";
+              },
+              label: function (ctx) {
+                var l = labels[ctx.dataIndex];
+                var x = hours.filter(function (h) { return h.hour === l; })[0];
+                if (x) {
+                  var lines = [x.count.toLocaleString("en-US") + " rows in this hour"];
+                  if (x.multiple !== null && x.multiple !== undefined) lines.push(x.multiple.toFixed(1) + "x the mean hour");
+                  lines.push(x.spike ? ("Flagged as a spike. " + (x.rule || "")) : "Within the usual range");
+                  return lines;
+                }
+                var p = fc && fc.points ? fc.points.filter(function (q) { return q.hour === l; })[0] : null;
+                if (p) {
+                  return [
+                    "PROJECTED: about " + p.count.toLocaleString("en-US") + " rows",
+                    "range " + p.lower.toLocaleString("en-US") + " to " + p.upper.toLocaleString("en-US"),
+                    "from the observed trend, not a measurement"
+                  ];
+                }
+                return "";
               }
             }
           }
@@ -767,310 +937,360 @@ function LineChart(props) {
       }
     };
   }, props.version);
-  return React.createElement("div", { className: "canvasbox" },
-    React.createElement("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
+  return h("div", { className: "canvasbox" },
+    h("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
 }
 
-
-/** The ranking as a table. The chart is an enhancement; this is the fact. */
-function renderRankingTable(rank) {
-  return React.createElement("table", { className: "fallback" },
-    React.createElement("thead", null, React.createElement("tr", null,
-      React.createElement("th", null, "Category"),
-      React.createElement("th", null, "Rows"),
-      React.createElement("th", null, "Share")
-    )),
-    React.createElement("tbody", null, rank.map(function (r) {
-      return React.createElement("tr", { key: r.key },
-        React.createElement("td", null, esc(r.key)),
-        React.createElement("td", null, r.count.toLocaleString("en-US")),
-        React.createElement("td", null, Math.round((r.count / Math.max(1, D.totalRows)) * 100) + "%")
-      );
-    }))
+/* ---------------------------------------------------------------------------
+ * WIDGETS. Data in, elements out. The renderer owns every piece of markup,
+ * which is what keeps an untrusted column name from ever becoming an element.
+ * ------------------------------------------------------------------------- */
+function WidgetCard(props) {
+  return h("section", { className: "rounded-xl border border-slate-200 bg-white p-4 my-3" },
+    h("h3", { className: "text-sm font-semibold" }, esc(props.title)),
+    props.note ? h("p", { className: "text-xs text-slate-500 mt-0.5 mb-2" }, esc(props.note)) : null,
+    props.children
   );
 }
 
-/** The hours as a table, spikes marked. Never chart-only data. */
-function renderTimelineTable() {
-  return React.createElement("table", { className: "fallback" },
-    React.createElement("thead", null, React.createElement("tr", null,
-      React.createElement("th", null, "Hour"),
-      React.createElement("th", null, "Rows"),
-      React.createElement("th", null, "Vs mean"),
-      React.createElement("th", null, "Verdict")
-    )),
-    React.createElement("tbody", null, D.timeline.map(function (h) {
-      return React.createElement("tr", { key: h.hour, className: h.spike ? "critical" : "" },
-        React.createElement("td", null, esc(h.hour.replace("T", " ") + ":00")),
-        React.createElement("td", null, h.count.toLocaleString("en-US")),
-        React.createElement("td", null,
-          h.multiple === null || h.multiple === undefined ? "-" : h.multiple.toFixed(1) + "x"),
-        React.createElement("td", null, h.spike ? "Spike" : "Normal")
-      );
-    }))
-  );
-}
+function renderWidget(w, version) {
+  if (!w || !w.kind) return null;
+  var p = w.payload || {};
 
-/**
- * A small shorthand, so the tree below is readable. JSX would be nicer and needs
- * a compiler this artifact deliberately does not have.
- */
-var h = React.createElement;
+  if (w.kind === "chart-bar") {
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h(ChartNote),
+      (p.points || []).length === 0
+        ? h("p", { className: "text-sm text-slate-500" }, "Nothing to plot.")
+        : h(BarChart, { payload: p, version: version })
+    );
+  }
 
-/** A disclosure for the exact-but-long data. Charts first; tables on request. */
-function Disclosure(props) {
-  return h("details", { className: "group border border-slate-200 rounded-xl bg-white overflow-hidden" },
-    h("summary", {
-      className: "cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700 " +
-        "hover:bg-slate-50 flex items-center justify-between gap-3",
-    },
-      h("span", null, props.title),
-      h("span", { className: "text-xs font-normal text-slate-400 group-open:hidden" }, "Show"),
-      h("span", { className: "text-xs font-normal text-slate-400 hidden group-open:inline" }, "Hide")
-    ),
-    h("div", { className: "px-4 pb-4 pt-1 border-t border-slate-100" }, props.children)
-  );
-}
+  if (w.kind === "chart-line") {
+    // The forecast toggle lives here, beside the chart it changes, rather than
+    // in a toolbar. A control that alters one panel and sits in a different one
+    // is a control people stop finding.
+    var fc = D.forecast;
+    var sShow = React.useState(false);
+    var showForecast = sShow[0], setShowForecast = sShow[1];
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h(ChartNote),
+      (p.points || []).length === 0
+        ? h("p", { className: "text-sm text-slate-500" }, "Nothing to plot.")
+        : h(React.Fragment, null,
+            h(LineChart, { payload: p, version: version, forecast: showForecast ? fc : null }),
+            fc === null || fc === undefined
+              ? h("p", { className: "text-xs text-slate-400 mt-2" },
+                  "No forecast for this file: " + String((fc && fc.reason) || "there are no hourly readings."))
+              : h("div", { className: "mt-2 flex items-center gap-2" },
+                  h("input", {
+                    id: "forecast-toggle",
+                    type: "checkbox",
+                    checked: showForecast,
+                    onChange: function (e) { setShowForecast(e.target.checked); }
+                  }),
+                  h("label", { htmlFor: "forecast-toggle", className: "text-xs text-slate-600 cursor-pointer" },
+                    "Show forecast for the next " + (fc.points || []).length + " hours")
+                )
+          )
+    );
+  }
 
-/** A headline number. Four of them, so the file is summarised before it is listed. */
-function Stat(props) {
-  return h("div", { className: "rounded-xl border border-slate-200 bg-white px-4 py-3" },
-    h("div", { className: "text-xs uppercase tracking-wide text-slate-500" }, props.label),
-    h("div", { className: "mt-1 text-2xl font-semibold tabular-nums text-slate-900" }, props.value),
-    props.note ? h("div", { className: "mt-0.5 text-xs text-slate-500" }, props.note) : null
-  );
-}
+  if (w.kind === "histogram") {
+    var buckets = (p.buckets || []).filter(function (b) { return b.count > 0; });
+    var threshold = p.threshold;
+    var peak = buckets.reduce(function (m, b) { return b.count > (m ? m.count : -1) ? b : m; }, null);
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h("div", { className: "overflow-x-auto" },
+        h("table", { className: "w-full text-sm" },
+          h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Range"),
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Rows"),
+            h("th", { className: "py-1.5 font-medium" }, "Share")
+          )),
+          h("tbody", null, buckets.map(function (b) {
+            // The bars are a RANGE. Labelling one with a point value would be
+            // the same fabrication the resolver refuses in prose, so the label
+            // carries both ends and the width is relative to the peak bucket.
+            var share = peak === null ? 0 : Math.round((b.count / peak.count) * 100);
+            var past = threshold === undefined || threshold === null
+              ? false
+              : (threshold >= b.lo && threshold < b.hi) || b.lo >= threshold;
+            return h("tr", { key: b.lo + "-" + b.hi, className: "border-t border-slate-100" },
+              h("td", { className: "py-1.5 pr-3 font-medium tabular-nums" },
+                esc(b.lo + " – " + b.hi),
+                past ? h("span", { className: "ml-2 text-[10px] uppercase text-slate-400" }, "past") : null),
+              h("td", { className: "py-1.5 pr-3 tabular-nums" }, b.count.toLocaleString("en-US")),
+              h("td", { className: "py-1.5" },
+                h("div", { className: "h-2 rounded bg-slate-100 overflow-hidden" },
+                  h("div", {
+                    className: "h-full rounded " + (past ? "bg-orange-500" : "bg-slate-400"),
+                    style: { width: share + "%" }
+                  })))
+            );
+          }))
+        )),
+      h("p", { className: "text-xs text-slate-500 mt-2" },
+        "Each row is a range, not a single value — which is why a threshold inside one " +
+        "cannot be answered exactly.")
+    );
+  }
 
-function App() {
-  var sSev = React.useState("all");
-  var sev = sSev[0], setSev = sSev[1];
-  var sDeep = React.useState(false);
-  var deep = sDeep[0], setDeep = sDeep[1];
-  var sShowAll = React.useState(false);
-  var showAll = sShowAll[0], setShowAll = sShowAll[1];
-  // Bumped by the chat after a correction re-reads the analysis. See useChart.
-  var sVersion = React.useState(0);
-  var version = sVersion[0], setVersion = sVersion[1];
+  if (w.kind === "findings") {
+    var list = p.anomalies || [];
+    if (list.length === 0) {
+      return h(WidgetCard, { title: w.title },
+        h("p", { className: "text-sm text-slate-500" }, "Nothing to flag."));
+    }
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h("ul", { className: "divide-y divide-slate-100" }, list.map(function (a, i) {
+        return h("li", { key: a.column + a.kind + i, className: "flex items-start gap-3 py-2.5" },
+          h("span", { className: "pill " + a.severity }, LABEL[a.severity] || a.severity),
+          h("div", { className: "min-w-0" },
+            h("div", { className: "text-sm font-medium" }, esc(a.column)),
+            h("div", { className: "text-sm text-slate-600" },
+              esc(a.kind + ": " + a.detail) + why(a.factor))
+          )
+        );
+      }))
+    );
+  }
 
-  var depth = deep ? D.maxDepth : D.defaultDepth;
-  var shown = D.anomalies.filter(function (a) { return sev === "all" || a.severity === sev; });
-  var counts = {};
-  SEV.forEach(function (s) { counts[s] = D.anomalies.filter(function (a) { return a.severity === s; }).length; });
-  var rank = D.ranking.slice(0, depth);
-  var maxCount = rank.length ? rank[0].count : 1;
+  if (w.kind === "columns") {
+    var cols = p.columns || [];
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h("div", { className: "overflow-x-auto" },
+        h("table", { className: "w-full text-sm" },
+          h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Column"),
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Mean"),
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Min"),
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Max"),
+            h("th", { className: "py-1.5 font-medium" }, "Measured")
+          )),
+          h("tbody", null, cols.map(function (c) {
+            return h("tr", { key: c.name, className: "border-t border-slate-100" },
+              h("td", { className: "py-1.5 pr-3 font-medium" }, esc(c.name)),
+              h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.mean)),
+              h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.min)),
+              h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.max)),
+              h("td", { className: "py-1.5 tabular-nums" }, c.measured.toLocaleString("en-US"))
+            );
+          }))
+        ))
+    );
+  }
 
-  // THE TOP-N RULE, and why it is a constant rather than a slider.
-  //
-  // The Owner opened a database performance file and scrolled past a hundred
-  // rows of table before reaching anything. A ranking is a CLAIM about which
-  // rows matter, and a claim you have to scroll to find is not a claim. Five is
-  // the most a person reliably compares; beyond that the eye stops comparing
-  // and starts scanning. Everything past five is one click away, so nothing is
-  // hidden -- only demoted.
-  var TOP = 5;
-  var listed = showAll ? shown : shown.slice(0, TOP);
-
-  var spikes = D.timeline.filter(function (p) { return p.spike; });
-  var worst = D.timeline.reduce(function (acc, p) { return p.count > (acc ? acc.count : -1) ? p : acc; }, null);
-  var dirty = D.columns.reduce(function (n, c) { return n + c.dirty; }, 0);
-
-  return h("div", { className: "min-h-screen bg-slate-50 text-slate-900" },
-    h("div", { className: "mx-auto max-w-7xl px-4 sm:px-6 py-6 flex gap-6 items-start" },
-
-      // ======================= THE MAIN COLUMN =========================
-      h("main", { className: "flex-1 min-w-0" },
-
-        h("header", { className: "mb-5" },
-          h("h1", { className: "text-2xl font-semibold tracking-tight" }, esc(D.title)),
-          h("p", { className: "mt-1 text-slate-600" }, esc(D.headline)),
-          h("p", { className: "mt-1 text-sm text-slate-500" },
-            D.totalRows.toLocaleString("en-US") + " rows, " +
-            D.columns.length + " numeric columns, " + D.anomalies.length + " finding(s).")
-        ),
-
-        // ---- filters ----
-        h("div", { className: "flex flex-wrap items-center gap-3 mb-5" },
-          h("div", { className: "inline-flex rounded-lg border border-slate-200 bg-white p-0.5" },
-            ["all"].concat(SEV).map(function (s) {
-              return h("button", {
-                key: s,
-                id: s === "all" ? "severity-filter" : "severity-filter-" + s,
-                onClick: function (e) { setSev(s); },
-                className: "px-3 py-1.5 text-sm rounded-md transition " +
-                  (sev === s ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"),
-              }, s === "all" ? "All " + D.anomalies.length : LABEL[s] + " " + counts[s]);
+  if (w.kind === "mappings") {
+    var learned = p.learned || [];
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h("ul", { className: "text-sm space-y-1" },
+        learned.length === 0
+          ? h("li", { className: "text-slate-500" }, "Nothing confirmed yet — every reading is inferred.")
+          : learned.map(function (m) {
+              return h("li", { key: m[0] },
+                h("span", { className: "text-slate-500" }, esc(m[0])),
+                h("span", { className: "mx-2 text-slate-300" }, "\\u2192"),
+                h("span", { className: "font-medium" }, esc(m[1])));
             })
-          ),
-          h("label", { className: "inline-flex items-center gap-2 text-sm text-slate-600" },
-            h("input", {
-              id: "depth-toggle", type: "checkbox", checked: deep,
-              onChange: function (e) { setDeep(e.target.checked); },
-              className: "rounded border-slate-300"
-            }),
-            "Show all " + D.maxDepth + " categories"
+      )
+    );
+  }
+
+  if (w.kind === "capabilities") {
+    var caps = p.capabilities || [];
+    return h(WidgetCard, { title: w.title },
+      h("ul", { className: "text-sm space-y-1" },
+        caps.map(function (c) { return h("li", { key: c.ask }, esc(c.label)); }))
+    );
+  }
+
+  // An unknown kind renders as nothing rather than as a guess. A widget the
+  // renderer does not understand is a hole in the conversation, not a reason to
+  // invent something plausible.
+  return null;
+}
+
+/* ---------------------------------------------------------------------------
+ * THE TRANSCRIPT
+ * ------------------------------------------------------------------------- */
+function Message(props) {
+  var m = props.message;
+  var agent = m.role === "agent";
+  return h("div", { className: "flex " + (agent ? "justify-start" : "justify-end") + " mb-4" },
+    h("div", { className: agent ? "max-w-2xl" : "max-w-xl" },
+      agent
+        ? h("div", { className: "rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-4 py-3" },
+            h("p", { className: "text-sm leading-relaxed text-slate-800" }, esc(m.text)),
+            (m.widgets || []).length > 0
+              ? h("div", null, m.widgets.map(function (w, i) {
+                  return h("div", { key: i }, renderWidget(w, props.version));
+                }))
+              : null
           )
-        ),
-
-        // ---- the numbers, before anything else ----
-        h("div", { className: "grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6" },
-          h(Stat, { label: "Rows read", value: D.totalRows.toLocaleString("en-US") }),
-          h(Stat, {
-            label: "Findings", value: String(D.anomalies.length),
-            note: counts.critical + " critical"
-          }),
-          h(Stat, {
-            label: "Spike hours", value: String(spikes.length),
-            note: spikes.length ? "flagged by the engine" : "none flagged"
-          }),
-          h(Stat, {
-            label: "Type mismatches", value: String(dirty),
-            note: dirty ? "cells that are not numbers" : "none"
-          })
-        ),
-
-        // ======================= THE CHARTS, FIRST =======================
-        //
-        // ABOVE THE FOLD, BEFORE ANY TABLE. This ordering is the whole of
-        // Task 1: the Owner's first complaint was that the product showed them
-        // a hundred rows of text where a picture belonged. A dashboard whose
-        // answer is below its data is a data dump with decoration on top.
-        h("div", { className: "grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6" },
-          h("section", { className: "rounded-xl border border-slate-200 bg-white p-4" },
-            h("h2", { className: "text-sm font-semibold text-slate-900" }, "Record categories"),
-            h("p", { className: "text-xs text-slate-500 mt-0.5 mb-2" },
-              "How many rows fall in each category."),
-            h(ChartNote, null),
-            D.ranking.length === 0
-              ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
-                  "No categorical column in this file, so there is nothing to rank.")
-              : h(BarChart, { version: version })
-          ),
-          h("section", { className: "rounded-xl border border-slate-200 bg-white p-4" },
-            h("h2", { className: "text-sm font-semibold text-slate-900" }, "Rows by hour"),
-            h("p", { className: "text-xs text-slate-500 mt-0.5 mb-2" },
-              "Orange points are spikes the engine flagged against its own mean. Hover for the exact count."),
-            h(ChartNote, null),
-            D.timeline.length === 0
-              ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
-                  "No readable timestamps, so there is no day to plot.")
-              : h(LineChart, { version: version })
-          )
-        ),
-
-        // ---- findings: the answer, capped ----
-        h("section", { className: "mb-6" },
-          h("div", { className: "flex items-baseline justify-between mb-2" },
-            h("h2", { className: "text-sm font-semibold" }, "Findings"),
-            h("span", { className: "text-xs text-slate-500" },
-              shown.length + " of " + D.anomalies.length + " shown")
-          ),
-          listed.length === 0
-            ? h("div", { className: "rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500" },
-                D.anomalies.length === 0
-                  ? "Nothing to flag. This file is clean by the engine's own thresholds."
-                  : "No findings at this severity. Widen the filter to see the rest.")
-            : h("div", { className: "rounded-xl border border-slate-200 bg-white divide-y divide-slate-100 overflow-hidden" },
-                listed.map(function (a, i) {
-                  return h("div", { key: a.column + a.kind + i, className: "flex items-start gap-3 p-3" },
-                    h("span", { className: "pill " + a.severity }, LABEL[a.severity]),
-                    h("div", { className: "min-w-0" },
-                      h("div", { className: "text-sm font-medium" }, esc(a.column)),
-                      h("div", { className: "text-sm text-slate-600" },
-                        esc(a.kind + ": " + a.detail) + why(a.factor))
-                    )
-                  );
-                }),
-                shown.length > listed.length
-                  ? h("button", {
-                      onClick: function (e) { setShowAll(true); },
-                      className: "w-full p-3 text-sm text-slate-600 hover:bg-slate-50",
-                    }, "Show all " + shown.length + " findings")
-                  : null,
-                showAll && shown.length > TOP
-                  ? h("button", {
-                      onClick: function (e) { setShowAll(false); },
-                      className: "w-full p-3 text-sm text-slate-600 hover:bg-slate-50",
-                    }, "Show fewer")
-                  : null
-              )
-        ),
-
-        // ---- the exact data, on request ----
-        h("div", { className: "space-y-3" },
-          h(Disclosure, { title: "View raw data: " + D.columns.length + " columns" },
-            h("p", { className: "text-xs text-slate-500 py-2" },
-              "Every numeric column the engine measured. The charts above are a summary; this is the arithmetic."),
-            h("table", { className: "w-full text-sm" },
-              h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
-                h("th", { className: "py-1.5 pr-3 font-medium" }, "Column"),
-                h("th", { className: "py-1.5 pr-3 font-medium" }, "Mean"),
-                h("th", { className: "py-1.5 pr-3 font-medium" }, "Min"),
-                h("th", { className: "py-1.5 pr-3 font-medium" }, "Max"),
-                h("th", { className: "py-1.5 font-medium" }, "Measured")
-              )),
-              h("tbody", null, D.columns.map(function (c) {
-                return h("tr", { key: c.name, className: "border-t border-slate-100" },
-                  h("td", { className: "py-1.5 pr-3 font-medium" }, esc(c.name)),
-                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.mean)),
-                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.min)),
-                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.max)),
-                  h("td", { className: "py-1.5 tabular-nums" }, c.measured.toLocaleString("en-US"))
-                );
-              }))
-            )
-          ),
-          D.ranking.length > TOP ? h(Disclosure, { title: "View raw data: all " + D.ranking.length + " categories" },
-            h("div", { className: "pt-2" }, renderRankingTable(D.ranking))
-          ) : null,
-          D.timeline.length > 0 ? h(Disclosure, { title: "View raw data: every hour" },
-            h("div", { className: "pt-2" }, renderTimelineTable())
-          ) : null,
-          D.learned && Object.keys(D.learned).length > 0
-            ? h(Disclosure, { title: "View raw data: learned mappings" },
-                h("div", { className: "pt-2" }, renderLearned(D.learned))
-              )
-            : null
-        ),
-
-        // ---- provenance, at the bottom, on purpose ----
-        //
-        // "How this report was read" used to lead. It is the most important
-        // sentence in the document -- whether a mapping was verified by a person
-        // or guessed from a column name -- and it was placed where nobody
-        // reads. Leading with a provenance disclaimer makes a reader stop
-        // reading; a reader who has already seen the finding will look it up.
-        h("footer", { className: "mt-8 pt-4 border-t border-slate-200 text-xs text-slate-500" },
-          h("p", null,
-            "Data provenance: " + D.totalRows.toLocaleString("en-US") + " rows read from " +
-            (D.source ? esc(D.source) : "an uploaded file") + ". Column readings marked " +
-            "hypotheses were inferred from column names and a statistical profile, " +
-            "not verified by a person."),
-          h("p", { className: "mt-1" },
-            "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning.")
-        )
-      ),
-
-      // ======================= THE CHAT, ALWAYS VISIBLE =================
-      __CHAT__
+        : h("div", { className: "rounded-2xl rounded-tr-sm bg-slate-900 px-4 py-2.5 text-white text-sm" },
+            esc(m.text)),
+      agent && m.suggestions && m.suggestions.length > 0
+        ? h("div", { className: "mt-2 flex flex-wrap gap-2" }, m.suggestions.map(function (s) {
+            return h("button", {
+              key: s,
+              onClick: function () { props.ask(s); },
+              className: "rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+            }, esc(s));
+          }))
+        : null
     )
   );
 }
 
-/** The learned mappings, as a table. Shared by the chat panel and the disclosure. */
-function renderLearned(learned) {
-  var keys = Object.keys(learned).sort();
-  if (keys.length === 0) return h("p", { className: "text-sm text-slate-500 py-2" }, "Nothing learned yet.");
-  return h("table", { className: "w-full text-sm" },
-    h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
-      h("th", { className: "py-1.5 pr-3 font-medium" }, "Role"),
-      h("th", { className: "py-1.5 font-medium" }, "Column")
-    )),
-    h("tbody", null, keys.map(function (k) {
-      return h("tr", { key: k, className: "border-t border-slate-100" },
-        h("td", { className: "py-1.5 pr-3 font-medium" }, esc(k)),
-        h("td", { className: "py-1.5" }, esc(learned[k]))
-      );
-    }))
+function App() {
+  var sThread = React.useState(function () {
+    // THE OPENING TRANSCRIPT.
+    //
+    // On a live page this is the greeting, computed by the router's own
+    // greet() at generation time: on screen with no network round trip, and the
+    // sentence the user reads is the sentence this repository's tests assert on.
+    //
+    // On an EXPORT it is the conversation the export is sharing. The greeting is
+    // NOT shown as well -- it would put "What would you like to know?" at the top
+    // of a document nobody can answer.
+    if (D.transcript && D.transcript.length > 0) return D.transcript;
+    return [{ role: "agent", text: D.greeting.text, widgets: D.greeting.widgets || [], suggestions: D.greeting.suggestions || [] }];
+  });
+  var thread = sThread[0], setThread = sThread[1];
+
+  var sText = React.useState("");
+  var text = sText[0], setText = sText[1];
+  var sBusy = React.useState(false);
+  var busy = sBusy[0], setBusy = sBusy[1];
+  var sVersion = React.useState(0);
+  var version = sVersion[0], setVersion = sVersion[1];
+  var sLearned = React.useState(D.learned || {});
+  var learned = sLearned[0], setLearned = sLearned[1];
+  var endRef = React.useRef(null);
+
+  React.useEffect(function () {
+    if (endRef.current !== null) endRef.current.scrollIntoView({ block: "end" });
+  }, [thread.length]);
+
+  function push(messages) {
+    setThread(function (t) { return t.concat(messages); });
+  }
+
+  function ask(sentence) {
+    // THE RUNTIME GUARD, and it is not redundant with the hidden composer.
+    //
+    // The composer is not rendered on a standalone artifact, so this is
+    // unreachable there today. It stays because the two protect different
+    // things: the gate stops a CONTROL being offered, and this stops the network
+    // call happening if the control is ever reached another way -- a keyboard
+    // handler, a suggestion chip restored from a cached document, or a later
+    // edit that renders the composer unconditionally again.
+    //
+    // A page whose policy is connect-src 'none' should not contain a fetch it
+    // can only be prevented from making by remembering not to call it.
+    if (!D.live) return;
+    var said = String(sentence === undefined ? text : sentence).trim();
+    if (said === "" || busy) return;
+    setText("");
+    push([{ role: "user", text: said }]);
+    setBusy(true);
+
+    // A CORRECTION IS HANDLED HERE, NOT BY THE ROUTER, because it has to change
+    // the engine's memory. The router in conversation.ts is the single
+    // implementation of "what does this sentence mean" and it recognises the
+    // sentence too; the page simply has to act on the ACCEPTED case itself,
+    // because an accepted correction is an instruction rather than a question.
+    //
+    // Anything that is not an accepted correction becomes a chat turn, and the
+    // SERVER decides whether that turn is a question or a refused correction.
+    var parsed = parseCorrection(said);
+    if (parsed.ok) {
+      fetch("__FEEDBACK_URL__", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: D.source, column: parsed.column, role: parsed.role })
+      }).then(function (res) {
+        return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+      }).then(function (r) {
+        var fb = (r.body && r.body.feedback) || {};
+        if (!r.ok) {
+          setBusy(false);
+          push([{ role: "agent", text: (r.body.failure && r.body.failure.reason) || "that correction was refused.", widgets: [], suggestions: [] }]);
+          return;
+        }
+        setLearned(fb.roles || {});
+        push([{
+          role: "agent",
+          text: fb.reason || (parsed.column + " is now the " + parsed.role) + ". Re-reading the file.",
+          widgets: [], suggestions: []
+        }]);
+        refreshFromServer(setVersion, function (why) {
+          setBusy(false);
+          push([{ role: "agent", text: why, widgets: [], suggestions: [] }]);
+        });
+      }).catch(function (error) {
+        setBusy(false);
+        push([{ role: "agent", text: "the server did not answer: " + error.message, widgets: [], suggestions: [] }]);
+      });
+      return;
+    }
+
+    fetch("__CHAT_URL__", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: D.source, message: said })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+    }).then(function (r) {
+      setBusy(false);
+      if (!r.ok) {
+        push([{
+          role: "agent",
+          text: (r.body && r.body.failure && r.body.failure.reason) || "the server did not answer that.",
+          widgets: [], suggestions: []
+        }]);
+        return;
+      }
+      push([{
+        role: "agent",
+        text: r.body.reply.text,
+        widgets: r.body.reply.widgets || [],
+        suggestions: r.body.reply.suggestions || []
+      }]);
+    }).catch(function (error) {
+      setBusy(false);
+      push([{ role: "agent", text: "the server did not answer: " + error.message, widgets: [], suggestions: [] }]);
+    });
+  }
+
+  return h("div", { className: "min-h-screen bg-slate-50 text-slate-900" },
+    h("header", { className: "border-b border-slate-200 bg-white" },
+      h("div", { className: "mx-auto max-w-3xl px-4 py-3 flex items-baseline justify-between gap-4" },
+        h("h1", { className: "text-sm font-semibold truncate" }, esc(D.title)),
+        h("span", { className: "text-xs text-slate-500 shrink-0" },
+          D.source ? esc(D.source) : D.totalRows.toLocaleString("en-US") + " rows")
+      )
+    ),
+
+    h("main", { className: "mx-auto max-w-3xl px-4 py-6 pb-40" },
+      thread.map(function (m, i) {
+        return h(Message, { key: i, message: m, version: version, ask: ask });
+      }),
+      h("div", { ref: endRef }),
+
+      h("details", { className: "mt-8 text-xs text-slate-500" },
+        h("summary", { className: "cursor-pointer" }, "Data provenance"),
+        h("p", { className: "mt-2" },
+          D.totalRows.toLocaleString("en-US") + " rows read from " +
+          (D.source ? esc(D.source) : "an uploaded file") + ". " +
+          "Column readings marked as hypotheses were inferred from column names and a " +
+          "statistical profile, not verified by a person. " +
+          "Severity: a value past the 3x-IQR outer fence is critical, past 1.5x is a warning.")
+      )
+    ),
+
+__COMPOSER__
   );
 }
 
@@ -1103,15 +1323,59 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   const source = APP_SOURCE
     .split("__DATA_ID__").join(DASHBOARD_DATA_ID)
     .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID)
-    .split("__CHAT__").join(live ? `React.createElement(ChatPanel)` : "null")
-    .replace("function App() {", `${chat}\nfunction App() {`);
+    .split("__CHAT__").join("null")
+    // THE COMPOSER IS SPLICED OUT, NOT HIDDEN.
+    //
+    // The composer is already gated on D.live at runtime, so an offline artifact
+    // never renders it. But "never rendered" is not "not there": the export
+    // would still carry the markup, the placeholder text and the handler, and a
+    // recipient reading the source would find a chat widget in a document with
+    // no server. An export is a thing you send to somebody, so what it contains
+    // matters as much as what it shows.
+    .split("__COMPOSER__").join(live ? COMPOSER_SOURCE : OFFLINE_SOURCE);
 
-  // connect-src is the whole difference between the two artifacts. 'none' for
-  // the standalone page -- it has nothing to talk to -- and 'self' for the live
-  // one, which permits exactly the origin serving it and nothing else. Not a
-  // wildcard, and not the CDN: the report data is already in the page, so the
-  // only thing that ever needs to travel is the user's correction.
-  const connect = live ? "'self'" : "'none'";
+  // THE CHAT IS INJECTED FIRST, AND THAT ORDER IS LOAD-BEARING.
+  //
+  // `refreshFromServer` -- and therefore `__DASH_URL__` -- lives in CHAT_SOURCE,
+  // not in APP_SOURCE. If the endpoint substitutions above run before this
+  // injection, the chat has not been concatenated yet, so the re-read token is
+  // never replaced: the LIVE page ships the literal string
+  //   fetch("__DASH_URL__?path=" + ...)
+  // which the browser resolves relative to the origin, 404s, and lands in the
+  // catch branch. The correction is saved and the panel updates, but the charts
+  // silently keep drawing the pre-correction analysis -- precisely the failure
+  // react-chat-refresh.test.ts exists to prevent, and the reason that test was
+  // left strict rather than relaxed. Every substitution must therefore follow
+  // every injection, so inject, THEN substitute.
+  const withChat = source.replace("function App() {", `${chat}\nfunction App() {`);
+
+  // THE ENDPOINTS ARE SPLICED, NOT HARD-CODED.
+  //
+  // An offline artifact -- and every export is one -- must not contain the
+  // string "/api/feedback" at all. The handler is already unreachable there
+  // (the composer is not rendered, and ask() returns on the live flag), and an
+  // unreachable fetch is still a fetch: it is code that reads as a feature in
+  // a document that has no server, and it is the thing a recipient would try
+  // to use. Resolving the URLs at generation time makes "offline" mean the
+  // network calls are absent from the source, not merely unreachable.
+  const resolved = withChat
+    .split("__FEEDBACK_URL__").join(live ? "/api/feedback" : "about:blank#offline")
+    .split("__CHAT_URL__").join(live ? "/api/chat" : "about:blank#offline")
+    .split("__DASH_URL__").join(live ? "/api/dashboard" : "about:blank#offline");
+
+  // A token surviving into the emitted document is a BUG, not a harmless
+  // artifact: whichever one it is, it means some injection ran after the
+  // substitution that was supposed to resolve it, and the recipient gets a
+  // string nobody meant to write. Fail at generation time, in the build, rather
+  // than in a browser that renders a 404 as a stale chart.
+  const unsubstituted = resolved.match(/__[A-Z_]+__/);
+  if (unsubstituted !== null) {
+    throw new Error(`dashboard generation left the token ${unsubstituted[0]} unresolved`);
+  }
+
+  // The policy lives in dashboardCsp() so the meta tag and the HTTP header the
+  // server sends cannot drift. See the note on that function.
+  void 0;
 
   return `<!doctype html>
 <html lang="en">
@@ -1134,11 +1398,25 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   unrelated package was published. See platform/web/react-report.ts for what
   pinning does and does not buy.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com https://cdn.tailwindcss.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src ${connect}; img-src data:; style-src 'unsafe-inline' https://cdn.tailwindcss.com">
+<meta http-equiv="Content-Security-Policy" content="${dashboardCsp(live)}">
 <style>
   /* Only what Tailwind utilities cannot express. Chart.js draws into the canvas;
      everything structural is a class. */
   .canvasbox { position: relative; height: 16rem; }
+  /* The composer's input and button are the only form controls on the page now,
+     so they get their styling here rather than as utility soup on two nodes. */
+  form input[type="text"] {
+    flex: 1; min-width: 0; font: inherit; padding: .55rem .75rem;
+    border: 1px solid #cbd5e1; border-radius: .5rem; background: #fff;
+  }
+  form button[type="submit"] {
+    font: inherit; font-weight: 500; padding: .55rem 1.1rem;
+    border-radius: .5rem; border: 1px solid #0f172a;
+    background: #0f172a; color: #fff; cursor: pointer;
+  }
+  form button[type="submit"][disabled] { opacity: .55; cursor: progress; }
+  form input[type="text"]:focus { outline: 2px solid #3b5bdb; outline-offset: 1px; }
+  summary::-webkit-details-marker { display: none; }
   .pill { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: .15rem .45rem; border-radius: 999px; white-space: nowrap; }
   .pill.critical { background: #fee2e2; color: #991b1b; }
   .pill.warning { background: #fef3c7; color: #92400e; }
@@ -1148,7 +1426,7 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   table.fallback th, table.fallback td { text-align: left; padding: .25rem .4rem; border-top: 1px solid #f1f5f9; }
   table.fallback th { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #64748b; font-weight: 500; }
   tbody tr.critical { background: #fff7f7; }
-  summary::-webkit-details-marker { display: none; }
+
 </style>
 </head>
 <body>
@@ -1173,11 +1451,45 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
 <script src="${TAILWIND_CDN}"></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
-${source}
+${resolved}
 </script>
 </body>
 </html>
 `;
+}
+
+/**
+ * THE POLICY, BUILT ONCE.
+ *
+ * It used to be written twice -- once as a <meta http-equiv> in the generated
+ * document, once (not at all, until this release) as a server header -- and the
+ * two drifted. They drifted in the worst possible direction: the meta tag ended
+ * up carrying `style-src` TWICE, because it was widened in one edit and widened
+ * again in another that added Tailwind without checking what was already there.
+ *
+ * A duplicate directive is not a harmless merge. Per CSP the repeats are
+ * discarded, so which one survives depends on parser order rather than on
+ * intent, and the policy a reader believes they are looking at is not
+ * necessarily the policy in force.
+ *
+ * So there is now one function. The meta tag and the HTTP header both call it,
+ * and `chart-assets.test.ts` asserts they are byte-identical. A page whose real
+ * policy is whichever copy its author forgot about is not a policy.
+ */
+export function dashboardCsp(live: boolean): string {
+  return [
+    "default-src 'none'",
+    // React, Chart.js and Babel come from unpkg; Tailwind's Play CDN serves both
+    // its script and the stylesheet it injects. Three named origins, no wildcard.
+    "script-src 'unsafe-inline' https://unpkg.com https://cdn.tailwindcss.com",
+    "style-src 'unsafe-inline' https://cdn.tailwindcss.com",
+    // 'none' for the standalone artifact: it has no server to correct, so it is
+    // not permitted to try. 'self' for the live one, which permits exactly the
+    // origin serving it -- never the CDN, because the report data is already in
+    // the page and the only thing that ever needs to travel is the correction.
+    live ? "connect-src 'self'" : "connect-src 'none'",
+    "img-src data:",
+  ].join("; ");
 }
 
 /** Escape a value interpolated into HTML markup (the title), not into JS. */

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary, type HourlyProfile } from "./bottlenecks.ts";
 import { resolveSchemaMemory } from "./schema-memory.ts";
+import { titleFor } from "./semantics.ts";
 import { synthesize } from "./synthesis.ts";
 import { barChart, hourlyChart, SVG_STYLE } from "./svg-charts.ts";
 import type { ToolDescriptor } from "../core/types.ts";
@@ -550,7 +551,23 @@ function hourlyCalloutHtml(h: HourlyProfile): string {
 </div>`;
 }
 
-export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report", summary?: string): string {
+/**
+ * @deprecated NAMED FOR A FILE SHAPE, NOT A QUESTION.
+ *
+ * "Bottleneck" was this product's first guess at what a CSV was for, and it was
+ * wrong for most of the files people actually upload. The renderer itself is
+ * general -- it profiles whatever it is given -- so only the NAME is misleading,
+ * and every artifact this product now produces is titled from the file's own
+ * purpose rather than from this word.
+ *
+ * The rename is to `toAnalysisMarkdown`, and it is NOT done here on purpose.
+ * This function is exported, called from the conductor and two test suites, and
+ * its name is one of about forty places the word appears. Renaming them all in
+ * one commit would bury a behavioural change under a mechanical one, and the
+ * result could not be reviewed for the thing that matters. The USER-FACING text
+ * has moved; the symbol has not, and this note is the record of why.
+ */
+export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Analysis", summary?: string): string {
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
   const out: string[] = [`# ${mdCell(title)}`, ""];
@@ -732,7 +749,12 @@ export async function renderBottleneckReport(input: {
     cwd: input.workspaceCwd, headers: input.csv.headers, rows: input.csv.rows, defaultsRoot: input.defaultsRoot,
   }));
   const analysis = analyseBottlenecks(input.csv, schema);
-  const title = String(input.title ?? "Bottleneck report");
+  // An unnamed file gets a title derived from its OWN NAME and the purpose the
+  // engine just derived, never the old hardcoded guess. See titleFor().
+  const title = String(input.title ?? titleFor({
+    fileName: path.basename(input.path),
+    purpose: analysis.purpose,
+  }));
 
   // A report drawn from a file the reader already called malformed is a lie with
   // a chart on it. Refusing is the same contract as the Stage 1 reader: report
