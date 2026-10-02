@@ -9,10 +9,8 @@ import path from "node:path";
  *   1. `.session-archive/schema-memory.json` — what THIS checkout has learned. Per
  *      checkout, gitignored, never shipped. A user's own correction outranks
  *      anything we ship, because it is the only one of the two that was
- *      checked against the file in front of them.
- *      (`.session-archive/schemas.json` is the older name and is still read, so
- *      corrections made before the rename are not orphaned. The canonical file
- *      is listed first and wins any tie.)
+ *      checked against the file in front of them. Written by the correction
+ *      loop, so it is also the only way a guess gets overturned.
  *   2. `configs/default-schemas.json` — core VERIFIED schemas, tracked in git,
  *      shipped with the product. The Pega mapping was established against a real
  *      export in Stage 2; re-deriving it by name-matching on every install would
@@ -58,18 +56,6 @@ interface SchemaFile {
 }
 
 const ARCHIVE_RELATIVE = path.join(".session-archive", "schema-memory.json");
-
-/**
- * THE OLD NAME, still read.
- *
- * Earlier sessions wrote corrections to schemas.json, and a hard rename would
- * silently orphan a file a user may have spent an afternoon building. Their
- * corrections would be ignored with no warning, which is exactly the failure the
- * module's own documentation calls worse than crashing. So both names work, the
- * canonical one is listed first, and `select` resolves ties in array order --
- * which is why a user who has both files gets the newer one.
- */
-const ARCHIVE_LEGACY_RELATIVE = path.join(".session-archive", "schemas.json");
 const DEFAULT_RELATIVE = path.join("configs", "default-schemas.json");
 
 /** Roles the product actually asks for. A schema that cannot fill these is not a match. */
@@ -325,14 +311,12 @@ export interface ResolveOptions {
 export async function resolveSchemaMemory(options: ResolveOptions): Promise<ResolvedSchema | undefined> {
   const headers = options.headers;
 
-  // Both archive names, CANONICAL FIRST. Concatenating rather than
-  // "read one or the other" means a checkout that has been through the rename
-  // can carry both files without losing either, and the ordering makes the
-  // newer one win any tie.
-  const canonical = await readJsonFile(path.resolve(options.cwd, ARCHIVE_RELATIVE));
-  const legacy = await readJsonFile(path.resolve(options.cwd, ARCHIVE_LEGACY_RELATIVE));
-  const archiveSchemas = [...(canonical?.schemas ?? []), ...(legacy?.schemas ?? [])];
-  const archive = archiveSchemas.length > 0 ? { schemas: archiveSchemas } : undefined;
+  // One archive name, no longer two. The legacy schemas.json was kept while it
+  // was plausible that a checkout had been taught something before the rename;
+  // the interactive correction loop now writes the canonical file, and every
+  // path into this product goes through it, so a second name is a way to end up
+  // with two memories and no way to tell which one is being read.
+  const archive = await readJsonFile(path.resolve(options.cwd, ARCHIVE_RELATIVE));
   const learned = archive === undefined ? undefined : select(archive.schemas, headers);
   const defaults = await readJsonFile(path.resolve(options.defaultsRoot ?? options.cwd, DEFAULT_RELATIVE));
   const core = defaults === undefined ? undefined : select(defaults.schemas, headers);

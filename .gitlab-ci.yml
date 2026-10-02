@@ -89,3 +89,40 @@ measure-wrappers:
   stage: verify
   script:
     - node verification/measure-command-wrappers.mjs
+
+# WINDOWS. The gap this job exists to close is in handoff.md 10a item 1, and it
+# is the oldest open item in the backlog: the wrapper table in
+# platform/core/command-position.ts was MEASURED on MSYS2/MinGW64, and every job
+# above runs on the node:22 image, which is Debian. So the guard's assumptions
+# have never been re-derived on the platform they were measured for. The corpus
+# test is necessary but not sufficient: it is a STATIC table of expectations, so
+# a green run proves the parser still returns what it returned on Windows, not
+# that the wrapper behaviours still hold.
+#
+# WHY IT IS `windows` AND NOT A TAG YOU CHOOSE. The tag is written down here so
+# a future editor does not have to re-derive which jobs must run on it: the
+# runtime suites and the type gate. measure-wrappers does NOT, and cannot, run
+# here: it shells out to printf, env, nice, stdbuf, nohup and exec, which are
+# Unix programs. The Windows equivalent is measure-command-wrappers.mjs running
+# under the Git-for-Windows environment the table was measured in -- a
+# shell-availability question for the operator, not a pipeline edit.
+test-ts-windows:
+  stage: verify
+  tags: [windows]
+  script:
+    - npm ci
+    - npm run test:ts
+
+test-mjs-windows:
+  stage: verify
+  tags: [windows]
+  script:
+    - npm ci
+    - npm run test:mjs
+
+typecheck-windows:
+  stage: verify
+  tags: [windows]
+  script:
+    - npm ci
+    - npm run typecheck
