@@ -1,0 +1,82 @@
+# THE BUILD CONTEXT. This file is a security control, not a size optimisation.
+#
+# EVERYTHING EXCLUDED HERE, AND WHY IT MUST NOT REACH A PUBLISHED IMAGE:
+#
+#   .session-archive/  THE IMPORTANT ONE. It holds this developer's learned
+#                      schema memory -- the corrections they made about what
+#                      their columns mean, accumulated over months of use. It is
+#                      gitignored, so it is not in the repository, which means
+#                      `COPY . .` and a naive build context WOULD pick it up
+#                      from a working checkout. Baking it into an image
+#                      publishes one operator's operational knowledge to
+#                      everyone who pulls, and ships it to customers. The
+#                      runtime creates its own archive inside the mounted
+#                      workspace, which is the correct place for it: per
+#                      deployment, per volume, and gone with the volume.
+#
+#   ui-workspace/      the developer's own data files. Same reasoning: a report
+#                      is about somebody's infrastructure and must not ship.
+#
+#   .git/              full history, which contains every file that was ever
+#                      committed including ones later removed, plus remote URLs
+#                      and any credential-shaped string ever written and reverted.
+#
+#   node_modules/ venv/ .venv/  reproducible from the manifests, and in venv's
+#                      case enormous and full of host-specific binaries that do
+#                      not belong in a portable image at all.
+#
+#   docs/ tests/ verification/ memory/  not needed to SERVE. The earlier
+#                      test-container scaffold copies some of these because its
+#                      suite reads them; a serving image has no suite.
+#
+#   reports/           the gauntlet's own markdown artifacts. The POLICY still
+#                      needs a reports/ path to exist -- its rules name one -- so
+#                      the Dockerfile creates it empty instead. Path without
+#                      contents: the rule describes the tree correctly and none
+#                      of the test output ships.
+#
+# WHAT IS *NOT* EXCLUDED, DELIBERATELY:
+#   .pi/       the policy. Excluding it makes the container refuse to start.
+#   skills/    the product's skills, including their SKILL.md files. This is why
+#              there is no blanket `*.md` rule -- one would strip SKILL.md and
+#              leave a skills directory that exists and is empty of meaning.
+#   configs/   the shipped schema defaults.
+
+# --- The developer's learned state. Nothing below this line is ever shipped. ---
+.session-archive/
+**/.session-archive/
+ui-workspace/
+workspace/
+
+# --- Repository internals ---
+.git/
+.gitignore
+.gitlab-ci.yml
+.scratch/
+*.log
+
+# --- Reproducible, and full of host binaries ---
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# --- Not needed to serve ---
+docs/
+tests/
+verification/
+memory/
+reports/
+
+# --- Docker's own files, which would otherwise land in the image ---
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# --- Every other dotfile, by default. `.pi` is re-included below because the
+#     policy is required to boot, and the failure mode of getting this wrong is
+#     silent: a developer's local dot-directory arriving in a published image
+#     without anything in the build log mentioning it. ---
+.*
+!.pi

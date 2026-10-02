@@ -1,0 +1,106 @@
+# THE WEDGE, ORCHESTRATED. The security properties live HERE, not only in the
+# Dockerfile, because this is the file an operator actually runs.
+#
+# STATUS: UNVERIFIED. Docker is absent from the authoring environment, so this
+# has never been brought up. The Dockerfile says so too. An orchestration file
+# that has been reasoned about carefully and never executed is a design, not a
+# deployment, and the difference is exactly the kind this repository keeps
+# insisting on. Operator to run:
+#     docker compose up --build
+# then confirm the archive is inside the volume and the port is loopback-only.
+
+services:
+  wedge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: neurofebric/wedge:local
+    # NO `privileged`, no `network_mode: host`, no host filesystem mount, no
+    # added capabilities. All four are things a deployment reaches for when it
+    # is fighting the container, and all four would dissolve the only boundary
+    # this product has. The process reads the user's files; a container escape
+    # starts from exactly here.
+    restart: unless-stopped
+
+    # THE DATA BOUNDARY IS A NAMED VOLUME, AND IT IS THE ONLY MOUNT.
+    #
+    # A named volume rather than a host bind, for one reason that matters: a
+    # bind mount hands the container whatever the host path resolves to, and the
+    # operator's idea of "the data directory" is often the repository root. A
+    # named volume starts empty every time, so the only thing in it is what was
+    # deliberately put there. If the operator wants their own CSVs analysed, the
+    # honest route is `docker compose cp` or an explicit bind they added on
+    # purpose -- not a default that quietly exposes the working tree.
+    volumes:
+      - wedge-data:/app/workspace
+    working_dir: /app
+
+    environment:
+      # The workspace, stated twice: once as the boundary the Dockerfile sets and
+      # once as the argument the process is started with. Redundant on purpose.
+      # A deployment whose boundary depends on one environment variable that
+      # someone can forget to set is a deployment with an unbounded boundary.
+      WEDGE_WORKSPACE: /app/workspace
+      NODE_ENV: production
+      PORT: "3000"
+      WEDGE_HOST: "0.0.0.0"
+
+    # THE PUBLISHED PORT IS LOOPBACK-ONLY ON THE HOST. This is the half that
+    # makes the container's 0.0.0.0 bind safe.
+    #
+    # Inside the container the process must bind 0.0.0.0, because Docker
+    # forwards published ports to the container's own interface and a loopback
+    # bind there is unreachable -- the wedge would start and then refuse every
+    # connection. Outside it, `127.0.0.1:3000` means the only host that can reach
+    # it is the one sitting at the keyboard, which is the same reachable surface
+    # as running `start-ui.mjs` directly.
+    #
+    # It is tempting to write "3000:3000" here so a colleague on the network can
+    # look at a demo. That single character change turns a local tool that reads
+    # private files into a service on the office LAN, and it would work, and
+    # that is the problem.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    # THE CONTAINER'S OWN LIMITS. Not decoration either: a tool that reads a
+    # dropped file has no input size the operator chose, so the ceiling belongs
+    # to the deployment rather than to whatever the largest CSV happens to be.
+    # The 512m is generous for a process that holds one file in memory and will
+    # OOM visibly rather than take the host with it.
+    mem_limit: 512m
+    pids_limit: 128
+
+    # Read-only root, with the two paths the process genuinely writes to
+    # mounted as writable volumes. A process that does not need to write to its
+    # own image should not be able to: this turns "the image was modified at
+    # runtime" from an investigation into an error.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      # The real route, not a TCP connect. A listener that is up but whose
+      # module graph failed to import answers on the socket and 500s on every
+      # request, and "up" is not the question being asked.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      # Three failures before the restart, so a slow start is not a crash loop.
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wedge-data:
+    # Named explicitly rather than left to Compose's default, so `docker volume
+    # ls` shows where the data is and a `down -v` is a decision rather than an
+    # accident. The developer's learned schema memory lives in here, which is the
+    # correct place for it: per deployment, and gone when the volume is removed.
+    name: neurofebric-wedge-data

@@ -55,6 +55,24 @@ export interface WedgeOptions {
   defaultsRoot?: string;
   /** 0 asks the OS for a free port, which is what the tests do. */
   port?: number;
+  /**
+   * The interface to bind. LOOPBACK BY DEFAULT, and the default is the security
+   * property: this process reads the user's files, so a listener on every
+   * interface turns a local tool into a remote one.
+   *
+   * `0.0.0.0` exists for exactly one reason -- a container. Inside a container
+   * a loopback bind is unreachable from the host, because Docker's published
+   * port forwards to the container's own interface rather than to its loopback,
+   * so a containerised wedge appears to start and then refuses every connection.
+   * The safe way out is to widen the bind INSIDE the container's network
+   * namespace and keep the published port on the host's loopback, which leaves
+   * the reachable surface identical to running it directly. That means this
+   * option is an opt-in for a deployment that has already thought about it, and
+   * it is deliberately not the default -- a default that is convenient in one
+   * deployment and unsafe in another is a default that will eventually be the
+   * unsafe one.
+   */
+  host?: string;
   /** The install root, for finding the shipped schemas. */
   installRoot?: string;
 }
@@ -342,16 +360,15 @@ export function createWedgeServer(options: WedgeOptions): Server {
 export async function startWedgeServer(options: WedgeOptions): Promise<RunningWedge> {
   const server = createWedgeServer(options);
   const port = options.port ?? 0;
+  const host = options.host ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {
-    // 127.0.0.1, never 0.0.0.0. This process can read the user's files; a
-    // listener on every interface turns a local tool into a remote one.
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, host, () => resolve());
   });
   const address = server.address();
   const bound = typeof address === "object" && address !== null ? address.port : port;
   return {
-    url: `http://127.0.0.1:${bound}`,
+    url: `http://${host}:${bound}`,
     port: bound,
     close: () => new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
