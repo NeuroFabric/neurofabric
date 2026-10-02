@@ -294,8 +294,33 @@ export class Conductor {
   ): Promise<ConductorResult> {
     // Schema memory is consulted HERE, after the read, because it matches on the
     // header row the read actually produced.
+    //
+    // THE ROWS ARE PASSED, AND OMITTING THEM SILENTLY BROKE LEARNING.
+    //
+    // `rows` is optional in the resolver, and when they are absent it gives up
+    // rather than profile: a profile needs values to look at, and a half-answer
+    // is not an answer. That is right on its own. But it made this call site a
+    // dead end for the correction loop, because the resolver only consults the
+    // archive for a file whose headers a stored schema does NOT already match --
+    // and every file a user corrects is, by definition, a file they are
+    // correcting BECAUSE no stored schema fitted it.
+    //
+    // So the branch that lets a user correction outrank the profiler never ran
+    // from here. The correction was written, the endpoint answered 200, the
+    // archive on disk held the mapping, and the next file analysed was profiled
+    // as if nobody had said anything. The user was told they had fixed it.
+    //
+    // The rows are ALREADY records keyed by header -- `CsvReadResult.rows` is
+    // not a list of cell arrays, and treating it as one is a mistake this call
+    // site made first. `cells[i]` on a record is `undefined` for every column,
+    // so the profiler received rows of empty strings, inferred nothing, found
+    // every required role unfilled, and returned undefined -- which is the same
+    // silent no-learning as before, one layer further down and harder to see.
     const schema = await resolveSchemaMemory({
-      cwd: this.cwd, headers: csv.headers, defaultsRoot: this.options.defaultsRoot,
+      cwd: this.cwd,
+      headers: csv.headers,
+      defaultsRoot: this.options.defaultsRoot,
+      rows: csv.rows,
     });
     if (schema !== undefined) {
       this.emit("EXECUTE", `schema memory: ${schema.source} (${schema.id})`);
