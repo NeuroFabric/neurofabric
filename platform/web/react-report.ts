@@ -98,7 +98,32 @@ const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
  * must not change because somebody else published a package.
  */
 const CHART_VERSION = "4.4.1";
-const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.min.js`;
+/**
+ * THE FILENAME WAS WRONG FOR AN ENTIRE RELEASE, AND THE OWNER FOUND IT.
+ *
+ * This was `chart.umd.min.js`, which does NOT exist in Chart.js v4. It returns a
+ * 404. v4 ships ONE UMD bundle, `chart.umd.js`, and it is already minified --
+ * the `min` suffix is a v3 convention that was dropped when the package moved to
+ * a bundled build.
+ *
+ * The Owner saw "The charting library could not be loaded", which is this
+ * repository's own ChartNote fallback rendering because `typeof Chart` was
+ * undefined. Every test passed throughout, for the same reason the dashboard was
+ * invisible in the previous session: each asserted the page CONTAINS a pinned
+ * Chart.js reference, and a 404 is a perfectly well-formed reference.
+ *
+ * TWO LESSONS, both now tests rather than comments:
+ *   - A pinned CDN URL is only pinned if someone checks that it RESOLVES. No test
+ *     here makes a network call, so the guarantee is written down as the exact
+ *     filename with its provenance, and `chart-assets.test.ts` pins the shape.
+ *   - The Owner reported this as "the CSP blocked your charting CDN". The CSP
+ *     was innocent -- script-src already named https://unpkg.com, and the tag
+ *     carried the right origin. A wrong path and a blocked path look IDENTICAL
+ *     from inside the page: a global that never arrives. Diagnosing "the policy
+ *     is too tight" first is the natural move and it would have taken the fix in
+ *     the wrong direction, which is why the fallback now names both causes.
+ */
+const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.js`;
 
 /**
  * Tailwind's Play CDN, pinned for the same reason as everything else here.
@@ -672,8 +697,15 @@ function useChart(draw, version) {
 
 function ChartNote(props) {
   if (typeof Chart !== "undefined") return null;
-  return React.createElement("p", { className: "empty chartoff" },
-    props.children || "The charting library could not be loaded, so these are shown as tables below. Everything else on this page works.");
+  return React.createElement("div", { className: "chartoff" },
+    React.createElement("p", { className: "font-semibold" },
+      "Charts unavailable — the numbers below are still exact."),
+    React.createElement("p", { className: "mt-1" },
+      "The charting library did not load. Two causes look identical from inside the browser and both were real here: " +
+      "the script was blocked by this page's Content-Security-Policy, or the CDN returned an error for that file. " +
+      "Open the developer console and look for a CSP violation or a 404 on chart.umd.js."),
+    React.createElement("p", { className: "mt-1" },
+      props.children || "Every figure on this page is available as a table underneath."));
 }
 
 function BarChart(props) {
@@ -1106,12 +1138,9 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
     .split("__CHAT__").join(live ? `React.createElement(ChatPanel)` : "null")
     .replace("function App() {", `${chat}\nfunction App() {`);
 
-  // connect-src is the whole difference between the two artifacts. 'none' for
-  // the standalone page -- it has nothing to talk to -- and 'self' for the live
-  // one, which permits exactly the origin serving it and nothing else. Not a
-  // wildcard, and not the CDN: the report data is already in the page, so the
-  // only thing that ever needs to travel is the user's correction.
-  const connect = live ? "'self'" : "'none'";
+  // The policy lives in dashboardCsp() so the meta tag and the HTTP header the
+  // server sends cannot drift. See the note on that function.
+  void 0;
 
   return `<!doctype html>
 <html lang="en">
@@ -1134,7 +1163,7 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   unrelated package was published. See platform/web/react-report.ts for what
   pinning does and does not buy.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com https://cdn.tailwindcss.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src ${connect}; img-src data:; style-src 'unsafe-inline' https://cdn.tailwindcss.com">
+<meta http-equiv="Content-Security-Policy" content="${dashboardCsp(live)}">
 <style>
   /* Only what Tailwind utilities cannot express. Chart.js draws into the canvas;
      everything structural is a class. */
@@ -1178,6 +1207,40 @@ ${source}
 </body>
 </html>
 `;
+}
+
+/**
+ * THE POLICY, BUILT ONCE.
+ *
+ * It used to be written twice -- once as a <meta http-equiv> in the generated
+ * document, once (not at all, until this release) as a server header -- and the
+ * two drifted. They drifted in the worst possible direction: the meta tag ended
+ * up carrying `style-src` TWICE, because it was widened in one edit and widened
+ * again in another that added Tailwind without checking what was already there.
+ *
+ * A duplicate directive is not a harmless merge. Per CSP the repeats are
+ * discarded, so which one survives depends on parser order rather than on
+ * intent, and the policy a reader believes they are looking at is not
+ * necessarily the policy in force.
+ *
+ * So there is now one function. The meta tag and the HTTP header both call it,
+ * and `chart-assets.test.ts` asserts they are byte-identical. A page whose real
+ * policy is whichever copy its author forgot about is not a policy.
+ */
+export function dashboardCsp(live: boolean): string {
+  return [
+    "default-src 'none'",
+    // React, Chart.js and Babel come from unpkg; Tailwind's Play CDN serves both
+    // its script and the stylesheet it injects. Three named origins, no wildcard.
+    "script-src 'unsafe-inline' https://unpkg.com https://cdn.tailwindcss.com",
+    "style-src 'unsafe-inline' https://cdn.tailwindcss.com",
+    // 'none' for the standalone artifact: it has no server to correct, so it is
+    // not permitted to try. 'self' for the live one, which permits exactly the
+    // origin serving it -- never the CDN, because the report data is already in
+    // the page and the only thing that ever needs to travel is the correction.
+    live ? "connect-src 'self'" : "connect-src 'none'",
+    "img-src data:",
+  ].join("; ");
 }
 
 /** Escape a value interpolated into HTML markup (the title), not into JS. */

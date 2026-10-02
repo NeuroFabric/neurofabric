@@ -254,7 +254,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           }
 
-          const { toReactDashboard } = await import("./react-report.ts");
+          const { toReactDashboard, dashboardCsp } = await import("./react-report.ts");
+          // The SAME function that builds the document's meta policy, so the
+          // header and the meta tag cannot disagree. See dashboardCsp().
+          const DASHBOARD_CSP = dashboardCsp(true);
           const html = toReactDashboard(result.report.analysis, {
             title: `Bottleneck report: ${path.basename(target)}`,
             // The one opt-in that widens the page. It is what lets the chat
@@ -266,8 +269,25 @@ export function createWedgeServer(options: WedgeOptions): Server {
             "content-type": "text/html; charset=utf-8",
             "content-length": Buffer.byteLength(html),
             "cache-control": "no-store",
-            // The page declares its own policy in a meta tag; these headers are
-            // the ones that apply to the document itself.
+            // THE POLICY IS SENT AS A HEADER, NOT ONLY AS A META TAG.
+            //
+            // The generated document has carried its own <meta http-equiv> policy
+            // since D-033, and a header is strictly better for three reasons. A
+            // meta policy is only honoured if it appears before any resource the
+            // page loads, so a future edit that moves it down the document
+            // silently disarms it. It cannot be seen by anything inspecting a
+            // response. And it cannot be tested from the server side -- which is
+            // how a dashboard spent a release failing to draw its charts.
+            //
+            // The value is identical to the meta tag's, and a test asserts the
+            // two agree, because a header and a meta tag that drift is a page
+            // whose real policy is whichever one the author forgot about.
+            //
+            // The CDN origins are named EXPLICITLY. There is no wildcard and no
+            // 'unsafe-eval': the charting library, React and Tailwind are three
+            // known files, and permitting anything wider would grant every
+            // script on the internet the ability to rewrite this page.
+            "content-security-policy": DASHBOARD_CSP,
             "x-content-type-options": "nosniff",
             "referrer-policy": "no-referrer",
           });
