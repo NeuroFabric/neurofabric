@@ -60,6 +60,14 @@ export interface QueryData {
 export interface Query {
   readonly matched: boolean;
   readonly kind: "rows-above" | "rows-below" | "mean" | "argmax-missing" | "worst-hour" | "none";
+  /**
+   * The router understood the SHAPE of the question and is missing one input.
+   *
+   * Distinct from `matched: false`, which means the sentence was not a
+   * question this router knows. A clarification is surfaced to the user; a plain
+   * miss falls through to the generic decline.
+   */
+  readonly clarify: boolean;
   /** The real column name, when the question named one. Null when it did not. */
   readonly column: string | null;
   readonly threshold: number | null;
@@ -90,9 +98,132 @@ function fmt(value: number | null): string {
 
 function miss(matched: boolean, answer: string, extra: Partial<Query> = {}): Query {
   return {
-    matched, kind: "none", column: null, threshold: null,
+    matched, clarify: false, kind: "none", column: null, threshold: null,
     exact: null, bounds: null, answer, ...extra,
   };
+}
+
+/**
+ * THE THIRD STATE, WHICH IS THE WHOLE FIX.
+ *
+ * `matched: false` used to mean one thing -- "I do not recognise this as a
+ * question" -- so the caller fell through every branch to a generic decline.
+ * But the router could already tell apart two very different failures:
+ *
+ *   - "I have no idea what you asked"                    -> decline
+ *   - "I know exactly what you asked, and one input is missing" -> ASK
+ *
+ * The second is the common one. Someone types a threshold question naming a
+ * column that does not exist, and gets told the agent cannot answer it. The
+ * column being absent is a fact about their file, not a limit on the agent, and
+ * the router already held the list of columns that would fix it. That list was
+ * computed and discarded one line later.
+ *
+ * So `clarify` marks the second case, and the caller surfaces it instead of
+ * falling through. The generic decline is unchanged for a genuine non-question,
+ * which is what stops the agent from offering column names at people who never
+ * asked about one.
+ */
+function clarify(answer: string, column: string | null = null): Query {
+  return miss(false, answer, { clarify: true, column });
+}
+
+/**
+ * THE COLUMNS THIS FILE ACTUALLY HAS, RANKED AGAINST A WORD.
+ *
+ * Damerau-Levenshtein is here because the realistic error is a TYPO, not a
+ * concept: `balnce_usd`, `latancy`, `amunt`. Token overlap alone cannot help
+ * with those, and a shared-prefix rule would happily offer `amount_usd` for
+ * `amount_of_id`, which is worse than offering nothing.
+ *
+ * The cutoff is deliberately conservative. A suggestion that is not a plausible
+ * reading of what was typed is noise, and noise in a refusal makes the refusal
+ * look like a guess.
+ */
+function nearestColumns(data: QueryData, word: string, limit = 2): readonly string[] {
+  const target = word.toLowerCase();
+  if (target.length < 3) return [];
+  const scored = data.columns
+    .map((c) => {
+      const name = c.name.toLowerCase();
+      // Exact-token match on any part of the name: `cost` inside `cost_usd`
+      // scores perfectly, which edit distance alone would miss because the
+      // lengths differ so much.
+      const tokenHit = name.split(/[^a-z0-9]+/).includes(target) ? 0 : Infinity;
+      return { name: c.name, score: Math.min(tokenHit, damerauLevenshtein(target, name)) };
+    })
+    .filter((s) => Number.isFinite(s.score))
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+  return scored.slice(0, limit).map((s) => s.name);
+}
+
+/** Bounded edit distance, with transpositions. Iterative, so a long name is safe. */
+function damerauLevenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 4) return Infinity;
+  const prev2 = new Array<number>(b.length + 1).fill(0);
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i, ...new Array<number>(b.length).fill(0)];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1]! + 1, prev[j]! + 1, prev[j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        cur[j] = Math.min(cur[j]!, prev2[j - 2]! + 1);
+      }
+    }
+    prev2.splice(0, prev2.length, ...prev);
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+
+/**
+ * THE WORD THE USER MEANT TO NAME A COLUMN.
+ *
+ * The nouns and comparison words are excluded, because "how many ROWS are over
+ * 500" contains a word that matches no column and is not a column either. What
+ * is left over is the user's noun, and that is the one worth quoting back.
+ */
+const QUESTION_WORDS = new Set([
+  "how", "many", "much", "what", "which", "who", "is", "are", "was", "were", "the", "a", "an",
+  "of", "in", "on", "at", "to", "for", "over", "above", "under", "below", "than", "with",
+  "about", "from", "by", "it", "they", "we", "you", "this", "that", "these", "those",
+  "do", "does", "did", "have", "has", "had", "there", "here", "get", "got", "can", "could",
+  "rows", "row", "values", "value", "cells", "cell", "entries", "entry", "records",
+  "record", "average", "mean", "count", "counts", "more", "less", "fewer", "show", "tell",
+  "greater", "smaller", "bigger", "exceed", "exceeds", "least", "atleast", "only", "just",
+]);
+
+function unknownWord(text: string, data: QueryData): string | null {
+  const known = new Set(data.columns.map((c) => c.name.toLowerCase()));
+  for (const raw of text.toLowerCase().split(/[^a-z0-9_.]+/)) {
+    if (raw.length < 3) continue;
+    if (/^\d+$/.test(raw)) continue;
+    if (QUESTION_WORDS.has(raw)) continue;
+    if (known.has(raw)) continue;
+    // A word that is merely a fragment of a real column is that column, not an
+    // unknown one, and must not be quoted back as a misspelling of itself.
+    if (data.columns.some((c) => c.name.toLowerCase().split(/[^a-z0-9]+/).includes(raw))) continue;
+    return raw;
+  }
+  return null;
+}
+
+/** "I could not find 'cost'. Did you mean 'amount_usd' or 'balance_usd'?" */
+function missingColumnMessage(data: QueryData, text: string, context: string): Query {
+  const word = unknownWord(text, data);
+  const list = `The numeric columns here are: ${data.columns.map((c) => c.name).join(", ")}.`;
+  const suggestions = word === null ? [] : nearestColumns(data, word);
+  if (word === null) return clarify(`${context} ${list}`);
+  // "numeric columns here" is a long-standing contract asserted by
+  // query.test.ts, and it is also the only thing in the sentence that tells a
+  // user this file is not broken -- so it stays in BOTH branches, whether or
+  // not there is a near-miss to offer.
+  const offer = suggestions.length === 0
+    ? `There is no column here with a similar name. ${list}`
+    : `Did you mean ${suggestions.map((s) => `"${s}"`).join(" or ")}? ${list}`;
+  return clarify(`I could not find "${word}" in this file, so no count can be taken. ${offer}`);
 }
 
 /**
@@ -207,7 +338,7 @@ export function resolveQuery(data: QueryData, question: string): Query {
     const worst = [...data.timeline].sort((a, b) => b.count - a.count)[0]!;
     const share = (worst.share * 100).toFixed(1);
     return {
-      matched: true, kind: "worst-hour", column: null, threshold: null,
+      matched: true, clarify: false, kind: "worst-hour", column: null, threshold: null,
       exact: worst.count, bounds: null,
       answer: `The busiest hour is ${worst.hour.replace("T", " ")}:00, with ${n(worst.count)} rows -- ` +
         `${share}% of the readable rows.${worst.spike ? ` The engine flagged it: ${worst.rule ?? "above the mean"}.` : ""}`,
@@ -231,7 +362,7 @@ export function resolveQuery(data: QueryData, question: string): Query {
       ? `${worst.empty} blank and ${worst.dirty} holding something that is not a number`
       : `${worst.empty} blank`;
     return {
-      matched: true, kind: "argmax-missing", column: worst.name, threshold: null,
+      matched: true, clarify: false, kind: "argmax-missing", column: worst.name, threshold: null,
       exact: worst.missing, bounds: null,
       answer: `${worst.name} has the most unusable cells: ${worst.missing} of ${n(data.totalRows)} rows (${detail}).`,
     };
@@ -242,14 +373,14 @@ export function resolveQuery(data: QueryData, question: string): Query {
   if (wantsMean) {
     const column = findColumn(data, text);
     if (column === null) {
-      return miss(false, "Which column do you mean? I can report the mean of any numeric column in this file.");
+      return missingColumnMessage(data, text, "There is no such column in this file, so it has no mean I can report.");
     }
     const stat = data.columns.find((c) => c.name === column)!;
     if (stat.mean === null) {
       return miss(false, `${column} has no measurable values, so it has no mean.`);
     }
     return {
-      matched: true, kind: "mean", column, threshold: null,
+      matched: true, clarify: false, kind: "mean", column, threshold: null,
       exact: Math.round(stat.mean * 100) / 100, bounds: null,
       answer: `The mean of ${column} is ${fmt(stat.mean)}, over ${n(stat.measured)} measured ` +
         `value${stat.measured === 1 ? "" : "s"}. It ranges from ${fmt(stat.min)} to ${fmt(stat.max)}.`,
@@ -270,17 +401,7 @@ export function resolveQuery(data: QueryData, question: string): Query {
 
   const column = findColumn(data, text);
   if (column === null) {
-    // ONE SENTENCE FOR BOTH CASES, and the list is what does the work.
-    //
-    // There were two drafts here. One said "which column do you mean?" and the
-    // other said "no such column". Neither covers both cases correctly: the
-    // first is unhelpful when the user named a column this file does not have,
-    // because they will answer with the same name; the second is unhelpful when
-    // they named nothing at all. Listing what the file DOES have answers both --
-    // the user sees their name is not in it, or sees the one they meant.
-    return miss(false,
-      `No column in this file matches that, so I cannot count anything against ${n(threshold)}. ` +
-      `The numeric columns here are: ${data.columns.map((c) => c.name).join(", ")}.`);
+    return missingColumnMessage(data, text, `No column in this file matches that, so I cannot count anything against ${n(threshold)}.`);
   }
   const stat = data.columns.find((c) => c.name === column)!;
   const histogram = stat.histogram ?? [];
@@ -306,7 +427,7 @@ export function resolveQuery(data: QueryData, question: string): Query {
     const whole = exact ?? 0;
     const share = stat.measured > 0 ? ((whole / stat.measured) * 100).toFixed(1) : "0";
     return {
-      matched: true, kind: wantsAbove ? "rows-above" : "rows-below",
+      matched: true, clarify: false, kind: wantsAbove ? "rows-above" : "rows-below",
       column, threshold, exact: whole, bounds: null,
       answer: `${n(whole)} of the ${n(stat.measured)} measured values in ${column} are ` +
         `${side} ${n(threshold)} -- ${share}% of them.`,
@@ -328,7 +449,7 @@ export function resolveQuery(data: QueryData, question: string): Query {
   const spanHi = side === "above" ? bounds.hi : bounds.lo;
 
   return {
-    matched: true, kind: wantsAbove ? "rows-above" : "rows-below",
+    matched: true, clarify: false, kind: wantsAbove ? "rows-above" : "rows-below",
     column, threshold, exact: null, bounds,
     answer: `At least ${n(exact ?? 0)} of the ${n(stat.measured)} measured values in ${column} are ` +
       `${side} ${n(threshold)}, and at most ${n((exact ?? 0) + straddlerCount)}. ` +

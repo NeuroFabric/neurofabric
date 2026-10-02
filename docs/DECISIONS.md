@@ -3638,3 +3638,122 @@ denied `DROP` are the product working.
 - D-033 — "no build step", the premise vendoring would cost.
 - `react-chat-refresh.test.ts` — the test that was right and the code that was wrong.
 - `export.test.ts` — the export's own gate, asserting the standalone path.
+
+## D-038 — V2: MAD instead of Z-scores, and a symptom that was not the size it looked like
+
+**Date:** 2026-10-09
+**Stage:** 6 (Enterprise scale & advanced intelligence)
+**Status:** Accepted
+**Affects:** `platform/conductor/multivariate.ts`, `platform/conductor/conversation.ts`, `platform/conductor/query.ts`, `platform/web/server.ts`
+
+### Context
+
+V2 closed three gaps. The conversational surface could not name a column that was
+not there; the engine looked along one column at a time; and the categories
+question was reported as failing on files of 200 rows or more, which for an
+enterprise tool is the difference between a demo and a product.
+
+### THE MATH, AND WHY IT IS NOT A Z-SCORE
+
+Every existing check standardises on a mean and a standard deviation. For
+outlier detection that is the obvious choice and the wrong one, and the reason
+is specific to this problem: **the outliers being hunted are exactly the values
+that inflate a standard deviation.** Each one makes itself look less anomalous.
+Four extreme rows can widen sigma far enough to conceal all four, and the
+defect that costs an enterprise money is the one that gets hidden.
+
+The usual repair is to remove the outliers before estimating, which makes the
+test depend on a first pass that has already decided what an outlier is.
+
+So V2 standardises on the **median** and the **MAD** — median absolute
+deviation — rescaled by **1.4826**, the constant that makes the MAD estimate
+sigma for normally distributed data. Both are medians, so both are unmoved by a
+minority of extreme values *by construction*. That is precisely why they are
+correct here: the thing being searched for is the thing that would corrupt the
+obvious estimator. `multivariate.test.ts` runs the naive sigma alongside so the
+obvious way is not chosen again by someone who has not seen it fail.
+
+### WHY TWO COLUMNS AT ALL
+
+A 1D check finds big numbers. The defect worth a phone call is a number that
+**contradicts its neighbour**: high `latency_ms` with low `total_bytes` is not a
+slow request, it is a row that does not belong to the same population as its
+neighbours — a bad join, or a field measured in the wrong unit. A per-column
+check reports "latency is high", which is true and useless.
+
+A row is reported only when **discordant**: both axes past the line *and opposite
+signs*. A row that is large on both axes is self-consistent and belongs to the
+existing per-column checks, so claiming it would duplicate a finding and inflate
+the count. A row extreme on one axis is left alone on purpose. Both are pinned,
+because a detector that flags everything is worse than none — a user who learns
+to ignore it will ignore the real one.
+
+Two columns is a **hard bound**, stated in the code. With k columns the space of
+contradictions is combinatorial and the finding stops being legible in one
+sentence.
+
+### THE 200-ROW BOUNDARY WAS NOT A BOUNDARY
+
+The categories question was reported as declining at 200 rows and working below
+it, and the obvious reading was a classification-sample cap. **There is no such
+cap.** Sweeping the real path — `resolveSchemaMemory` into `analyseBottlenecks` —
+resolves the category cleanly at 50, 200, 250 and 400 rows.
+
+The actual cause was upstream of all of it. `readCsvFor` already returns rows as
+`{header: value}` records, and the chat handler converted them **a second time**
+as if they were cell arrays, so every row became a copy of the first row's
+values. The file collapsed to one distinct value per column, the category-role
+check demoted it as degenerate, and the question declined.
+
+The reason it *looked* size-dependent is the part worth keeping. A corruption
+with no boundary does not fail on a clean schedule — whether the question
+declined depended on whether a given row count happened to trip some other
+threshold on the way past. So it presented as a boundary at 200, and the hunt for
+a sample cap was a hunt for something that was never there. **A symptom that
+tracks an input you did not change is a symptom you have not understood.**
+
+Nothing caught it at the time. The analyser, the schema resolver and the archive
+were all correct *in isolation*, because the isolation harness did not reproduce
+the server's data preparation. Every unit test passed. Only a test through the
+HTTP boundary can see a bug that lives in the seam between layers.
+
+### THE DECLINE THAT WAS NOT A DECLINE
+
+`resolveQuery` has always known the numeric columns and always composed a
+message naming them. It returned that message as `matched: false`, which the
+caller reads as "not a question I recognise" — so it fell through to the generic
+"I cannot answer that from what I have measured".
+
+The effect was worse than an unhelpful answer. Someone asks a reasonable
+question about a column that does not exist and is told the agent cannot answer,
+which reads as the agent being **incapable** rather than the column being absent,
+and invites the user to conclude the product does less than it does. The router
+now has a third state: a sentence it does not recognise still falls through; a
+sentence whose *shape* it recognises and which is missing one input is surfaced
+as a question, with the nearest real name suggested by bounded Damerau-Levenshtein
+distance.
+
+### Honest status
+
+Complete: the clarification path, the row-fidelity fix, MAD-based cross-column
+detection in the summary **and** in the chat.
+
+**Not attempted, by decision:** the streaming ingestion rewrite and the cloud
+connector. The first would have put the analyser, the schema resolver,
+synthesis, the report renderer and the web server all in one change; the second
+is the first route in this product that would reach the network on a user's
+behalf, and it belongs in its own review rather than at the end of a long one.
+
+**Still unverified:** secret file permissions on Windows (D-037 caveat two), and
+the Linux assertion that would close it, because the project still has **zero
+active CI runners** and no pipeline in this repository has ever executed. V2 is
+declared on a locally green suite — 1108 passed, 0 failed, 2 skipped — and on
+110 dedicated security tests. It is **not** declared on a green pipeline,
+because there has not been one.
+
+### Cross-references
+
+- D-037 — the V1 wedge declaration, and the caveat this inherits.
+- D-036 — the recorded CDN debt, unchanged by V2.
+- `multivariate.test.ts` — the maths, and the naive-sigma comparison.
+- `v2-top-categories.test.ts` — the size sweep that proved there was no boundary.
