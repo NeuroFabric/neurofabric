@@ -159,7 +159,7 @@ test("markdown renders a Numerical Data Summary with mean, min, max and count", 
   const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(SMALL)), "Numerical file");
   assert.match(md, /^## Numerical data summary$/m, "the section exists and is named");
   const header = md.split("\n").find((l) => l.startsWith("| # | column"))!;
-  for (const h of ["measured", "missing", "min", "max", "mean", "spread"]) {
+  for (const h of ["measured", "empty", "dirty", "min", "max", "mean", "spread"]) {
     assert.ok(header.includes(h), `the ${h} column is present`);
   }
   const row = md.split("\n").find((l) => l.startsWith("| 1 |"))!;

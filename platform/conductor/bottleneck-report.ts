@@ -296,17 +296,86 @@ const NO_CATEGORIES_NOTE = "No categorical columns found; skipping categorical r
  * stated rather than implied -- an unannounced truncation reads as "these are all
  * the numeric columns", which would be false for the Owner's 20-column file.
  */
+/**
+ * WHAT IS WRONG WITH THIS FILE, IN SENTENCES.
+ *
+ * A table row reading "c7 | 200 | 0 | 1 | ..." is not the same as being told
+ * "column c7 contains a type-mismatched string". The second is actionable; the
+ * first is a lookup. This section exists to say the second thing, and it is
+ * placed ABOVE the numerical summary because what is wrong outranks what the
+ * numbers are.
+ *
+ * PRESENT EVEN WHEN THERE IS NOTHING WRONG. Its presence then means "checked",
+ * and its absence would mean "not looked at" -- which for a health section is
+ * the difference between a clean bill of health and silence.
+ */
+function healthSentences(a: BottleneckAnalysis, fmt: (n: number | null) => string): string[] {
+  const h = a.health;
+  const scope = `Checked ${a.numerical.numericColumns} numeric column(s) across ${a.numerical.rows} row(s).`;
+  if (h.clean) return [`_${scope} No dirty cells and no statistical outliers._`];
+
+  const lines: string[] = [];
+  const dirty = h.columns.filter((c) => c.dirty > 0);
+  if (dirty.length > 0) {
+    const detail = dirty.map((c) => {
+      const examples = c.examples.length > 0 ? ` (for example: ${c.examples.join(", ")})` : "";
+      return `**${c.column}** contains ${c.dirty} type-mismatched value${c.dirty === 1 ? "" : "s"}${examples}`;
+    });
+    lines.push(`> ⚠️ **Data Quality Warning:** ${detail.join(". ")}. Something wrote text into ${dirty.length === 1 ? "a numeric column" : "numeric columns"}; find it before trusting ${dirty.length === 1 ? "its" : "their"} figures.`);
+  }
+  const outliers = h.columns.filter((c) => c.outliers > 0);
+  if (outliers.length > 0) {
+    const detail = outliers.map((c) => {
+      const magnitude = c.worstValue === null ? "" : ` (worst: ${fmt(c.worstValue)}`;
+      const fence = c.fence === null ? "" : `, beyond a fence of ${fmt(c.fence)})`;
+      return `**${c.column}** contains ${c.outliers} outlier${c.outliers === 1 ? "" : "s"}${magnitude}${fence}`;
+    });
+    lines.push(`> ⚠️ **Extreme values:** ${detail.join(". ")}. These sit outside the range the rest of the column occupies, and may be real or may be corruption.`);
+  }
+  const blanks = h.columns.filter((c) => c.dirty === 0 && c.empty > 0);
+  if (blanks.length > 0) {
+    lines.push(`_${blanks.map((c) => `**${c.column}** has ${c.empty} empty cell${c.empty === 1 ? "" : "s"}`).join("; ")}. A blank is an absent value, which is a different problem from a type mismatch._`);
+  }
+  lines.push(`_${scope} ${h.dirtyCells} dirty cell(s), ${h.outlierCells} outlier(s), ${h.emptyCells} empty cell(s)._`);
+  return lines;
+}
+
+function dataHealthMarkdown(a: BottleneckAnalysis): string {
+  const fmt = (v: number | null): string => (v === null ? "not measurable" : Number(v.toFixed(4)).toLocaleString());
+  return ["## Data health insights", "", ...healthSentences(a, fmt), ""].join("\n");
+}
+
+function dataHealthHtml(a: BottleneckAnalysis): string {
+  const fmt = (v: number | null): string => (v === null ? "&mdash;" : escapeHtml(Number(v.toFixed(4)).toLocaleString()));
+  const body = healthSentences(a, fmt)
+    .map((line) => `  <p>${line.startsWith(">") ? `<span class="badge">!</span> ${escapeHtml(line.replace(/^>\s*/, "").replace(/\*\*/g, ""))}` : `<span class="none">${escapeHtml(line.replace(/\*\*/g, ""))}</span>`}</p>`)
+    .join("\n");
+  return `<h2>Data health insights</h2>
+<div class="banner health">
+${body}
+</div>`;
+}
+
 function numericalSummaryMarkdown(a: BottleneckAnalysis): string {
   const n = a.numerical;
   if (n.columns.length === 0) return "";
   const fmt = (v: number | null, digits = 4): string => (v === null ? "not measurable" : Number(v.toFixed(digits)).toLocaleString());
   const out: string[] = ["## Numerical data summary", ""];
   out.push(`_${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : ""}_`, "");
-  out.push("| # | column | measured | missing | min | max | mean | spread |", "|---|---|---|---|---|---|---|---|");
+  out.push("| # | column | measured | empty | dirty | min | max | mean | spread | anomaly |", "|---|---|---|---|---|---|---|---|---|---|");
   n.columns.forEach((c, i) => {
-    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.missing} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |`);
+    // A blank and a type mismatch are shown in SEPARATE columns, because they
+    // are separate problems. In one "missing" column a reader cannot tell a
+    // benign null from a producer writing text into a float.
+    // The outlier flag lives IN THE ROW, not in a separate section. A reader
+    // scanning the column for anomalies has to find it here, and a flag beside
+    // the value is checkable against the fences printed in the same table.
+    const flag = c.outliers > 0
+      ? ` **[ANOMALY: OUTLIER]**${c.outlierMax !== null ? ` max ${fmt(c.outlierMax)}` : ""}${c.fenceUpper !== null ? ` beyond a ${fmt(c.fenceUpper)} fence` : ""}${c.outlierMin !== null ? `, min ${fmt(c.outlierMin)}` : ""}`
+      : "";
+    out.push(`| ${i + 1} | ${mdCell(c.column)} | ${c.measured} | ${c.empty} | ${c.dirty} | ${fmt(c.min)} | ${fmt(c.max)} | ${fmt(c.mean)} | ${fmt(c.spread)} |${flag || " |"}`);
   });
-  out.push("", "_Columns with the widest spread first. A cell that was blank or not a number is counted under `missing` and excluded from the figures above; it is never treated as zero._", "");
+  out.push("", "_Columns with the widest spread first. `empty` counts blank cells; `dirty` counts cells holding something that is not a number. Neither reaches the figures above, and neither is treated as zero._", "");
   return out.join("\n");
 }
 
@@ -318,22 +387,24 @@ function numericalSummaryHtml(a: BottleneckAnalysis): string {
       <td class="rank">${i + 1}</td>
       <td>${escapeHtml(c.column)}</td>
       <td class="num">${c.measured}</td>
-      <td class="num">${c.missing}</td>
+      <td class="num">${c.empty}</td>
+      <td class="num">${c.dirty}</td>
       <td class="num">${fmt(c.min)}</td>
       <td class="num">${fmt(c.max)}</td>
       <td class="num">${fmt(c.mean)}</td>
       <td class="num">${fmt(c.spread)}</td>
+      <td>${c.outliers > 0 ? `<span class="badge">OUTLIER</span> ${c.outlierMax !== null ? escapeHtml(`max ${Number(c.outlierMax.toFixed(4)).toLocaleString()}`) : ""}` : ""}</td>
     </tr>`).join("\n");
   const hidden = n.truncated ? ` ${n.numericColumns - n.columns.length} further numeric column(s) are not shown.` : "";
   return `<h2>Numerical data summary</h2>
 <p class="none">${n.numericColumns} numeric column(s) across ${n.rows} row(s). Showing the ${n.columns.length} with the widest spread.${escapeHtml(hidden)}</p>
 <table>
-  <thead><tr><th>#</th><th>column</th><th>measured</th><th>missing</th><th>min</th><th>max</th><th>mean</th><th>spread</th></tr></thead>
+  <thead><tr><th>#</th><th>column</th><th>measured</th><th>empty</th><th>dirty</th><th>min</th><th>max</th><th>mean</th><th>spread</th><th>anomaly</th></tr></thead>
   <tbody>
 ${body}
   </tbody>
 </table>
-<p class="none">Columns with the widest spread first. A cell that was blank or not a number is counted under <strong>missing</strong> and excluded from the figures above; it is never treated as zero.</p>`;
+<p class="none">Columns with the widest spread first. <strong>empty</strong> counts blank cells; <strong>dirty</strong> counts cells holding something that is not a number. Neither reaches the figures above, and neither is treated as zero.</p>`;
 }
 
 function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measure: string, vocabulary: ReportVocabulary): string {
@@ -496,6 +567,11 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     out.push(`> **This report cannot answer anything requiring:** ${analysis.missing.map(mdCell).join(", ")}. No credible column for ${analysis.missing.length === 1 ? "it" : "those"} exists in this export, so nothing below is substituted.`, "");
   }
 
+  // The health section comes FIRST: what is wrong outranks what the numbers are,
+    // and it is rendered for every file rather than only for a numeric one, so
+    // its presence means "checked".
+    out.push(dataHealthMarkdown(analysis));
+
   // THE RANKING TABLES ARE CONDITIONAL. A heading is a claim that there is a
   // ranking; printing one over an empty body produces a report confidently
   // answering a question nobody asked. What replaces it is one line naming what
@@ -622,6 +698,7 @@ export async function renderBottleneckReport(input: {
 ${lead}
 ${divergenceBanner(analysis)}
 ${mappingsSection(analysis)}
+${dataHealthHtml(analysis)}
 ${analysis.categories.length > 0
     ? `${categoryTable(analysis.categories, `${analysis.vocabulary.headingUnit} categories by frequency`, "frequency", analysis.vocabulary)}
 ${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit} categories by total elapsed time`, "elapsed", analysis.vocabulary)}`
