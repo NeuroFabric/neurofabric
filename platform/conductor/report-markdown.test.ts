@@ -198,7 +198,13 @@ test("R13 the markdown tables carry the alias, and column names keep their under
   // The underscore bug. mdCell used to DELETE `*` and `_`, so the report's own
   // provenance table cited `alertcode` and `loggername` -- columns that do not
   // exist in the file it claims to have read.
-  const mappings = md.split("## How this report was read")[1].split("## ")[0];
+  // The heading is now "Data provenance" and sits at the FOOT of the report: it
+  // used to be "How this report was read", near the top, where it answered a
+  // question the reader had not asked yet and buried the one they had. The
+  // property under test is untouched -- mdCell must not mangle a column name --
+  // and the mapping table moved with the heading, so this split follows it.
+  const mappings = md.split("## Data provenance")[1].split("\n## ")[0];
+  assert.ok(mappings !== undefined, "the provenance block must still exist and still carry the table");
   assert.ok(mappings.includes("alert\\_code"), "the escaped column name still renders as alert_code");
   assert.ok(!mappings.includes("| alertcode |"), "and it is not the mangled name the old code produced");
 });
