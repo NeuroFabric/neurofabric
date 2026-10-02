@@ -3327,3 +3327,80 @@ Three supporting decisions travel with it:
 
 - D-033 — the CDN exception, which travels into the image unchanged.
 - D-032 — why the session archive is sensitive in the first place.
+
+---
+
+## D-035 — The second CDN exception, and the one rule that bounds both
+
+**Date:** 2026-10-04
+**Stage:** 4 (conversational wedge and visual engine)
+**Status:** Accepted, with debt
+**Affects:** `platform/web/react-report.ts`, `platform/web/server.ts`
+
+### Context
+
+D-033 admitted one remote dependency — React — into the generated dashboard, and
+isolated it: a separate artifact, pinned versions, no network calls of its own.
+
+Phase 4 needs two more things, and each one reaches for a remote script.
+
+**A chart library.** Phase 3's SVG charts are static images of the answer. The
+Owner asked to hover a spike and see the value and the hour, which an `<img>`
+cannot do. Chart.js is UMD with an imperative `new Chart(canvas, config)` entry
+point and no build step. Recharts — the more natural React choice — must be
+*compiled against* React, and adopting it would mean shipping Babel output or
+hand-rolling a component tree around a library that is already imperative, in an
+artifact whose entire premise is that there is no toolchain.
+
+**A same-origin POST.** The chat has to reach `/api/feedback`, which needs a
+policy that permits it. A dashboard opened over `file://` has no origin to post
+to, so the conversational page is served by `GET /api/dashboard` — and that
+route widens `connect-src` from `'none'` to `'self'`.
+
+### Decision
+
+> **The exception is admitted a second time, and the rule that bounds it is
+> stated once rather than re-derived per dependency.**
+
+1. **Chart.js joins React on the CDN**, pinned to `4.4.1` — a major-plus-patch,
+   never `@latest`. A test asserts the pin, so "bump the dependency" is never a
+   silent commit.
+2. **`connect-src` is `'self'` for the live page and stays `'none'` for the
+   standalone file.** The two artifacts are different documents with different
+   reach, and the offline one keeps every guarantee D-033 gave it. The chat is
+   not merely hidden in the standalone artifact — it is **not emitted into it**,
+   so the file contains no `/api/feedback` string and cannot present a control
+   wired to an endpoint that will never answer.
+3. **What may cross the wire is a mapping, never the file.** The request body is
+   `path`, `column`, `role` — three fields, pinned by test, with a negative
+   assertion that nothing row-shaped may be added later.
+4. **The charts are an enhancement, never the only way to read a number.** Every
+   charted series is also rendered as a table beneath it, and `typeof Chart` is
+   feature-detected before every use. A blocked or offline CDN costs two
+   pictures, not the report.
+5. **The kernel's own page is untouched.** `platform/web/page.ts` keeps
+   `default-src 'none'` and loads nothing remote. The widening lives only in the
+   separately generated artifact.
+
+### Why the debt is acceptable, and what would end it
+
+Pinning a version stops silent drift. **It does not stop a compromised
+publisher**, and the same sentence was written for React in D-033 and is still
+true for Chart.js now that there are two.
+
+The honest closure is vendoring both files at build time, or pinning by
+`integrity` hash — and both need a build step this repository deliberately does
+not have. So this is recorded as accepted debt with a named trigger rather than
+described as solved.
+
+**Trigger to revisit:** the first time a user reports a chart or a dashboard
+that fails to render on a network that reaches neither unpkg nor a CDN mirror.
+That is the moment the "enhancement only" rule is under real pressure, because
+the workaround will be reaching for `unsafe-inline`/`unsafe-eval`, and that is
+the boundary removal this repository refuses to make quietly.
+
+### Cross-references
+
+- D-033 — the first CDN exception, and the isolation argument both rest on.
+- D-032 — why the session archive is sensitive; the chat writes to it.
+- D-034 — the container that serves `/api/dashboard` unchanged.

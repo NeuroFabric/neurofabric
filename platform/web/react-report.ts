@@ -1,5 +1,6 @@
 import type { BottleneckAnalysis, ColumnHealth, NumericColumnStat } from "../conductor/bottlenecks.ts";
 import { synthesize } from "../conductor/synthesis.ts";
+import { parseCorrection } from "./chat-parse.ts";
 
 /**
  * THE INTERACTIVE DASHBOARD. One string, no build step, no install.
@@ -63,6 +64,42 @@ const REACT_VERSION = "18.3.1";
 const REACT_CDN = `https://unpkg.com/react@${REACT_VERSION}/umd`;
 const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
 
+/**
+ * Chart.js, pinned, and the one dependency the artifact loads besides React.
+ *
+ * === WHY A CHART LIBRARY AT ALL, GIVEN "NO BUILD STEP" IS THE PREMISE ===
+ *
+ * The Phase 3 SVG charts were static: an image of the answer. They were the
+ * right call then and they are still what the tables underneath these charts
+ * are -- the data is always readable as text, so the library is an enhancement
+ * and never the only way to see a number.
+ *
+ * Chart.js is UMD with an imperative entry point and needs no compilation, which
+ * is the only reason it is usable here at all. Recharts, the more natural React
+ * choice, is a component library that must be BUILT against React; adopting it
+ * would mean shipping Babel output or hand-rolling a component tree around
+ * something that is already imperative, and the whole premise of this artifact
+ * is that there is no toolchain.
+ *
+ * === THE STANDING EXCEPTION, STATED RATHER THAN GLOSSED ===
+ *
+ * This widens the page's script sources to a third party on a machine that has
+ * just been trusted to read the user's files. Pinning the version stops silent
+ * drift; it does not stop a compromised publisher. The mitigation is the same
+ * isolation argument as React's: this artifact is generated separately, reads
+ * only the JSON block beside it, and its only outbound call is the correction
+ * the user typed. Vendoring or subresource-integrity pinning would close the
+ * gap properly and both need the build this repository does not have -- so this
+ * is recorded as accepted debt with a named trigger to revisit it, not described
+ * as solved.
+ *
+ * 4.4.1 is the last 4.x line before the 4.5 rebuilds; pinned as a major-plus-
+ * patch, for the same reason React is: a report about a production incident
+ * must not change because somebody else published a package.
+ */
+const CHART_VERSION = "4.4.1";
+const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.min.js`;
+
 /** How many anomalies the dashboard shows before the depth toggle is needed. */
 const DEFAULT_DEPTH = 5;
 const MAX_DEPTH = 10;
@@ -86,6 +123,21 @@ export interface Anomaly {
   readonly factor: number | null;
 }
 
+/** One hour of the day, as the engine measured it. */
+export interface TimelinePoint {
+  /** ISO hour key, "2026-09-30T13". Sorts chronologically as a string. */
+  readonly hour: string;
+  readonly count: number;
+  /** Fraction of all readable rows, so a quiet hour is not shown as a crisis. */
+  readonly share: number;
+  /** count / meanPerHour, or null when there is no mean to divide by. */
+  readonly multiple: number | null;
+  /** The engine's own verdict against its own mean. */
+  readonly spike: boolean;
+  /** Why it was flagged, in a phrase. Null when it was not. */
+  readonly rule: string | null;
+}
+
 export interface DashboardData {
   readonly title: string;
   /** One sentence about the file as a whole. The synthesis engine's job. */
@@ -105,12 +157,54 @@ export interface DashboardData {
   /** The deepest the toggle can go, so the app does not hard-code a limit. */
   readonly maxDepth: number;
   readonly defaultDepth: number;
+  /**
+   * The file this report is ABOUT, or null when the artifact is standalone.
+   *
+   * It is here because a correction has to name its target, and because a user
+   * who says "col_15 is the category" deserves to see which file they are about
+   * to change before they say it. A correction applied to the wrong file is not
+   * a no-op -- it is a confidently wrong report.
+   */
+  readonly source: string | null;
+  /**
+   * The shape of the day: one point per hour the engine measured.
+   *
+   * Taken verbatim from `analysis.hourly` rather than recomputed here. A chart
+   * that bucketed hours its own way would disagree with the report printed
+   * beside it, and a reader comparing the two would be right to wonder which
+   * one the tool believes. It is also the difference between a spike and an
+   * impression: `spike` is the ENGINE'S verdict, against its own mean, not a
+   * peak this file noticed by looking for one.
+   */
+  readonly timeline: readonly TimelinePoint[];
+  /**
+   * Mappings this checkout has LEARNED, as role -> column.
+   *
+   * Carried in the payload rather than fetched, so the panel renders on first
+   * paint and the standalone artifact still shows what it already knows.
+   */
+  readonly learned: Readonly<Record<string, string>>;
 }
 
 export interface DashboardOptions {
   readonly title?: string;
   /** The executive summary paragraph, produced by the synthesis engine. */
   readonly headline?: string;
+  /**
+   * Serve the correction chat, naming the file it applies to.
+   *
+   * OMITTED BY DEFAULT, and that default is the point. The usual artifact is a
+   * standalone HTML file that anybody can open, and it must keep making no
+   * network calls -- a dashboard that phones home is a dashboard that
+   * exfiltrated the CSV. Passing this opts the page into exactly one call, to
+   * one endpoint, on its own origin.
+   */
+  readonly live?: { readonly path: string };
+  /**
+   * Mappings already learned, role -> column. Supplied by the caller so the
+   * live page shows the archive as it stands BEFORE the user says anything.
+   */
+  readonly learned?: Readonly<Record<string, string>>;
 }
 
 function thousands(value: number): string {
@@ -240,8 +334,161 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
     maxDepth: MAX_DEPTH,
     defaultDepth: DEFAULT_DEPTH,
+    source: options.live?.path ?? null,
+    timeline: analysis.hourly.hours.map((h) => ({
+      hour: h.key,
+      count: h.count,
+      share: h.share,
+      multiple: h.multiple,
+      spike: h.isSpike,
+      rule: h.rule,
+    })),
+    // Seeded from the analysis itself. A role the engine filled while profiling
+    // IS a mapping it holds, whether or not a person confirmed it, and the chat
+    // has to start from what the engine believes or the first correction looks
+    // like it is starting from nothing.
+    learned: options.learned ?? rolesToMap(analysis),
   };
 }
+
+/**
+ * The role -> column map the profiler already settled on.
+ *
+ * Read off the schema the analysis was built with rather than re-derived, so
+ * the chat shows the engine's actual belief. A panel that disagreed with the
+ * report beside it would be worse than no panel.
+ */
+function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
+  const schema = (analysis as { schema?: { roles?: Readonly<Record<string, string>> } }).schema;
+  const out: Record<string, string> = {};
+  for (const [role, column] of Object.entries(schema?.roles ?? {})) {
+    if (typeof column === "string" && column !== "") out[role] = column;
+  }
+  return out;
+}
+
+
+/**
+ * THE CHAT SOURCE, held separately so it can be spliced in ONLY for a live page.
+ *
+ * Two constraints shaped this being its own constant rather than more lines of
+ * APP_SOURCE:
+ *
+ *   - A STANDALONE REPORT MUST NOT CONTAIN IT. The offline artifact is a file
+ *     anybody can open, it runs with connect-src 'none', and it must not carry
+ *     the string "/api/feedback" -- a visible control wired to an endpoint that
+ *     cannot exist is a bug that looks like a feature. Splicing it out is what
+ *     keeps that true by construction rather than by remembering.
+ *   - IT MUST NOT INTERPOLATE. This is a host String.raw template, so a single
+ *     stray `${...}` inside the browser source would be evaluated HERE, at
+ *     generation time, instead of in the browser. Nothing below uses that form.
+ */
+const CHAT_SOURCE = String.raw`
+/**
+ * THE CONVERSATION. One sentence in, one honest answer out.
+ *
+ * Kept OUT of the base app on purpose, because it is absent from a standalone
+ * report. That file gets opened by people with no server behind it, and a chat
+ * box that can only fail is worse than no chat box -- it reads as a broken
+ * product rather than an absent feature.
+ */
+function ChatPanel() {
+  var sText = React.useState("");
+  var sLog = React.useState([]);
+  var sBusy = React.useState(false);
+  var sLearned = React.useState(D.learned || {});
+  var text = sText[0], setText = sText[1];
+  var log = sLog[0], setLog = sLog[1];
+  var busy = sBusy[0], setBusy = sBusy[1];
+  var learned = sLearned[0], setLearned = sLearned[1];
+
+  function say(who, body, ok) {
+    setLog(function (l) { return l.concat([{ who: who, body: body, ok: ok }]); });
+  }
+
+  function send(event) {
+    if (event) event.preventDefault();
+    var sentence = String(text).trim();
+    if (sentence === "" || busy) return;
+    say("you", sentence, true);
+
+    var parsed = parseCorrection(sentence);
+    // A REFUSAL IS A COMPLETE ANSWER. Nothing leaves the page: a sentence the
+    // engine cannot read is not a correction, and posting it anyway would put
+    // an unvalidated mapping in front of the user dressed as a decision.
+    if (!parsed.ok) {
+      setText("");
+      say("engine", parsed.reason, false);
+      return;
+    }
+
+    setBusy(true);
+    // The body is a MAPPING, not the file. Three fields, and the tests hold it
+    // to three: this page has just read somebody's CSV, and a correction must
+    // never become a way to send it anywhere.
+    fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: D.source, column: parsed.column, role: parsed.role })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+    }).then(function (r) {
+      setBusy(false);
+      if (!r.ok) {
+        var failure = (r.body && r.body.failure) || {};
+        say("engine", failure.reason || "the correction was refused", false);
+        return;
+      }
+      var fb = r.body.feedback || {};
+      // THE REFRESH. The server has already re-profiled and regenerated the
+      // report; all that is left is to show the consequence. Replacing the
+      // learned map in state re-renders the panel WITHOUT a reload, so the user
+      // keeps their place in a report they are part way through reading.
+      setLearned(fb.roles || {});
+      say("engine", fb.reason || (parsed.column + " is now the " + parsed.role), true);
+    }).catch(function (error) {
+      setBusy(false);
+      say("engine", "the server did not answer: " + error.message, false);
+    });
+  }
+
+  var keys = Object.keys(learned).sort();
+  return React.createElement("aside", { className: "chat", "aria-label": "Chat and feedback" },
+    React.createElement("h2", null, "Chat"),
+    React.createElement("p", { className: "meta" },
+      "Correct the engine in plain English. It applies the change to " + esc(D.source) + " and re-reads the file."),
+    React.createElement("div", { className: "log", role: "log" },
+      log.length === 0
+        ? React.createElement("p", { className: "empty" },
+            "Try: alert_code is the category. Names the engine does not have are refused rather than guessed.")
+        : log.map(function (m, i) {
+            return React.createElement("p", { key: i, className: m.who + (m.ok ? "" : " bad") },
+              React.createElement("strong", null, m.who === "you" ? "You: " : "Engine: "),
+              esc(m.body));
+          })
+    ),
+    React.createElement("form", { className: "composer", onSubmit: send },
+      React.createElement("input", {
+        type: "text",
+        value: text,
+        placeholder: "col_15 is the category",
+        "aria-label": "Describe the correction in plain English",
+        onChange: function (e) { setText(e.target.value); }
+      }),
+      React.createElement("button", { type: "submit", disabled: busy }, busy ? "Working..." : "Send")
+    ),
+    React.createElement("h3", null, "Learned mappings"),
+    keys.length === 0
+      ? React.createElement("p", { className: "empty" }, "Nothing learned yet.")
+      : React.createElement("ul", { className: "learned" }, keys.map(function (k) {
+          return React.createElement("li", { key: k },
+            React.createElement("span", { className: "role" }, esc(k)),
+            React.createElement("span", { className: "arrow" }, "\u2192"),
+            React.createElement("span", { className: "colname" }, esc(learned[k])));
+        }))
+  );
+}
+`;
 
 /**
  * THE APPLICATION SOURCE.
@@ -273,6 +520,189 @@ function num(v) {
   var a = Math.abs(v);
   if (a >= 1000) return v.toLocaleString("en-US");
   return String(Math.round(v * 1000) / 1000);
+}
+
+
+/**
+ * THE CHARTS. Two marks for two different questions.
+ *
+ * A bar for "which category costs the most" -- a comparison of independent
+ * things, where the LENGTH is the value and the order is the answer.
+ *
+ * A line for "when did this go wrong" -- a series over time, where the SHAPE is
+ * the answer and any single point is nearly meaningless on its own. Rendering
+ * hours as bars would invite the reader to compare two hours, which is the one
+ * comparison this data cannot support: an hour with 40 rows and an hour with 3
+ * rows are not 13x worse, they are 40 rows and 3 rows.
+ *
+ * === WHY THE LIBRARY IS FEATURE-DETECTED, EVERY TIME ===
+ *
+ * Chart.js arrives from a CDN, on a machine that may be offline, behind a proxy
+ * that blocks unpkg, or on a network where the request simply failed. The
+ * tables and the chat are the product; the charts are the garnish. So every use
+ * is guarded, and a missing library costs two pictures rather than the report.
+ *
+ * === WHY THE CHART IS CREATED IN AN EFFECT AND DESTROYED ON CLEANUP ===
+ *
+ * Chart.js draws into a <canvas>, and React does not know what is inside one.
+ * Creating the chart during render -- which is the obvious way to write it --
+ * means every re-render (a severity filter, a depth toggle, a learned mapping)
+ * builds ANOTHER chart on the same canvas. They stack: bars double, then
+ * triple, and the only symptom is a chart that quietly gets fatter and darker
+ * the more you use the page. The teardown is the whole fix.
+ */
+function useChart(draw) {
+  var ref = React.useRef(null);
+  React.useEffect(function () {
+    // Feature-detect, do not assume. See the note above.
+    if (typeof Chart === "undefined" || ref.current === null) return;
+    var chart = new Chart(ref.current.getContext("2d"), draw());
+    return function () { chart.destroy(); };
+    // Deliberately empty: the chart depends on the DATA, not on the render
+    // count. Re-running this on every render is exactly the stacking bug.
+  }, []);
+  return ref;
+}
+
+function ChartNote(props) {
+  if (typeof Chart !== "undefined") return null;
+  return React.createElement("p", { className: "empty chartoff" },
+    props.children || "The charting library could not be loaded, so these are shown as tables below. Everything else on this page works.");
+}
+
+function BarChart() {
+  var points = D.ranking.slice(0, D.maxDepth);
+  var ref = useChart(function () {
+    return {
+      type: "bar",
+      data: {
+        labels: points.map(function (r) { return r.key; }),
+        datasets: [{
+          label: "Rows",
+          data: points.map(function (r) { return r.count; }),
+          backgroundColor: "#3b5bdb",
+          borderRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              // The category AND the count. A bar chart whose tooltip says only
+              // "40" has told the reader nothing they could not see.
+              label: function (ctx) {
+                var p = points[ctx.dataIndex];
+                return p.count.toLocaleString("en-US") + " rows, " +
+                  Math.round((p.count / Math.max(1, D.totalRows)) * 100) + "% of the file";
+              }
+            }
+          }
+        },
+        scales: { x: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    };
+  });
+  return React.createElement("div", { className: "canvasbox" },
+    React.createElement("canvas", { ref: ref, "aria-label": "Row count by category", role: "img" }));
+}
+
+function LineChart() {
+  var hours = D.timeline;
+  var ref = useChart(function () {
+    return {
+      type: "line",
+      data: {
+        labels: hours.map(function (h) { return h.hour; }),
+        datasets: [{
+          label: "Rows in the hour",
+          data: hours.map(function (h) { return h.count; }),
+          borderColor: "#3b5bdb",
+          backgroundColor: "rgba(59,91,219,0.12)",
+          fill: true,
+          tension: 0.25,
+          // Point colour carries the ENGINE'S verdict, not a visual guess. A
+          // reader can see at a glance which peaks the engine called abnormal,
+          // and hovering says why.
+          pointRadius: hours.map(function (h) { return h.spike ? 6 : 3; }),
+          pointBackgroundColor: hours.map(function (h) { return h.spike ? "#d9480f" : "#3b5bdb"; })
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          tooltip: {
+            callbacks: {
+              // THE POINT OF THE WHOLE EXERCISE: the exact count, the hour it
+              // belongs to, and whether the engine considered it abnormal.
+              // A spike you cannot interrogate is just a bump.
+              label: function (ctx) {
+                var h = hours[ctx.dataIndex];
+                if (!h) return "";
+                var lines = [h.count.toLocaleString("en-US") + " rows in this hour"];
+                if (h.multiple !== null && h.multiple !== undefined) {
+                  lines.push(h.multiple.toFixed(1) + "x the mean hour");
+                }
+                lines.push(h.spike ? ("Flagged as a spike. " + (h.rule || "")) : "Within the usual range");
+                return lines;
+              },
+              title: function (items) {
+                var h = hours[items[0].dataIndex];
+                return h ? h.hour.replace("T", " ") + ":00" : "";
+              }
+            }
+          }
+        },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    };
+  });
+  return React.createElement("div", { className: "canvasbox" },
+    React.createElement("canvas", { ref: ref, "aria-label": "Rows per hour, with spikes flagged", role: "img" }));
+}
+
+
+/** The ranking as a table. The chart is an enhancement; this is the fact. */
+function renderRankingTable(rank) {
+  return React.createElement("table", { className: "fallback" },
+    React.createElement("thead", null, React.createElement("tr", null,
+      React.createElement("th", null, "Category"),
+      React.createElement("th", null, "Rows"),
+      React.createElement("th", null, "Share")
+    )),
+    React.createElement("tbody", null, rank.map(function (r) {
+      return React.createElement("tr", { key: r.key },
+        React.createElement("td", null, esc(r.key)),
+        React.createElement("td", null, r.count.toLocaleString("en-US")),
+        React.createElement("td", null, Math.round((r.count / Math.max(1, D.totalRows)) * 100) + "%")
+      );
+    }))
+  );
+}
+
+/** The hours as a table, spikes marked. Never chart-only data. */
+function renderTimelineTable() {
+  return React.createElement("table", { className: "fallback" },
+    React.createElement("thead", null, React.createElement("tr", null,
+      React.createElement("th", null, "Hour"),
+      React.createElement("th", null, "Rows"),
+      React.createElement("th", null, "Vs mean"),
+      React.createElement("th", null, "Verdict")
+    )),
+    React.createElement("tbody", null, D.timeline.map(function (h) {
+      return React.createElement("tr", { key: h.hour, className: h.spike ? "critical" : "" },
+        React.createElement("td", null, esc(h.hour.replace("T", " ") + ":00")),
+        React.createElement("td", null, h.count.toLocaleString("en-US")),
+        React.createElement("td", null,
+          h.multiple === null || h.multiple === undefined ? "-" : h.multiple.toFixed(1) + "x"),
+        React.createElement("td", null, h.spike ? "Spike" : "Normal")
+      );
+    }))
+  );
 }
 
 function App() {
@@ -314,6 +744,26 @@ function App() {
       }),
       React.createElement("span", { className: "depthlabel" },
         "Top " + depth + (rank.length < D.ranking.length ? " of " + D.ranking.length : ""))
+    ),
+    React.createElement("section", null,
+      React.createElement("h2", null, "Where the rows are"),
+      React.createElement(ChartNote, null),
+      D.ranking.length === 0
+        ? React.createElement("p", { className: "empty" }, "This file has no categorical ranking to plot.")
+        : React.createElement(React.Fragment, null,
+            React.createElement(BarChart),
+            React.createElement(React.Fragment, null, renderRankingTable(rank))
+          )
+    ),
+    React.createElement("section", null,
+      React.createElement("h2", null, "The shape of the day"),
+      D.timeline.length === 0
+        ? React.createElement("p", { className: "empty" },
+            "No readable timestamps in this file, so there is no day to plot. The engine could not tell when these rows happened.")
+        : React.createElement(React.Fragment, null,
+            React.createElement(LineChart),
+            React.createElement(React.Fragment, null, renderTimelineTable())
+          )
     ),
     React.createElement("section", null,
       React.createElement("h2", null, "Worst " + depth),
@@ -371,7 +821,8 @@ function App() {
       )
     ),
     React.createElement("footer", null,
-      "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning.")
+      "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning."),
+    __CHAT__
   );
 }
 
@@ -386,9 +837,33 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   // Computed here only when the caller did not supply one.
   const summary = synthesize({ totalRows: analysis.totalRows, columns: analysis.numerical.columns, health: analysis.health });
   const data = buildDashboardData(analysis, { headline: summary.headline, ...options });
+
+  // === THE SPLICE, AND THE ONE PLACE A LIVE PAGE GETS WIDER ===
+  //
+  // Standalone (the default): the chat is not merely hidden, it is not emitted.
+  // The artifact therefore contains no "/api/feedback" string at all, so it
+  // cannot present a control wired to an endpoint that will never answer.
+  //
+  // Live: the parser's SOURCE is spliced in, so the browser runs the exact
+  // function this repository tests rather than a hand-written paraphrase of it.
+  // Two implementations that agree until somebody edits one is the failure this
+  // avoids, and the test re-evaluates the emitted text to prove they agree.
+  const live = options.live !== undefined;
+  const chat = live
+    ? `${parseCorrection.toString()}\n${CHAT_SOURCE}`
+    : "";
   const source = APP_SOURCE
     .split("__DATA_ID__").join(DASHBOARD_DATA_ID)
-    .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID);
+    .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID)
+    .split("__CHAT__").join(live ? `React.createElement(ChatPanel)` : "null")
+    .replace("function App() {", `${chat}\nfunction App() {`);
+
+  // connect-src is the whole difference between the two artifacts. 'none' for
+  // the standalone page -- it has nothing to talk to -- and 'self' for the live
+  // one, which permits exactly the origin serving it and nothing else. Not a
+  // wildcard, and not the CDN: the report data is already in the page, so the
+  // only thing that ever needs to travel is the user's correction.
+  const connect = live ? "'self'" : "'none'";
 
   return `<!doctype html>
 <html lang="en">
@@ -402,13 +877,16 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   The kernel's page is served with default-src 'none' and loads nothing remote.
   This one loads React from a CDN, so it must name that origin or the app will
   not run. The isolation is the safety property: this artifact is generated
-  separately, carries only report data, and makes no network calls of its own.
+  separately and carries only report data.
+
+  connect-src is 'none' on a standalone report and 'self' on a live one. A
+  standalone file has no server to correct, so it is not permitted to try.
 
   Pinned versions, not a floating major, so a report cannot change because an
   unrelated package was published. See platform/web/react-report.ts for what
   pinning does and does not buy.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; connect-src 'none'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; connect-src ${connect}; img-src data:">
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; background: #f6f7f9; color: #16181d; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -421,6 +899,11 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   .controls label { font-size: .82rem; color: #5b616e; }
   select { font: inherit; padding: .25rem .4rem; border: 1px solid #b9bfcc; border-radius: 6px; background: #fff; }
   .depthlabel { font-size: .82rem; color: #5b616e; }
+  .canvasbox { position: relative; height: 17rem; margin: .8rem 0 1.2rem; }
+  .canvasbox canvas { width: 100% !important; height: 100% !important; }
+  .chartoff { padding: .6rem .8rem; background: #fdf0d5; color: #7a5300; border-radius: 6px; }
+  table.fallback { margin-top: .4rem; }
+  table.fallback th, table.fallback td { font-size: .84rem; }
   .rank { list-style: none; padding: 0; margin: 0; }
   .rank li { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr auto; gap: .6rem; align-items: center; padding: .18rem 0; }
   .rank .k { font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -436,6 +919,21 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   .pill.info { background: #e4ecf6; color: #274a76; }
   tr.critical td { background: #fef8f6; }
   footer { margin-top: 2.5rem; font-size: .8rem; color: #5b616e; border-top: 1px solid #e4e7ee; padding-top: .8rem; }
+  .chat { margin-top: 2.5rem; border: 1px solid #e4e7ee; border-radius: 10px; padding: 1rem 1.1rem 1.2rem; background: #fff; }
+  .chat h2 { margin-top: 0; }
+  .chat h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; margin: 1.1rem 0 .4rem; }
+  .log { max-height: 16rem; overflow-y: auto; margin: .8rem 0; }
+  .log p { margin: 0 0 .5rem; font-size: .88rem; }
+  .log p.bad { color: #8a2b12; background: #fef8f6; border-left: 3px solid #d9613f; padding: .3rem .5rem; border-radius: 0 4px 4px 0; }
+  .composer { display: flex; gap: .5rem; }
+  .composer input { flex: 1; font: inherit; padding: .4rem .55rem; border: 1px solid #b9bfcc; border-radius: 6px; }
+  .composer button { font: inherit; padding: .4rem .9rem; border-radius: 6px; border: 1px solid #16181d; background: #16181d; color: #fff; cursor: pointer; }
+  .composer button[disabled] { opacity: .55; cursor: progress; }
+  .learned { list-style: none; padding: 0; margin: 0; font-size: .85rem; }
+  .learned li { display: flex; gap: .45rem; align-items: baseline; padding: .12rem 0; }
+  .learned .role { color: #5b616e; min-width: 6.5rem; }
+  .learned .arrow { color: #a9b0be; }
+  .learned .colname { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -443,6 +941,7 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
 <script id="${DASHBOARD_DATA_ID}" type="application/json">${embedJson(data)}</script>
 <script crossorigin src="${REACT_CDN}/react.production.min.js"></script>
 <script crossorigin src="${REACT_DOM_CDN}/react-dom.production.min.js"></script>
+<script crossorigin src="${CHART_CDN}"></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
 ${source}

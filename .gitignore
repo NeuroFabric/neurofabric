@@ -58,6 +58,10 @@ platform/pi/.s8-probe.test.ts
 verification/.tmp-*.txt
 verification/.tmp-*
 
+# Agent scratchpad for throwaway probes and one-shot patch scripts. Never a
+# deliverable: anything that matters is moved into platform/ and committed.
+.scratch/
+
 data/
 
 # The wedge launcher workspace: the owner drops CSVs in here and reports are
