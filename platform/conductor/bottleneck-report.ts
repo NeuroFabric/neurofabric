@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary, type HourlyProfile } from "./bottlenecks.ts";
 import { resolveSchemaMemory } from "./schema-memory.ts";
+import { synthesize } from "./synthesis.ts";
 import { barChart, hourlyChart, SVG_STYLE } from "./svg-charts.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
@@ -530,11 +531,28 @@ function hourlyCalloutHtml(h: HourlyProfile): string {
 </div>`;
 }
 
-export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report"): string {
+export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bottleneck report", summary?: string): string {
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
   const out: string[] = [`# ${mdCell(title)}`, ""];
   const vocab = analysis.vocabulary;
+
+  // THE EXECUTIVE SUMMARY LEADS, above the row count.
+  //
+  // Placement is the whole argument. A reader who reads the first paragraph and
+  // stops must learn the thing that decides whether they need the other forty
+  // lines -- and "3,262,070 times the fence" is that thing, while a row count is
+  // not. It is also the only part of the report that is a judgement rather than
+  // a measurement, so burying it under the tables would file the interpretation
+  // underneath the data it interprets.
+  //
+  // Passed in rather than computed here so the React dashboard and the Markdown
+  // say the SAME thing. Two generators each writing their own summary would
+  // drift, and a reader comparing the two views would be right to wonder which
+  // one the tool believes.
+  if (summary !== undefined && summary !== "") {
+    out.push(`> ${summary.replace(/\n+/g, " ")}`, "");
+  }
 
   out.push(`${analysis.totalRows} row(s) · ranked by **${mdCell(analysis.categoryColumn ?? "no credible column")}**`);
   if (analysis.mappings.some((m) => m.role === "status")) {
@@ -674,7 +692,11 @@ export async function renderBottleneckReport(input: {
   }
 
   if (input.format === "markdown") {
-    const markdown = toBottleneckMarkdown(analysis, title);
+    // The summary is computed ONCE, here, and handed to the renderer. The
+    // renderer does not import the synthesis engine, so there is no second
+    // opinion anywhere in the pipeline and nothing to drift.
+    const summary = synthesize({ totalRows: analysis.totalRows, columns: analysis.numerical.columns, health: analysis.health });
+    const markdown = toBottleneckMarkdown(analysis, title, summary.paragraph);
     const out = String(input.path);
     await mkdir(path.dirname(out), { recursive: true });
     await writeFile(out, markdown, "utf8");

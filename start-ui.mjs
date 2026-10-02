@@ -35,11 +35,19 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
  * directory would be a UI reading the wrong files.
  */
 function parseArgs(argv) {
-  const options = { workspace: process.env.WEDGE_WORKSPACE ?? path.join(ROOT, "ui-workspace"), port: Number(process.env.PORT ?? 3000) };
+  const options = {
+    workspace: process.env.WEDGE_WORKSPACE ?? path.join(ROOT, "ui-workspace"),
+    port: Number(process.env.PORT ?? 3000),
+    // LOOPBACK BY DEFAULT, and the default is the security property. The
+    // container is the one case that needs a wider bind, and it is an explicit
+    // opt-in rather than a default that happens to suit one deployment.
+    host: process.env.WEDGE_HOST ?? "127.0.0.1",
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--workspace" || arg === "-w") options.workspace = argv[++i];
     else if (arg === "--port" || arg === "-p") options.port = Number(argv[++i]);
+    else if (arg === "--host" || arg === "-H") options.host = argv[++i];
     else if (arg === "--help" || arg === "-h") return { help: true };
     else if (!arg.startsWith("-")) options.workspace = arg;
     else throw new Error(`unknown option: ${arg}`);
@@ -48,16 +56,25 @@ function parseArgs(argv) {
     throw new Error(`that is not a port number: ${options.port}`);
   }
   if (options.workspace === undefined) throw new Error("no workspace given");
+  if (typeof options.host !== "string" || options.host.trim() === "") {
+    throw new Error(`that is not a host: ${JSON.stringify(options.host)}`);
+  }
   return options;
 }
 
 function usage() {
   return [
-    "Usage: node --experimental-strip-types start-ui.mjs [workspace] [--workspace DIR] [--port N]",
+    "Usage: node --experimental-strip-types start-ui.mjs [workspace] [--workspace DIR] [--port N] [--host H]",
     "",
     "  workspace   directory the tool may read CSVs from and write reports into",
     "              (default: ./ui-workspace)",
-    "  --port N    port to bind on 127.0.0.1 (default: 3000, or $PORT)",
+    "  --port N    port to bind (default: 3000, or $PORT)",
+    "  --host H    interface to bind. DEFAULT 127.0.0.1, and the default is the",
+    "              security property: this process reads your files, so a listener",
+    "              on every interface turns a local tool into a remote one.",
+    "              Pass 0.0.0.0 ONLY inside a container, where a loopback bind is",
+    "              unreachable from the host -- see the Dockerfile and",
+    "              docker-compose.yml, which publish to the host's loopback anyway.",
   ].join("\n");
 }
 
@@ -79,7 +96,19 @@ mkdirSync(cwd, { recursive: true });
 // Port 0 asks the OS for a free one, which is what the tests do. Here the port
 // is chosen explicitly because a person has to type the URL, so the trade is
 // the other way: a known address beats an arbitrary one.
-const server = await startWedgeServer({ cwd, port: options.port, installRoot: ROOT });
+const server = await startWedgeServer({ cwd, port: options.port, host: options.host, installRoot: ROOT });
+
+// A widened bind is announced, not silent. The default prints a URL; the
+// container prints a WARNING first, because the person reading the log may not
+// know their network namespace is the only thing keeping this local.
+if (options.host !== "127.0.0.1" && options.host !== "localhost") {
+  console.warn("");
+  console.warn(`  WARNING: bound to ${options.host}, not loopback.`);
+  console.warn("  This process can read the files in the workspace, so it must not be");
+  console.warn("  reachable from anywhere the container's network is. In the shipped");
+  console.warn("  compose file the published port is bound to 127.0.0.1 for that reason.");
+  console.warn("");
+}
 
 console.log("");
 console.log("  The wedge is up.");

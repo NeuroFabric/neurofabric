@@ -108,6 +108,38 @@ test("a correction INSIDE the workspace still works, so the fix is a filter and 
   assert.ok(body.feedback !== undefined, "a legitimate correction must still be applied");
 });
 
+// === THE LOOPBACK DEFAULT MUST SURVIVE CONTAINERISATION =================
+
+test("the server binds loopback by DEFAULT, which is the security property", async () => {
+  // `startWedgeServer` binds 127.0.0.1 on purpose: "this process can read the
+  // user's files; a listener on every interface turns a local tool into a
+  // remote one." Containerising is the moment that decision is most likely to be
+  // quietly reversed, because a container publishing a port cannot be reached
+  // through a loopback bind and the obvious fix is to open the bind. So the
+  // default is pinned here, and the container opts in EXPLICITLY.
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "nf-host-"));
+  const server = await startWedgeServer({ cwd: workspace });
+  openServers.add(server);
+  assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+$/,
+    "the default must remain loopback; widening it is a deliberate, separate change");
+});
+
+test("a container may opt into 0.0.0.0 explicitly, because a port publish cannot reach loopback", async () => {
+  // Inside a container, `server.listen(port, "127.0.0.1")` binds the container's
+  // own loopback and Docker's published port -- which forwards to the container
+  // interface -- is refused. The fix is to widen the bind INSIDE the container
+  // while keeping the published port bound to the host's loopback, so the
+  // reachable surface is identical to the non-container case. This test is the
+  // opt-in; the compose file is the other half, and it publishes to 127.0.0.1.
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "nf-host2-"));
+  const server = await startWedgeServer({ cwd: workspace, host: "0.0.0.0" });
+  openServers.add(server);
+  assert.match(server.url, /^http:\/\/0\.0\.0\.0:\d+$/);
+  // And it must actually answer on the container interface, not just claim to.
+  const response = await fetch(`http://127.0.0.1:${server.port}/`);
+  assert.equal(response.status, 200, "the opt-in bind must really listen");
+});
+
 // === CONFIRMED CLEAN, NOW PINNED ==========================================
 
 test("the report renderer escapes hostile content before it transforms it", () => {
