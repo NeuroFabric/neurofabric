@@ -317,7 +317,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
     ranking: data.ranking,
     timeline: data.timeline,
   }, text);
-  if (query.matched) {
+  if (query.matched || query.clarify) {
     return {
       kind: "answer",
       text: query.answer,
