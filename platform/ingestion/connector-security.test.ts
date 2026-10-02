@@ -81,10 +81,12 @@ test("FINDING 2: querySqlite opens a database from outside the workspace", async
   handle.close();
 
   const workspace = await outsideDir();
-  // No `root` option exists yet, so this cannot be expressed -- which is exactly
-  // the finding: the connector has no way to be governed, and therefore is not.
-  await assert.rejects(
-    () => querySqlite({ file: db, query: "SELECT a FROM t", root: workspace } as never),
+  // `querySqlite` is SYNCHRONOUS, so this is `throws` and not `rejects`. An
+  // earlier draft reached for `assert.rejects` and the harness itself failed with
+  // "expected a promise, got an object" -- which is a red test that proves
+  // nothing about the thing it is named after.
+  assert.throws(
+    () => querySqlite({ file: db, query: "SELECT a FROM t", root: workspace }),
     /refus|outside|root|boundary|escape/i,
     "a database outside the workspace must be refused, exactly as a PDF would be",
   );
@@ -101,6 +103,15 @@ test("and a legitimate database inside the root still reads", async () => {
   handle.close();
   const result = querySqlite({ file: path.join(workspace, "orders.db"), query: "SELECT id, total FROM orders", root: workspace });
   assert.equal(result.rowCount, 1, "the fix must not be a wall");
+});
+
+test("and the root defaults to the workspace rather than being skippable", async () => {
+  // A boundary a caller can omit is a boundary that gets omitted. The default
+  // is the process working directory, so the common case is governed without
+  // the caller doing anything.
+  const outside = await outsideDir();
+  assert.throws(() => querySqlite({ file: path.join(outside, "x.db"), query: "SELECT 1" }), /refus|outside|root|boundary|escape/i,
+    "omitting `root` must fall back to the process workspace, not to no check at all");
 });
 
 // === FINDING 3 (CONFIRMED CLEAN, PINNED SO IT STAYS THAT WAY) ==============

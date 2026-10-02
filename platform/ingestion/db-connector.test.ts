@@ -130,8 +130,18 @@ test("the refusal carries a reason, so it is explainable rather than a bare stop
 
 // === THE PIPELINE ACTUALLY WORKS ===========================================
 
-/** A real SQLite file, built with node:sqlite, so the test is not a mock. */
-async function makeDb(): Promise<string> {
+/**
+ * A real SQLite file, built with node:sqlite, so the test is not a mock.
+ *
+ * It returns the DIRECTORY as well as the file, and every call site passes that
+ * directory as `root`. The security sweep made this necessary rather than
+ * merely tidy: the connector gained a workspace boundary, the fixture lives in
+ * a temp directory, and a governed read of a file outside the root is refused
+ * -- correctly. So each test now states which workspace it is reading inside.
+ * A test that had to be changed this way is a test that was relying on the
+ * connector having no boundary at all.
+ */
+async function makeDb(): Promise<{ file: string; dir: string }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "nf-dbfile-"));
   const file = path.join(dir, "orders.db");
   const { DatabaseSync } = (await import("node:sqlite")) as { DatabaseSync: new (p: string) => { exec(sql: string): void; close(): void } };
@@ -146,12 +156,12 @@ async function makeDb(): Promise<string> {
       (5,'2026-10-01','EMEA',99.99);
   `);
   db.close();
-  return file;
+  return { file, dir };
 }
 
 test("a real SQLite read produces the exact table the Conductor already understands", async () => {
-  const file = await makeDb();
-  const result = querySqlite({ file, query: "SELECT id, order_date, region, total FROM orders" });
+  const { file, dir } = await makeDb();
+  const result = querySqlite({ file, query: "SELECT id, order_date, region, total FROM orders", root: dir });
   assert.equal(result.rowCount, 5);
   assert.deepEqual(result.csv.headers, ["id", "order_date", "region", "total"]);
   assert.equal(result.truncated, false);
@@ -162,8 +172,8 @@ test("a real SQLite read produces the exact table the Conductor already understa
 });
 
 test("and it flows straight into the existing engine, with no new code downstream", async () => {
-  const file = await makeDb();
-  const result = querySqlite({ file, query: "SELECT id, order_date, region, total FROM orders" });
+  const { file, dir } = await makeDb();
+  const result = querySqlite({ file, query: "SELECT id, order_date, region, total FROM orders", root: dir });
   // The renderer resolves memory before analysing, so the pipeline under test is
   // resolve-then-analyse. Calling analyseBottlenecks bare would skip the generic
   // profiler entirely -- and "region" is in its category names, not in the
@@ -185,7 +195,7 @@ test("and it flows straight into the existing engine, with no new code downstrea
 test("the open is READ-ONLY, which is a second and independent reason nothing is modified", async () => {
   // Even if the guard were removed entirely, a read-only handle cannot write.
   // The two protections are deliberately different mechanisms.
-  const file = await makeDb();
+  const { file } = await makeDb();
   const { DatabaseSync } = (await import("node:sqlite")) as {
     DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => { prepare(s: string): { get(): unknown }; close(): void };
   };

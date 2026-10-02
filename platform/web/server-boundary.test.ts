@@ -65,7 +65,11 @@ test("FINDING 4: the feedback route reads a file outside the workspace", async (
   // Conductor refuses the same path afterwards and returns 403 either way.
   assert.equal(body.feedback, undefined,
     "the file outside the workspace was read and a correction was applied to it");
-  assert.equal(response.status, 400, "and the route must refuse the request, not carry on");
+  // 403, not 400, and deliberately: `/api/report` returns 403 for the same path,
+  // so the two routes must not be distinguishable by whether they check. The
+  // assertion that matters is the one above -- a 403 alone would also be what a
+  // route that read the file and was then refused downstream returned.
+  assert.equal(response.status, 403, "and the route must refuse the request, not carry on");
 });
 
 test("and the same traversal against the report route is still the kernel's refusal", async () => {
