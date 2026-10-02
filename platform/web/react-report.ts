@@ -675,12 +675,43 @@ function refreshFromServer(setVersion, reportFailure) {
  * rendered (`useState` plus the filter applied to the list), and every value
  * rendered as TEXT goes through the same escape-first rule the static page uses.
  */
+/**
+ * THE ELEMENT ALIAS, AND WHY THE LONG NOTE IS OUTSIDE THE STRING.
+ *
+ * Commit 1f46077 (the forecast work) deleted the declaration of the React
+ * element alias while restructuring the app around the chart components, and
+ * 97 call sites kept using it. Every function in the app -- BarChart,
+ * LineChart, WidgetCard, renderWidget, Message, App -- rendered through the
+ * bare alias, so the dashboard threw a ReferenceError on first paint and
+ * showed nothing at all.
+ *
+ * WHY NOTHING CAUGHT IT, which is the part that will happen again. Every test
+ * in this repository held the generated document as a STRING. The parse test
+ * checks the emitted source does not terminate its own script element; the
+ * report tests check a column name or a role appears in the payload. A name
+ * that is undefined until a JavaScript engine reads it is INVISIBLE to a test
+ * that never runs the code, so a 1,075-test suite reported full green over a
+ * page that could not render. Parse and evaluate are different claims, and only
+ * one of them was being made.
+ *
+ * The explanation lives HERE rather than inside the emitted string, on purpose.
+ * A generated artifact is a document somebody opens, and a paragraph about a
+ * git commit is noise in it. It also keeps the emitted source free of the alias
+ * appearing in a comment, which a test scanning for the first call site would
+ * otherwise find and mistake for a use that happens before the declaration.
+ *
+ * Declared once, at the top, so it has a single owner instead of being a
+ * per-component habit the next restructure can drop again.
+ */
 const APP_SOURCE = String.raw`
 var D = JSON.parse(document.getElementById("__DATA_ID__").textContent);
 var SEV = ["critical", "warning", "info"];
 // The id of this page's own data block, for the post-correction re-read.
 var DATA_ID = "__DATA_ID__";
 var LABEL = { critical: "Critical", warning: "Warning", info: "Info" };
+
+// The React element alias every component below renders through. See above.
+var h = React.createElement;
 
 function esc(t) {
   return String(t)

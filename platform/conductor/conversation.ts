@@ -130,6 +130,51 @@ export const CAPABILITIES: readonly { readonly label: string; readonly ask: stri
   { label: "Show me the column statistics", ask: "show me the columns" },
 ];
 
+/**
+ * THE CHIPS, BUILT FROM WHAT THE FILE CAN ACTUALLY ANSWER.
+ *
+ * Five fixed chips sat under every answer, including the ones that could not
+ * possibly apply: "show me the worst hour" on a file with no readable
+ * timestamps, "what are the top categories" on a file with no categorical
+ * column. A suggestion is an INVITATION, and an invitation to ask a question
+ * that is guaranteed to be refused teaches the user that the suggestions are
+ * noise -- which is the fastest way to make nobody click anything again.
+ *
+ * So each chip is offered only when the data behind it exists. Ordering is by
+ * how much the question is worth asking on THIS file: findings first when there
+ * are findings, then the shape, then the mechanics. `answered` drops whatever
+ * the user just clicked, because re-suggesting the question they already asked
+ * is the clearest possible evidence that nothing is paying attention.
+ *
+ * This NEVER changes what the agent answers. It only changes what it offers. A
+ * question with no chip is still answered, and a test pins that, because the
+ * day the chips become a gate the refusal this phase removed comes straight
+ * back through the suggestions instead of the router.
+ */
+function adaptiveSuggestions(data: ConversationData, answered = ""): readonly string[] {
+  const chips: { ask: string; weight: number }[] = [];
+  const seen = answered.trim().toLowerCase();
+
+  const offer = (ask: string, weight: number) => {
+    const a = ask.trim().toLowerCase();
+    // Same intent, different words: "what is wrong" must not be offered back to
+    // someone who just asked it.
+    if (seen !== "" && (a === seen || a.includes(seen) || seen.includes(a))) return;
+    chips.push({ ask, weight });
+  };
+
+  const severe = data.anomalies.filter((a) => a.severity === "critical").length;
+  if (severe > 0) offer("what is wrong with this file?", 100);
+  if (data.purpose.kind === "unknown") offer("tell me what this file is for", 90);
+  if (data.timeline.length > 0) offer("show me the worst hour", 60);
+  if (data.ranking.length > 0) offer("what are the top categories", 55);
+  if (data.columns.length >= 2) offer("are there any complex anomalies?", 50);
+  offer("how did you read the columns?", 40);
+  offer("show me the columns", 30);
+
+  return chips.sort((a, b) => b.weight - a.weight).slice(0, 4).map((c) => c.ask);
+}
+
 /** `nl` is the only number this module is willing to invent. */
 function rows(n: number): string {
   return n.toLocaleString("en-US");
@@ -376,7 +421,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
       kind: "answer",
       text: lead,
       widgets: [lineWidget(data)],
-      suggestions: CAPABILITIES.filter((c) => !/hour/.test(c.ask)).slice(0, 3).map((c) => c.ask),
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -393,7 +438,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
       text: `${rows(data.ranking.length)} distinct value${data.ranking.length === 1 ? "" : "s"} in the category column. ` +
         `The largest is "${top.key}" with ${rows(top.count)} rows.`,
       widgets: [barWidget(data)],
-      suggestions: CAPABILITIES.filter((c) => !/categor/.test(c.ask)).slice(0, 3).map((c) => c.ask),
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -431,7 +476,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
         ? `${rows(data.anomalies.length)} finding${data.anomalies.length === 1 ? "" : "s"}, none of them severe.`
         : `${rows(severe.length)} severe finding${severe.length === 1 ? "" : "s"}. The worst is ${severe[0]!.column}: ${severe[0]!.detail}.`,
       widgets: [findingsWidget(data)],
-      suggestions: ["show me the worst hour", "how did you read the columns?"],
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -456,9 +501,31 @@ export function replyTo(data: ConversationData, message: string): Reply {
   }
 
   // ---- 8. AN OVERVIEW ----
-  if (/\b(summary|overview|tell me about|what is this|describe|hello|hi\b|thanks|thank you)\b/.test(lower)) {
-    const g = greet(data);
-    return { ...g, text: g.text };
+  //
+  // THE PATTERN WAS WRITTEN FOR THE WORDS AN AUTHOR IMAGINES.
+  //
+  // It used to match "summary" and "tell me about", which misses the two things
+  // people actually type. "summarize" does not contain "summary", and "tell me
+  // more about this file" does not contain "tell me about" contiguously -- so
+  // both fell past a branch that existed, into the decline. That is why the
+  // agent could read a file and then refuse to describe it.
+  //
+  // The variants below are the observed phrasings, not synonyms invented for
+  // this comment. Spelled variants (summarise/summarise) are listed rather than
+  // normalised, because a missing British spelling is not a different intent.
+  // NO TRAILING \b, and this is the SECOND time it has bitten this file. An
+  // alternative like "summar" terminated by a word boundary cannot match
+  // "summarize": the next character is itself a word character, so there is no
+  // boundary and the alternative silently never fires. Prefix alternatives and a
+  // trailing boundary are mutually exclusive; pick the prefix.
+  //
+  // AND THE ALTERNATIVES ARE DELIBERATELY NOT "tell me ". An earlier draft
+  // matched the bare phrase and consequently answered "tell me a STORY about
+  // this file" with a column summary, which broke the rule that a genuine
+  // non-question still declines. Each alternative below names the shape of the
+  // request, not just its opening words.
+  if (/(summar|overview|tell me (more |anything |everything )?about|what is this|what s this|describe (this|the)|catch me up|walk me through|what can you tell me|what could you tell me|what do you see|give me (an? )?(summary|overview|tour|breakdown)|fill me in|anything (interesting|notable)|brief me)/.test(lower)) {
+    return synthesisResponse(data);
   }
 
   // ---- 9. THE DECLINE ----
@@ -487,6 +554,83 @@ export function replyTo(data: ConversationData, message: string): Reply {
  * which way each is wrong -- because a finding a user cannot locate is a
  * finding they cannot act on.
  */
+/**
+ * THE SYNTHESIS. What the engine knows, said as a paragraph.
+ *
+ * Assembled from facts already computed -- never re-derived, never re-worded
+ * into something vaguer. Every sentence carries a number the engine measured,
+ * so the paragraph cannot drift from the file it describes, and it costs one
+ * pass over data already in memory.
+ *
+ * THE ORDER IS WHAT MAKES IT READ. What it is, how much of it, what is in it,
+ * what is wrong with it, and finally what to ask next. A summary that leads
+ * with the caveats is an apology wearing a summary's clothes.
+ *
+ * AN UNIDENTIFIABLE FILE STILL GETS ONE. The purpose statement may be an
+ * admission, but the row count, the column count, the categories and the
+ * findings are all known, and refusing to describe a file because the engine
+ * cannot NAME it would throw away four facts to protect a fifth. The admission
+ * appears in its place in the paragraph; it does not become the whole answer.
+ */
+function synthesisResponse(data: ConversationData): Reply {
+  const severe = data.anomalies.filter((a) => a.severity === "critical");
+  const parts: string[] = [];
+
+  const columnCount = data.columns.length;
+  // The period is not cosmetic. Without it the paragraph reads as a run-on
+  // fragment ("...across 2 numeric columns This file appears to be..."), and a
+  // summary that looks machine-assembled undercuts the very trust it is trying
+  // to earn.
+  parts.push(`I read ${rows(data.totalRows)} rows across ${columnCount} numeric column${columnCount === 1 ? "" : "s"}.`);
+
+  const opening = data.purpose.kind === "unknown"
+    ? "I cannot tell what this file is for from the column names alone, so I will not pretend otherwise."
+    : data.purpose.confidence === "high"
+      ? data.purpose.statement
+      : `${data.purpose.statement} That is a reading of the column names, not something I checked.`;
+  parts.push(opening);
+
+  const top = data.ranking[0];
+  if (top !== undefined) {
+    const distinct = data.ranking.length;
+    parts.push(`The largest category is "${top.key}" with ${rows(top.count)} rows, across ${rows(distinct)} distinct value${distinct === 1 ? "" : "s"} I can rank.`);
+  }
+
+  const busiest = [...data.timeline].sort((a, b) => b.count - a.count)[0];
+  if (busiest !== undefined && data.timeline.length > 0) {
+    parts.push(`The busiest hour is ${busiest.hour.replace("T", " ")}:00 with ${rows(busiest.count)} rows.`);
+  }
+
+  if (severe.length > 0) {
+    const worst = severe[0]!;
+    // THE FIGURE, not the multiplier. "250x the fence" tells a reader the size
+    // of the problem; "250,000" tells them what to go and look at, and they can
+    // find it in their own file. The multiple is kept as a trailing clause
+    // because it is what makes the number meaningful.
+    const stat = data.columns.find((c) => c.name === worst.column);
+    const value = stat?.max === null || stat?.max === undefined ? null : stat.max;
+    const figure = value === null
+      ? ""
+      : ` at ${fmtNum(value)}, ${rows(Math.round(worst.factor ?? 0))}x the fence`;
+    parts.push(`I found ${rows(severe.length)} severe finding${severe.length === 1 ? "" : "s"}; the worst is in ${worst.column}${figure}.`);
+  } else if (data.anomalies.length > 0) {
+    parts.push(`Nothing is severe. I found ${rows(data.anomalies.length)} thing${data.anomalies.length === 1 ? "" : "s"} worth looking at.`);
+  } else {
+    parts.push("Nothing in it looks malformed -- every column is clean by the engine's own thresholds.");
+  }
+
+  parts.push("Ask me about the categories, the busiest hour, what is wrong with it, or how I read each column, and I will go further.");
+
+  return {
+    kind: "answer",
+    text: parts.join(" "),
+    widgets: severe.length > 0
+      ? [{ kind: "findings", title: "What I found", note: "Severe findings first.", payload: { anomalies: severe.slice(0, 5) } }]
+      : [],
+    suggestions: adaptiveSuggestions(data),
+  };
+}
+
 function discordanceAnswer(data: ConversationData): Reply {
   if (data.rows === undefined || data.rows.length === 0) {
     return decline(
