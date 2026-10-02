@@ -111,19 +111,60 @@ const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
  * server, so what the document contains matters as much as what it shows.
  */
 const COMPOSER_SOURCE = String.raw`
-h("div", { className: "sticky bottom-0 border-t border-slate-200 bg-white" },
-  h("form", {
-    className: "mx-auto max-w-3xl px-4 py-3 flex gap-2",
-    onSubmit: function (e) { e.preventDefault(); ask(); }
-  },
-    h("input", {
-      type: "text",
-      value: text,
-      placeholder: "Ask about this file, or say \u201ccol_1 is the duration\u201d",
-      "aria-label": "Ask a question, or correct a column",
-      onChange: function (e) { setText(e.target.value); }
-    }),
-    h("button", { type: "submit", disabled: busy }, busy ? "..." : "Ask")
+h("div", { className: "sticky bottom-0 z-20 px-4 pt-6 pb-4 bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent" },
+  h("div", { className: "mx-auto max-w-3xl" },
+    h("form", {
+      className: "flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-3 py-2 shadow-sm",
+      onSubmit: function (e) { e.preventDefault(); ask(); }
+    },
+      h("button", {
+        type: "button",
+        className: "shrink-0 rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900",
+        title: "Read a file from this folder",
+        "aria-label": "Attach a file to read",
+        onClick: function () { if (pickerRef.current) pickerRef.current.click(); }
+      },
+        // INLINED SVG, NOT SPLICED. A glyph rather than a font character, so the
+        // control looks the same on every platform. Written here rather than
+        // held in a module constant because a constant referenced from the
+        // emitted source has to be SUBSTITUTED, and every substitution is
+        // another point where an injection running in the wrong order leaves a
+        // bare identifier in the document. One use does not need a second
+        // splice point. aria-hidden because the button already carries the
+        // label: an icon that also announces itself is read out twice.
+        h("svg", { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none",
+                   stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round",
+                   "aria-hidden": "true", focusable: "false" },
+          h("path", { d: "M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" })
+      )),
+      h("input", {
+        ref: pickerRef,
+        type: "file",
+        hidden: true,
+        accept: ".csv,text/csv,application/pdf,.json,application/json,.log,.txt",
+        onChange: function (e) {
+          if (e.target.files && e.target.files[0]) loadFile(e.target.files[0].name);
+          e.target.value = "";
+        }
+      }),
+      h("input", {
+        type: "text",
+        className: "flex-1 bg-transparent outline-none text-sm",
+        value: text,
+        placeholder: "Upload any document, report, or log file, or ask a question...",
+        "aria-label": "Ask a question, correct a column, or attach a file",
+        onChange: function (e) { setText(e.target.value); }
+      }),
+      h("button", {
+        type: "submit",
+        className: "shrink-0 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50",
+        disabled: busy
+      }, busy ? "..." : "Ask")
+    ),
+    h("p", { className: "mt-2 px-2 text-xs text-slate-500" },
+      D.source
+        ? "Reading " + esc(D.source) + " from this folder. Nothing is uploaded; every path is checked by the kernel."
+        : "Files are read from this folder on this machine. Nothing is uploaded anywhere.")
   )
 )
 `;
@@ -616,6 +657,89 @@ function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
  *     stray `${...}` inside the browser source would be evaluated HERE, at
  *     generation time, instead of in the browser. Nothing below uses that form.
  */
+/**
+ * THE UPLOAD PATH, AS TEXT, AND ONLY ON A LIVE PAGE.
+ *
+ * Live-only for the same reason the composer is: an export is opened by people
+ * with no server, so a document that carries an upload function -- even one
+ * whose endpoints resolve to an inert scheme -- is a document containing code
+ * for a capability it does not have. Splicing it out means the offline artifact
+ * does not merely REFUSE to upload; it has no idea uploading is possible.
+ *
+ * It lives here, rather than inline in APP_SOURCE, for the same reason the
+ * composer does: it closes over App's state (busy, setBusy, push), so it must
+ * be spliced INSIDE the component rather than emitted beside it.
+ */
+const UPLOAD_SOURCE = String.raw`
+/**
+ * THE UPLOAD IS A FILENAME, NOT BYTES.
+ *
+ * The paperclip sends the NAME and lets the server open it through the same
+ * boundary-checked path every other route uses. That is the product's existing
+ * posture -- the launcher page has always done exactly this -- and it is why no
+ * file-reading API appears anywhere in this document. Turning the paperclip into
+ * a real byte upload would be a security REGRESSION introduced by a UX change:
+ * the kernel refuses a path outside the root, and a body of uploaded bytes never
+ * meets that check at all.
+ *
+ * Posting to the report route first means the file is validated BEFORE the page
+ * navigates, so a refusal is shown in place rather than becoming a blank
+ * dashboard with an error in the console.
+ */
+function loadFile(name) {
+  if (busy) return;
+  setBusy(true);
+  push([{ role: "agent", text: "Reading " + name + " through the kernel...", widgets: [], suggestions: [] }]);
+  fetch("__REPORT_URL__", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: name })
+  }).then(function (response) {
+    return response.json().then(function (body) {
+      if (body && body.status === "DELIVERED") {
+        window.location.href = "__DASH_URL__?path=" + encodeURIComponent(name);
+        return;
+      }
+      setBusy(false);
+      var why = (body && body.failure && body.failure.reason) || "the file could not be read";
+      push([{ role: "agent", text: "I could not read " + name + ": " + why, widgets: [], suggestions: [] }]);
+    });
+  }).catch(function (error) {
+    setBusy(false);
+    push([{ role: "agent", text: "I could not read " + name + ": " + error.message, widgets: [], suggestions: [] }]);
+  });
+}
+
+// DROP ANYWHERE ON THE CONVERSATION.
+//
+// Removing the visible dropzone is only a simplification if the GESTURE
+// survives, and a user who has dragged files onto this app will not know to look
+// for a paperclip instead. Calling preventDefault on dragover is the part that
+// matters: without it the browser navigates to the dropped file and the user
+// loses the page entirely.
+var dropAreaRef = React.useRef(null);
+var dropRef = React.useRef(false);
+var DROP = {
+  ref: dropAreaRef,
+  onDragOver: function (e) {
+    e.preventDefault();
+    dropRef.current = true;
+    if (dropAreaRef.current) dropAreaRef.current.className = "min-h-screen bg-slate-50 text-slate-900 ring-2 ring-inset ring-slate-900";
+  },
+  onDragLeave: function () {
+    dropRef.current = false;
+    if (dropAreaRef.current) dropAreaRef.current.className = "min-h-screen bg-slate-50 text-slate-900";
+  },
+  onDrop: function (e) {
+    e.preventDefault();
+    dropRef.current = false;
+    if (dropAreaRef.current) dropAreaRef.current.className = "min-h-screen bg-slate-50 text-slate-900";
+    var files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files[0]) loadFile(files[0].name);
+  }
+};
+`;
+
 const CHAT_SOURCE = String.raw`
 /**
  * RE-READ THE ANALYSIS, so the charts describe the file as it now reads.
@@ -1199,6 +1323,8 @@ function App() {
   var sLearned = React.useState(D.learned || {});
   var learned = sLearned[0], setLearned = sLearned[1];
   var endRef = React.useRef(null);
+  var pickerRef = React.useRef(null);
+__UPLOAD__
 
   React.useEffect(function () {
     if (endRef.current !== null) endRef.current.scrollIntoView({ block: "end" });
@@ -1295,7 +1421,7 @@ function App() {
     });
   }
 
-  return h("div", { className: "min-h-screen bg-slate-50 text-slate-900" },
+  return h("div", Object.assign({ className: "min-h-screen bg-slate-50 text-slate-900" }, DROP || {}),
     h("header", { className: "border-b border-slate-200 bg-white" },
       h("div", { className: "mx-auto max-w-3xl px-4 py-3 flex items-baseline justify-between gap-4" },
         h("h1", { className: "text-sm font-semibold truncate" }, esc(D.title)),
@@ -1391,6 +1517,14 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   // network calls are absent from the source, not merely unreachable.
   const resolved = withChat
     .split("__FEEDBACK_URL__").join(live ? "/api/feedback" : "about:blank#offline")
+    // THE UPLOAD PATH IS SPLICED OUT ENTIRELY when offline, not merely
+    // re-pointed at an inert scheme. An export is opened by people with no
+    // server, so a document that CARRIES an upload function is a document
+    // containing code for a capability it does not have. An earlier draft left
+    // it inline and pointed its endpoints at about:blank, which still shipped
+    // the code and still tripped the offline contract.
+    .split("__UPLOAD__").join(live ? UPLOAD_SOURCE : "var DROP = {};")
+    .split("__REPORT_URL__").join(live ? "/api/report" : "about:blank#offline")
     .split("__CHAT_URL__").join(live ? "/api/chat" : "about:blank#offline")
     .split("__DASH_URL__").join(live ? "/api/dashboard" : "about:blank#offline");
 
