@@ -22,6 +22,7 @@ import type { Reply } from "../conversation.ts";
 import { rows, type AgentContext, type Subagent } from "./types.ts";
 import { adaptiveSuggestions } from "./suggestions.ts";
 import { findingsWidget } from "./widgets.ts";
+import { evaluate } from "./forecasting-agent.ts";
 
 const CONTRADICTION: readonly RegExp[] = [
   /(discord|contradict|relational|out of step|inconsistent pair|complex anomal|cross.column|two column|both column)/,
@@ -105,6 +106,50 @@ function discordanceAnswer(ctx: AgentContext): Reply {
   };
 }
 
+/**
+ * THE HANDOFF. ONE AGENT ASKS ANOTHER A QUESTION.
+ *
+ * A critical finding is a statement about a MOMENT. "latency_ms hit 1,200ms"
+ * tells a user what happened and leaves the only question they actually have
+ * unanswered: is it getting worse? The data for that already exists, in the
+ * module holding the projection method, and this is the call that reaches it.
+ *
+ * === WHY IT IS THE AGENT AND NOT THE ROUTER ===
+ *
+ * The Conductor decides who answers a USER'S question. This is an agent asking a
+ * colleague something, which is a different relationship, and routing it through
+ * the orchestrator would mean the orchestrator orchestrating its own
+ * specialists -- which is how a router stops being a router and starts being the
+ * thing it coordinates. The dependency runs agent to agent, not agent to
+ * conductor to agent.
+ *
+ * === WHY IT FIRES ONLY ON CRITICAL ===
+ *
+ * An agent that consults a colleague on every small finding produces two
+ * paragraphs about a rounding error. A user who learns to skim that will skim
+ * the real one too, and the whole arrangement is worthless. One severe finding
+ * per answer is the budget.
+ */
+function consultForecast(ctx: AgentContext, column: string): string {
+  const eval_ = evaluate(ctx, column);
+  if (!eval_.ok) {
+    // The projection is a BONUS on a finding that is already true. If it cannot
+    // be produced, the finding stands alone rather than the answer apologising
+    // for itself.
+    return `I asked the forecasting agent about ${column} and it could not project it -- ${eval_.reason ?? "no reason given"}.`;
+  }
+  const end = eval_.points[eval_.points.length - 1]!;
+  // The verbs AGREE WITH "which". The first draft wrote "which project this will
+  // get worse", which reads as a typo and costs the reader a beat of doubt about
+  // the whole sentence -- including about the number in it.
+const verb = eval_.direction === "rising" ? "projects this will get worse"
+    : eval_.direction === "falling" ? "projects this will settle"
+      : "projects this will hold steady";
+  return `I consulted the forecasting agent, which ${verb}, from ${fmtNum(eval_.lastObserved ?? 0)} to about ` +
+    `${fmtNum(end.value)} over the next ${eval_.horizon} hours ` +
+    `(a band from ${fmtNum(end.lower)} to ${fmtNum(end.upper)}).`;
+}
+
 function findingsAnswer(ctx: AgentContext): Reply {
   const severe = ctx.anomalies.filter((a) => a.severity === "critical");
   if (ctx.anomalies.length === 0) {
@@ -116,15 +161,29 @@ function findingsAnswer(ctx: AgentContext): Reply {
       suggestions: adaptiveSuggestions(ctx),
     };
   }
+
   const lead = severe[0] ?? ctx.anomalies[0]!;
-  const severeWord = severe.length === 0 ? "finding" : "severe finding";
+  const headline = `${ctx.anomalies.length === 1 ? "1 finding" : `${ctx.anomalies.length.toLocaleString("en-US")} findings`}` +
+    `${severe.length === 0 ? ", none of them severe" : ""}. The worst is ` +
+    `${severe.length === 0 ? "a finding" : "a severe finding"} in ${lead.column}: ${lead.detail}.`;
+
+  // THE HANDOFF, and only for a severe finding on a column we can actually
+  // build a series for. Both halves are labelled so the user can tell which is
+  // measured and which is modelled.
+  const projected = severe.length > 0 ? consultForecast(ctx, lead.column) : null;
+
   return {
     kind: "answer",
-    text: `${rows(ctx.anomalies.length)} ${ctx.anomalies.length === 1 ? "finding" : "findings"}` +
-      `${severe.length === 0 ? ", none of them severe" : ""}. The worst is ${severeWord} in ${lead.column}: ${lead.detail}.`,
+    text: projected === null
+      ? `${headline} ${forecastFollowup("tell me more about this file")}`
+      : `${headline} ${projected} That is a projection of a trend, not a measurement of what will happen.`,
     widgets: [findingsWidget(ctx)],
     suggestions: adaptiveSuggestions(ctx),
   };
+}
+
+function forecastFollowup(ask: string): string {
+  return `Ask me "${ask}" if you want the rest of the file.`;
 }
 
 export const anomalyAgent: Subagent = {
