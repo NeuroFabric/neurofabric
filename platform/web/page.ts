@@ -138,10 +138,30 @@ export const PAGE_HTML = `<!doctype html>
     }).then(function (result) {
       var body = result.body || {};
       if (body.status === "DELIVERED" && body.markdown) {
-        var where = body.schema ? " Schema: " + body.schema.id + " (" + body.schema.source + ")." : " No stored schema matched; columns were inferred from their names.";
-        say("Report ready. " + where, false);
-        report.innerHTML = render(body.markdown);
-        report.hidden = false;
+        // GO TO THE DASHBOARD. This line is the product.
+        //
+        // The dropzone used to render the Markdown into this page, and the
+        // dashboard -- every chart, the tooltips, the whole conversational UI --
+        // was served by '/api/dashboard' and reached by nobody. The Owner
+        // dropped a file, saw a wall of table rows, and correctly concluded the
+        // product had no charts and no chatbot. Both were built, tested,
+        // type-checked and parsed. None of it was ever shown to a human.
+        //
+        // So the success branch navigates. It does NOT render both, and that is
+        // deliberate: the markdown generator emits a table per column and the
+        // Owner was scrolling past a hundred rows of it. The Markdown remains
+        // what '/api/report' returns -- it is the report of record, it is what
+        // gets written to disk, and it is what every other consumer reads. This
+        // is only about which document the USER is shown.
+        //
+        // The refusal branch below deliberately does NOT navigate. Throwing away
+        // the kernel's "no" to make a page look busier is the exact failure this
+        // product exists to avoid.
+        //
+        // encodeURIComponent, because a real filename contains spaces and the
+        // raw form resolves as two query parameters: the server would read the
+        // file 'my', tell the user it does not exist, and be believed.
+        window.location.href = "/api/dashboard?path=" + encodeURIComponent(path);
         return;
       }
       // The refusal is the kernel's, and it is shown with the kernel's tier.
