@@ -106,9 +106,26 @@ measure-wrappers:
 # Unix programs. The Windows equivalent is measure-command-wrappers.mjs running
 # under the Git-for-Windows environment the table was measured in -- a
 # shell-availability question for the operator, not a pipeline edit.
+# WHY THESE ARE MANUAL AND NON-BLOCKING, and this is not a dodge. A runner
+# tagged `windows` is NOT registered for this project, and registering one is a
+# GitLab project-settings action reserved for the operator. A job with no runner
+# sits pending until the pipeline times out and is then reported as FAILED, so
+# leaving these blocking would mean a permanent red merge gate that looks like a
+# broken build and is really an unconfigured runner.
+#
+# `allow_failure: true` says the truth: the coverage is missing, we know it is
+# missing, and it must not stop anything until a runner exists. `when: manual`
+# means the moment one is registered the operator can run all three by hand and
+# get a real answer. The day the runner lands, delete both keywords.
+#
+# The gap is NOT thereby closed. handoff.md 10a item 1 stays open until a green
+# Windows run is observed, and this file's comment is the only thing preventing
+# that from being quietly forgotten.
 test-ts-windows:
   stage: verify
   tags: [windows]
+  when: manual
+  allow_failure: true
   script:
     - npm ci
     - npm run test:ts
@@ -116,6 +133,8 @@ test-ts-windows:
 test-mjs-windows:
   stage: verify
   tags: [windows]
+  when: manual
+  allow_failure: true
   script:
     - npm ci
     - npm run test:mjs
@@ -123,6 +142,8 @@ test-mjs-windows:
 typecheck-windows:
   stage: verify
   tags: [windows]
+  when: manual
+  allow_failure: true
   script:
     - npm ci
     - npm run typecheck
