@@ -120,8 +120,18 @@ test("a path INSIDE the workspace is allowed, so the guard is a filter and not a
 // === THE CONNECTOR REFUSES INDEPENDENTLY ==================================
 
 test("the connector itself refuses an out-of-workspace path, so a direct import is not a way around the kernel", async () => {
+  // A SEPARATE directory, and this matters more than it looks. The first
+  // version of this test used `os.tmpdir()` as the root and
+  // `path.join(os.tmpdir(), "elsewhere", ...)` as the target -- and on a Windows
+  // host those are the SAME directory, so the target was INSIDE the root. The
+  // test passed, and proved nothing, which is the failure mode
+  // test-support/temp-workspace.ts was written to warn about. A negative
+  // assertion built on a root that does not actually exclude the target is
+  // vacuous forever: it cannot fail, whatever the code does.
+  const inside = await mkdtemp(path.join(os.tmpdir(), "nf-ws-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "nf-notws-"));
   await assert.rejects(
-    () => readPdf({ path: path.join(os.tmpdir(), "elsewhere", "secrets.pdf"), root: os.tmpdir() }),
+    () => readPdf({ path: path.join(outside, "incident.pdf"), root: inside }),
     PdfRefused,
     "the connector guard must run before the file is opened",
   );
@@ -129,9 +139,21 @@ test("the connector itself refuses an out-of-workspace path, so a direct import 
   assert.doesNotThrow(() => assertInsideWorkspace({ path: "report.pdf", root: process.cwd() }));
 });
 
+test("the guard fires BEFORE the filesystem is touched, so there is no window to exploit", async () => {
+  const inside = await mkdtemp(path.join(os.tmpdir(), "nf-ws2-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "nf-notws2-"));
+  // The file deliberately does NOT exist. If the guard ran after the stat, the
+  // caller would get a "could not be read" RESULT and the path would already
+  // have been resolved and opened to find that out. Getting PdfRefused proves
+  // the ordering, not merely the outcome.
+  await assert.rejects(() => readPdf({ path: path.join(outside, "absent.pdf"), root: inside }), PdfRefused);
+});
+
 test("the refusal is explainable and names the boundary", async () => {
+  const inside = await mkdtemp(path.join(os.tmpdir(), "nf-ws3-"));
+  const outside = await mkdtemp(path.join(os.tmpdir(), "nf-notws3-"));
   try {
-    await readPdf({ path: path.join(os.tmpdir(), "elsewhere", "x.pdf"), root: os.tmpdir() });
+    await readPdf({ path: path.join(outside, "x.pdf"), root: inside });
     assert.fail("should have refused");
   } catch (e) {
     assert.ok(e instanceof PdfRefused);
