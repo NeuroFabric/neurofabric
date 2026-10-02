@@ -580,8 +580,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           }
 
-          const rowsForExport = csvForExport.rows.map((cells) =>
-            Object.fromEntries(csvForExport.headers.map((h, i) => [h, cells[i] ?? ""])));
+          // Already records -- see the note on `rowsForChat`. This was the same
+          // double conversion, so a learned schema was silently discarded on the
+          // export path too.
+          const rowsForExport = csvForExport.rows;
           const { resolveSchemaMemory: resolveForExport } = await import("../conductor/schema-memory.ts");
           const schemaForExport = await resolveForExport({
             cwd, headers: csvForExport.headers, rows: rowsForExport,
@@ -675,8 +677,21 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           }
 
-          const rowsForChat = csvForChat.rows.map((cells) =>
-            Object.fromEntries(csvForChat.headers.map((h, i) => [h, cells[i] ?? ""])));
+          // `csvForChat.rows` is ALREADY a list of records -- `readCsvFor`
+          // converts the cell arrays to `{header: value}` before returning.
+          //
+          // This used to convert them a SECOND time, mapping over the records as
+          // if they were cell arrays. Every "row" then came out as a copy of the
+          // FIRST record's values, so a 200-row file reached the analyser as 200
+          // identical rows and every column held exactly ONE distinct value.
+          //
+          // That is invisible until it destroys something: the category-role
+          // check demotes a single-valued column as degenerate, so the user's
+          // own correction ("channel is the category") was accepted, written to
+          // disk, and then thrown away as unusable -- while the same schema
+          // resolved perfectly in isolation. The data reaching the analyser was
+          // the only difference.
+          const rowsForChat = csvForChat.rows;
           const { resolveSchemaMemory } = await import("../conductor/schema-memory.ts");
           const { replyTo } = await import("../conductor/conversation.ts");
           const schemaForChat = await resolveSchemaMemory({
