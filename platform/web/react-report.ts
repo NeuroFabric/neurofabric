@@ -355,6 +355,19 @@ export interface DashboardData {
    * the standalone-page tests that the previous release had already written.
    */
   readonly live: boolean;
+  /**
+   * THE CONVERSATION THIS PAGE BELONGS TO, or null.
+   *
+   * Minted by the server when the page was served, kept by the browser, and
+   * sent back with every question so the transcript can be written down and
+   * found again. It is a NAME for a conversation, and nothing else: it is not
+   * a capability token, it grants no access to anything, and a caller holding
+   * one learns nothing but what the store already lets anybody read.
+   *
+   * Null on a standalone artifact, because an offline document has no origin
+   * to talk to and therefore nothing to remember itself as.
+   */
+  readonly sessionId: string | null;
 }
 
 export interface DashboardOptions {
@@ -370,7 +383,7 @@ export interface DashboardOptions {
    * exfiltrated the CSV. Passing this opts the page into exactly one call, to
    * one endpoint, on its own origin.
    */
-  readonly live?: { readonly path: string };
+  readonly live?: { readonly path: string; readonly sessionId?: string };
   /**
    * Mappings already learned, role -> column. Supplied by the caller so the
    * live page shows the archive as it stands BEFORE the user says anything.
@@ -539,6 +552,7 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     defaultDepth: DEFAULT_DEPTH,
     source: options.live?.path ?? options.sourceName ?? null,
     live: options.live !== undefined,
+    sessionId: options.live?.sessionId ?? null,
     // Computed ONCE, here, by the same pure function the tests exercise. The
     // chart therefore draws the line this repository asserts on, rather than a
     // second implementation living in the page -- the arrangement that has
@@ -788,6 +802,50 @@ function refreshFromServer(setVersion, reportFailure) {
     });
 }
 
+/**
+ * RESTORE THE TRANSCRIPT, so a reload does not throw the conversation away.
+ *
+ * The turns come from the server, which is the only place they exist: React
+ * state is what a reload destroys, so asking the page to remember is asking the
+ * wrong owner. The id is one this browser has been carrying since the page was
+ * served, which is why the server can find the same conversation again.
+ *
+ * REPLACED, never merged. The opening greeting is what the page shows before it
+ * has asked anything, so a restored conversation has to take its place rather
+ * than sit under a duplicate of its own first message -- a transcript that
+ * greets you and then quotes the greeting back at you reads as two engines.
+ *
+ * A FAILURE IS SILENT HERE, and that is a different decision from the one in
+ * refreshFromServer. That function hides STALE data, which is a lie the user
+ * must be told about. This one loses a convenience: the page has already shown
+ * a greeting and a working composer, and an unreachable memory store is not
+ * something to interrupt a first question to complain about.
+ */
+function loadSession(setThread) {
+  if (!SESSION_ID) return;
+  fetch("__SESSION_URL__?id=" + encodeURIComponent(SESSION_ID))
+    .then(function (r) {
+      if (!r.ok) return null;
+      return r.json();
+    })
+    .then(function (body) {
+      if (!body || !body.session) return;
+      var turns = body.session.turns;
+      if (!Array.isArray(turns) || turns.length === 0) return;
+      // Only what the page can actually render is restored. An unknown role is
+      // dropped rather than rendered as a stray bubble: the timeline draws two
+      // kinds of message, and a third kind is a blank card nobody can read.
+      setThread(turns.filter(function (turn) {
+        return turn && (turn.role === "user" || turn.role === "agent") &&
+          typeof turn.text === "string";
+      }));
+    })
+    .catch(function () {
+      // Nothing to say. See the note above: this is a lost convenience, not a
+      // wrong picture.
+    });
+}
+
 `;
 
 /**
@@ -832,6 +890,31 @@ var D = JSON.parse(document.getElementById("__DATA_ID__").textContent);
 var SEV = ["critical", "warning", "info"];
 // The id of this page's own data block, for the post-correction re-read.
 var DATA_ID = "__DATA_ID__";
+// The id of this page's own data block, for the post-correction re-read.
+
+// THE SESSION THIS BROWSER REMEMBERS, or null when there is nothing to
+// remember -- a standalone artifact, which has no origin and therefore no
+// conversation to resume.
+//
+// READ FROM localStorage FIRST, and that order is the whole feature. The id in
+// the payload was minted when THIS page was served, so trusting it alone gives
+// a fresh conversation on every reload -- a memory that resets every time it is
+// used, which is not memory. The browser holds the id across reloads and only
+// adopts the page's when it has none of its own, and every guarded read is
+// because localStorage THROWS rather than returning null in private browsing
+// and on a file:// document, and a dashboard that cannot open because a storage
+// API refused it is a dashboard with no conversation at all.
+var SESSION_ID = null;
+try {
+  if (typeof window !== "undefined" && window.localStorage && D.sessionId) {
+    var SESSION_KEY = "wedge.session." + String(D.source);
+    var storedSession = window.localStorage.getItem(SESSION_KEY);
+    SESSION_ID = storedSession === null || storedSession === "" ? D.sessionId : storedSession;
+    window.localStorage.setItem(SESSION_KEY, SESSION_ID);
+  }
+} catch (storageRefused) {
+  SESSION_ID = D.sessionId;
+}
 var LABEL = { critical: "Critical", warning: "Warning", info: "Info" };
 
 // The React element alias every component below renders through. See above.
@@ -1330,6 +1413,22 @@ __UPLOAD__
     if (endRef.current !== null) endRef.current.scrollIntoView({ block: "end" });
   }, [thread.length]);
 
+  // THE CONVERSATION THAT ALREADY HAPPENED.
+  //
+  // A user asks a question, reads the answer, walks into a meeting and comes
+  // back -- and without this the entire exchange is gone, because the transcript
+  // lives in React state and React state does not survive a reload. For a tool
+  // whose whole claim is a conversation, that is the most expensive bug in it.
+  //
+  // Empty dependencies ON PURPOSE: this is a restore, not a subscription. It
+  // reads what is already on the server and must not re-run on a re-render,
+  // because a restore that fires again would overwrite the turns the user is
+  // reading with the turns they had before they asked anything.
+  React.useEffect(function () {
+    if (!SESSION_ID) return;
+    loadSession(setThread);
+  }, []);
+
   function push(messages) {
     setThread(function (t) { return t.concat(messages); });
   }
@@ -1396,7 +1495,7 @@ __UPLOAD__
     fetch("__CHAT_URL__", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: D.source, message: said })
+      body: JSON.stringify({ path: D.source, message: said, sessionId: SESSION_ID })
     }).then(function (res) {
       return res.json().then(function (body) { return { ok: res.ok, body: body }; });
     }).then(function (r) {
@@ -1526,6 +1625,11 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
     .split("__UPLOAD__").join(live ? UPLOAD_SOURCE : "var DROP = {};")
     .split("__REPORT_URL__").join(live ? "/api/report" : "about:blank#offline")
     .split("__CHAT_URL__").join(live ? "/api/chat" : "about:blank#offline")
+    // SAME REASON AS EVERY ENDPOINT ABOVE. The restore is a network call, so an
+    // offline artifact must not carry it: a document opened from a file:// path
+    // or an email would try to reach an origin that does not exist, and fail in
+    // a way that reads as a broken page rather than as an absent feature.
+    .split("__SESSION_URL__").join(live ? "/api/session" : "about:blank#offline")
     .split("__DASH_URL__").join(live ? "/api/dashboard" : "about:blank#offline");
 
   // A token surviving into the emitted document is a BUG, not a harmless
