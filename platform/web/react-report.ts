@@ -1,5 +1,6 @@
 import type { BottleneckAnalysis, ColumnHealth, NumericColumnStat } from "../conductor/bottlenecks.ts";
 import { synthesize } from "../conductor/synthesis.ts";
+import { parseCorrection } from "./chat-parse.ts";
 
 /**
  * THE INTERACTIVE DASHBOARD. One string, no build step, no install.
@@ -105,12 +106,43 @@ export interface DashboardData {
   /** The deepest the toggle can go, so the app does not hard-code a limit. */
   readonly maxDepth: number;
   readonly defaultDepth: number;
+  /**
+   * The file this report is ABOUT, or null when the artifact is standalone.
+   *
+   * It is here because a correction has to name its target, and because a user
+   * who says "col_15 is the category" deserves to see which file they are about
+   * to change before they say it. A correction applied to the wrong file is not
+   * a no-op -- it is a confidently wrong report.
+   */
+  readonly source: string | null;
+  /**
+   * Mappings this checkout has LEARNED, as role -> column.
+   *
+   * Carried in the payload rather than fetched, so the panel renders on first
+   * paint and the standalone artifact still shows what it already knows.
+   */
+  readonly learned: Readonly<Record<string, string>>;
 }
 
 export interface DashboardOptions {
   readonly title?: string;
   /** The executive summary paragraph, produced by the synthesis engine. */
   readonly headline?: string;
+  /**
+   * Serve the correction chat, naming the file it applies to.
+   *
+   * OMITTED BY DEFAULT, and that default is the point. The usual artifact is a
+   * standalone HTML file that anybody can open, and it must keep making no
+   * network calls -- a dashboard that phones home is a dashboard that
+   * exfiltrated the CSV. Passing this opts the page into exactly one call, to
+   * one endpoint, on its own origin.
+   */
+  readonly live?: { readonly path: string };
+  /**
+   * Mappings already learned, role -> column. Supplied by the caller so the
+   * live page shows the archive as it stands BEFORE the user says anything.
+   */
+  readonly learned?: Readonly<Record<string, string>>;
 }
 
 function thousands(value: number): string {
@@ -240,8 +272,153 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
     ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
     maxDepth: MAX_DEPTH,
     defaultDepth: DEFAULT_DEPTH,
+    source: options.live?.path ?? null,
+    // Seeded from the analysis itself. A role the engine filled while profiling
+    // IS a mapping it holds, whether or not a person confirmed it, and the chat
+    // has to start from what the engine believes or the first correction looks
+    // like it is starting from nothing.
+    learned: options.learned ?? rolesToMap(analysis),
   };
 }
+
+/**
+ * The role -> column map the profiler already settled on.
+ *
+ * Read off the schema the analysis was built with rather than re-derived, so
+ * the chat shows the engine's actual belief. A panel that disagreed with the
+ * report beside it would be worse than no panel.
+ */
+function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
+  const schema = (analysis as { schema?: { roles?: Readonly<Record<string, string>> } }).schema;
+  const out: Record<string, string> = {};
+  for (const [role, column] of Object.entries(schema?.roles ?? {})) {
+    if (typeof column === "string" && column !== "") out[role] = column;
+  }
+  return out;
+}
+
+
+/**
+ * THE CHAT SOURCE, held separately so it can be spliced in ONLY for a live page.
+ *
+ * Two constraints shaped this being its own constant rather than more lines of
+ * APP_SOURCE:
+ *
+ *   - A STANDALONE REPORT MUST NOT CONTAIN IT. The offline artifact is a file
+ *     anybody can open, it runs with connect-src 'none', and it must not carry
+ *     the string "/api/feedback" -- a visible control wired to an endpoint that
+ *     cannot exist is a bug that looks like a feature. Splicing it out is what
+ *     keeps that true by construction rather than by remembering.
+ *   - IT MUST NOT INTERPOLATE. This is a host String.raw template, so a single
+ *     stray `${...}` inside the browser source would be evaluated HERE, at
+ *     generation time, instead of in the browser. Nothing below uses that form.
+ */
+const CHAT_SOURCE = String.raw`
+/**
+ * THE CONVERSATION. One sentence in, one honest answer out.
+ *
+ * Kept OUT of the base app on purpose, because it is absent from a standalone
+ * report. That file gets opened by people with no server behind it, and a chat
+ * box that can only fail is worse than no chat box -- it reads as a broken
+ * product rather than an absent feature.
+ */
+function ChatPanel() {
+  var sText = React.useState("");
+  var sLog = React.useState([]);
+  var sBusy = React.useState(false);
+  var sLearned = React.useState(D.learned || {});
+  var text = sText[0], setText = sText[1];
+  var log = sLog[0], setLog = sLog[1];
+  var busy = sBusy[0], setBusy = sBusy[1];
+  var learned = sLearned[0], setLearned = sLearned[1];
+
+  function say(who, body, ok) {
+    setLog(function (l) { return l.concat([{ who: who, body: body, ok: ok }]); });
+  }
+
+  function send(event) {
+    if (event) event.preventDefault();
+    var sentence = String(text).trim();
+    if (sentence === "" || busy) return;
+    say("you", sentence, true);
+
+    var parsed = parseCorrection(sentence);
+    // A REFUSAL IS A COMPLETE ANSWER. Nothing leaves the page: a sentence the
+    // engine cannot read is not a correction, and posting it anyway would put
+    // an unvalidated mapping in front of the user dressed as a decision.
+    if (!parsed.ok) {
+      setText("");
+      say("engine", parsed.reason, false);
+      return;
+    }
+
+    setBusy(true);
+    // The body is a MAPPING, not the file. Three fields, and the tests hold it
+    // to three: this page has just read somebody's CSV, and a correction must
+    // never become a way to send it anywhere.
+    fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: D.source, column: parsed.column, role: parsed.role })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+    }).then(function (r) {
+      setBusy(false);
+      if (!r.ok) {
+        var failure = (r.body && r.body.failure) || {};
+        say("engine", failure.reason || "the correction was refused", false);
+        return;
+      }
+      var fb = r.body.feedback || {};
+      // THE REFRESH. The server has already re-profiled and regenerated the
+      // report; all that is left is to show the consequence. Replacing the
+      // learned map in state re-renders the panel WITHOUT a reload, so the user
+      // keeps their place in a report they are part way through reading.
+      setLearned(fb.roles || {});
+      say("engine", fb.reason || (parsed.column + " is now the " + parsed.role), true);
+    }).catch(function (error) {
+      setBusy(false);
+      say("engine", "the server did not answer: " + error.message, false);
+    });
+  }
+
+  var keys = Object.keys(learned).sort();
+  return React.createElement("aside", { className: "chat", "aria-label": "Chat and feedback" },
+    React.createElement("h2", null, "Chat"),
+    React.createElement("p", { className: "meta" },
+      "Correct the engine in plain English. It applies the change to " + esc(D.source) + " and re-reads the file."),
+    React.createElement("div", { className: "log", role: "log" },
+      log.length === 0
+        ? React.createElement("p", { className: "empty" },
+            "Try: alert_code is the category. Names the engine does not have are refused rather than guessed.")
+        : log.map(function (m, i) {
+            return React.createElement("p", { key: i, className: m.who + (m.ok ? "" : " bad") },
+              React.createElement("strong", null, m.who === "you" ? "You: " : "Engine: "),
+              esc(m.body));
+          })
+    ),
+    React.createElement("form", { className: "composer", onSubmit: send },
+      React.createElement("input", {
+        type: "text",
+        value: text,
+        placeholder: "col_15 is the category",
+        "aria-label": "Describe the correction in plain English",
+        onChange: function (e) { setText(e.target.value); }
+      }),
+      React.createElement("button", { type: "submit", disabled: busy }, busy ? "Working..." : "Send")
+    ),
+    React.createElement("h3", null, "Learned mappings"),
+    keys.length === 0
+      ? React.createElement("p", { className: "empty" }, "Nothing learned yet.")
+      : React.createElement("ul", { className: "learned" }, keys.map(function (k) {
+          return React.createElement("li", { key: k },
+            React.createElement("span", { className: "role" }, esc(k)),
+            React.createElement("span", { className: "arrow" }, "\u2192"),
+            React.createElement("span", { className: "colname" }, esc(learned[k])));
+        }))
+  );
+}
+`;
 
 /**
  * THE APPLICATION SOURCE.
@@ -371,7 +548,8 @@ function App() {
       )
     ),
     React.createElement("footer", null,
-      "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning.")
+      "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning."),
+    __CHAT__
   );
 }
 
@@ -386,9 +564,33 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   // Computed here only when the caller did not supply one.
   const summary = synthesize({ totalRows: analysis.totalRows, columns: analysis.numerical.columns, health: analysis.health });
   const data = buildDashboardData(analysis, { headline: summary.headline, ...options });
+
+  // === THE SPLICE, AND THE ONE PLACE A LIVE PAGE GETS WIDER ===
+  //
+  // Standalone (the default): the chat is not merely hidden, it is not emitted.
+  // The artifact therefore contains no "/api/feedback" string at all, so it
+  // cannot present a control wired to an endpoint that will never answer.
+  //
+  // Live: the parser's SOURCE is spliced in, so the browser runs the exact
+  // function this repository tests rather than a hand-written paraphrase of it.
+  // Two implementations that agree until somebody edits one is the failure this
+  // avoids, and the test re-evaluates the emitted text to prove they agree.
+  const live = options.live !== undefined;
+  const chat = live
+    ? `${parseCorrection.toString()}\n${CHAT_SOURCE}`
+    : "";
   const source = APP_SOURCE
     .split("__DATA_ID__").join(DASHBOARD_DATA_ID)
-    .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID);
+    .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID)
+    .split("__CHAT__").join(live ? `React.createElement(ChatPanel)` : "null")
+    .replace("function App() {", `${chat}\nfunction App() {`);
+
+  // connect-src is the whole difference between the two artifacts. 'none' for
+  // the standalone page -- it has nothing to talk to -- and 'self' for the live
+  // one, which permits exactly the origin serving it and nothing else. Not a
+  // wildcard, and not the CDN: the report data is already in the page, so the
+  // only thing that ever needs to travel is the user's correction.
+  const connect = live ? "'self'" : "'none'";
 
   return `<!doctype html>
 <html lang="en">
@@ -402,13 +604,16 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   The kernel's page is served with default-src 'none' and loads nothing remote.
   This one loads React from a CDN, so it must name that origin or the app will
   not run. The isolation is the safety property: this artifact is generated
-  separately, carries only report data, and makes no network calls of its own.
+  separately and carries only report data.
+
+  connect-src is 'none' on a standalone report and 'self' on a live one. A
+  standalone file has no server to correct, so it is not permitted to try.
 
   Pinned versions, not a floating major, so a report cannot change because an
   unrelated package was published. See platform/web/react-report.ts for what
   pinning does and does not buy.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; connect-src 'none'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; connect-src ${connect}; img-src data:">
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; background: #f6f7f9; color: #16181d; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -436,6 +641,21 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   .pill.info { background: #e4ecf6; color: #274a76; }
   tr.critical td { background: #fef8f6; }
   footer { margin-top: 2.5rem; font-size: .8rem; color: #5b616e; border-top: 1px solid #e4e7ee; padding-top: .8rem; }
+  .chat { margin-top: 2.5rem; border: 1px solid #e4e7ee; border-radius: 10px; padding: 1rem 1.1rem 1.2rem; background: #fff; }
+  .chat h2 { margin-top: 0; }
+  .chat h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; margin: 1.1rem 0 .4rem; }
+  .log { max-height: 16rem; overflow-y: auto; margin: .8rem 0; }
+  .log p { margin: 0 0 .5rem; font-size: .88rem; }
+  .log p.bad { color: #8a2b12; background: #fef8f6; border-left: 3px solid #d9613f; padding: .3rem .5rem; border-radius: 0 4px 4px 0; }
+  .composer { display: flex; gap: .5rem; }
+  .composer input { flex: 1; font: inherit; padding: .4rem .55rem; border: 1px solid #b9bfcc; border-radius: 6px; }
+  .composer button { font: inherit; padding: .4rem .9rem; border-radius: 6px; border: 1px solid #16181d; background: #16181d; color: #fff; cursor: pointer; }
+  .composer button[disabled] { opacity: .55; cursor: progress; }
+  .learned { list-style: none; padding: 0; margin: 0; font-size: .85rem; }
+  .learned li { display: flex; gap: .45rem; align-items: baseline; padding: .12rem 0; }
+  .learned .role { color: #5b616e; min-width: 6.5rem; }
+  .learned .arrow { color: #a9b0be; }
+  .learned .colname { font-weight: 600; }
 </style>
 </head>
 <body>

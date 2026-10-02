@@ -197,6 +197,84 @@ export function createWedgeServer(options: WedgeOptions): Server {
           return;
         }
 
+        if (request.method === "GET" && url.pathname === "/api/dashboard") {
+          // THE LIVE DASHBOARD. The interactive artifact, served from the origin
+          // that owns the correction endpoint.
+          //
+          // It exists because the chat needs an origin. A dashboard written to
+          // disk is opened with file://, where a POST to /api/feedback has no
+          // meaning and connect-src 'none' is the correct answer. So the
+          // conversational view is served HERE, next to the API it talks to, and
+          // the standalone file keeps its offline guarantees.
+          //
+          // The path is resolved by the SAME kernel function every other route
+          // uses, for the same reason: a second implementation of "is this
+          // inside the workspace" is a second control plane, and the lesson this
+          // file already paid for is that the unguarded route is the one nobody
+          // looks at.
+          const target = url.searchParams.get("path");
+          if (target === null || target.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "name a file: /api/dashboard?path=<file>" },
+            });
+            return;
+          }
+
+          const resolved = resolveWithinRoot(cwd, target);
+          if (!resolved.allowed) {
+            sendJson(response, 403, {
+              status: "FAILED",
+              failure: {
+                code: "PATH_OUTSIDE_WORKSPACE",
+                reason: `path boundary violation: ${resolved.reason ?? "the file is outside the workspace"}`,
+                kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+              },
+            });
+            return;
+          }
+
+          // The analysis comes from the kernel, through the Conductor, exactly
+          // as the Markdown report's does. This route renders; it does not
+          // profile. A dashboard whose numbers came from anywhere else would be
+          // a second opinion wearing the engine's name.
+          const conductor = new Conductor({
+            cwd,
+            defaultsRoot: options.defaultsRoot ?? installRoot,
+            projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
+          });
+          const result = await conductor.run(`bottleneck report; input=${target}`, {
+            mode: "bottleneck",
+            format: "markdown",
+            output: path.join(cwd, "workspace", "bottleneck-report.md"),
+            title: `Bottleneck report: ${path.basename(target)}`,
+          });
+          if (result.status !== "DELIVERED" || result.report === undefined) {
+            sendJson(response, statusFor(result), toResponse(result));
+            return;
+          }
+
+          const { toReactDashboard } = await import("./react-report.ts");
+          const html = toReactDashboard(result.report.analysis, {
+            title: `Bottleneck report: ${path.basename(target)}`,
+            // The one opt-in that widens the page. It is what lets the chat
+            // reach /api/feedback, and it is scoped to this route alone.
+            live: { path: target },
+            learned: result.report.schema?.roles ?? {},
+          });
+          response.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": Buffer.byteLength(html),
+            "cache-control": "no-store",
+            // The page declares its own policy in a meta tag; these headers are
+            // the ones that apply to the document itself.
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "no-referrer",
+          });
+          response.end(html);
+          return;
+        }
+
         if (request.method === "POST" && url.pathname === "/api/report") {
           const raw = await readBody(request);
           let parsed: unknown;
