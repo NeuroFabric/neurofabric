@@ -9,10 +9,8 @@ import path from "node:path";
  *   1. `.session-archive/schema-memory.json` — what THIS checkout has learned. Per
  *      checkout, gitignored, never shipped. A user's own correction outranks
  *      anything we ship, because it is the only one of the two that was
- *      checked against the file in front of them.
- *      (`.session-archive/schemas.json` is the older name and is still read, so
- *      corrections made before the rename are not orphaned. The canonical file
- *      is listed first and wins any tie.)
+ *      checked against the file in front of them. Written by the correction
+ *      loop, so it is also the only way a guess gets overturned.
  *   2. `configs/default-schemas.json` — core VERIFIED schemas, tracked in git,
  *      shipped with the product. The Pega mapping was established against a real
  *      export in Stage 2; re-deriving it by name-matching on every install would
@@ -58,18 +56,6 @@ interface SchemaFile {
 }
 
 const ARCHIVE_RELATIVE = path.join(".session-archive", "schema-memory.json");
-
-/**
- * THE OLD NAME, still read.
- *
- * Earlier sessions wrote corrections to schemas.json, and a hard rename would
- * silently orphan a file a user may have spent an afternoon building. Their
- * corrections would be ignored with no warning, which is exactly the failure the
- * module's own documentation calls worse than crashing. So both names work, the
- * canonical one is listed first, and `select` resolves ties in array order --
- * which is why a user who has both files gets the newer one.
- */
-const ARCHIVE_LEGACY_RELATIVE = path.join(".session-archive", "schemas.json");
 const DEFAULT_RELATIVE = path.join("configs", "default-schemas.json");
 
 /** Roles the product actually asks for. A schema that cannot fill these is not a match. */
@@ -325,14 +311,12 @@ export interface ResolveOptions {
 export async function resolveSchemaMemory(options: ResolveOptions): Promise<ResolvedSchema | undefined> {
   const headers = options.headers;
 
-  // Both archive names, CANONICAL FIRST. Concatenating rather than
-  // "read one or the other" means a checkout that has been through the rename
-  // can carry both files without losing either, and the ordering makes the
-  // newer one win any tie.
-  const canonical = await readJsonFile(path.resolve(options.cwd, ARCHIVE_RELATIVE));
-  const legacy = await readJsonFile(path.resolve(options.cwd, ARCHIVE_LEGACY_RELATIVE));
-  const archiveSchemas = [...(canonical?.schemas ?? []), ...(legacy?.schemas ?? [])];
-  const archive = archiveSchemas.length > 0 ? { schemas: archiveSchemas } : undefined;
+  // One archive name, no longer two. The legacy schemas.json was kept while it
+  // was plausible that a checkout had been taught something before the rename;
+  // the interactive correction loop now writes the canonical file, and every
+  // path into this product goes through it, so a second name is a way to end up
+  // with two memories and no way to tell which one is being read.
+  const archive = await readJsonFile(path.resolve(options.cwd, ARCHIVE_RELATIVE));
   const learned = archive === undefined ? undefined : select(archive.schemas, headers);
   const defaults = await readJsonFile(path.resolve(options.defaultsRoot ?? options.cwd, DEFAULT_RELATIVE));
   const core = defaults === undefined ? undefined : select(defaults.schemas, headers);
@@ -374,18 +358,41 @@ export async function resolveSchemaMemory(options: ResolveOptions): Promise<Reso
   if (options.rows === undefined || options.rows.length === 0) return undefined;
   const profile = profileGenericColumns(options.headers, options.rows);
   const inferred = inferGenericRoles(profile);
-  const gaps = GENERIC_REQUIRED_ROLES.filter((role) => inferred[role] === undefined);
-  // No rows, or nothing that groups and nothing that dates: return undefined and
-  // let the report say the file matched nothing. A profile with no evidence is
-  // not a weaker profile, it is an invented one.
+  // A USER CORRECTION OUTRANKS THE PROFILER, ALWAYS, EVEN WHEN IT IS PARTIAL.
+  //
+  // Before this, a correction could only take effect if the archive on its own
+  // filled every required role. Correcting ONE column of a sales CSV -- the
+  // ordinary case -- left category and time unfilled, the store path declined,
+  // the profiler ran, and the correction was silently ignored. The person said
+  // no and the product went on saying yes, which is the one outcome this feature
+  // exists to prevent.
+  //
+  // So the archive SEEDS the inference and the profiler fills the rest. The
+  // user's word wins on the roles they spoke about; everything they did not
+  // mention is still a guess, and is still reported as one.
+  const corrected: Record<string, string> = { ...inferred };
+  let correctedRoles = 0;
+  for (const [role, column] of Object.entries(fromArchive.roles)) {
+    if (!options.headers.includes(column)) continue;
+    corrected[role] = column;
+    correctedRoles += 1;
+  }
+  const gaps = GENERIC_REQUIRED_ROLES.filter((role) => corrected[role] === undefined);
+  // Nothing the profiler found and nothing the user corrected: return undefined
+  // and let the report say the file matched nothing. A profile with no evidence
+  // is not a weaker profile, it is an invented one.
   if (gaps.length > 0) return undefined;
 
   return {
-    id: "generic-inferred",
-    roles: inferred,
-    source: "GENERIC",
-    learnedRoles: [],
-    absent: [],
+    id: correctedRoles > 0 ? "user-corrections" : "generic-inferred",
+    roles: corrected,
+    // SESSION_ARCHIVE when the user contributed at least one role, because then
+    // the mapping is partly theirs. It is still a HYPOTHESIS overall -- the
+    // untouched roles are profiler guesses -- and the analysis reports it that
+    // way, which is why the report does not gain Pega vocabulary from it.
+    source: correctedRoles > 0 ? "SESSION_ARCHIVE" : "GENERIC",
+    learnedRoles: Object.keys(corrected).filter((role) => fromArchive.roles[role] !== undefined),
+    absent: [...fromArchive.absent, ...fromCore.absent],
     unresolved: [],
   };
 }

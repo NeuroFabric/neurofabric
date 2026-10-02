@@ -2,6 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import path from "node:path";
 
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
+import { applyFeedback } from "./feedback.ts";
+import { parseCsv, csvRead } from "../conductor/capabilities.ts";
+import type { CsvReadResult } from "../conductor/capabilities.ts";
 
 /**
  * THE WEDGE: a governed bottleneck report behind a dropzone.
@@ -44,6 +47,25 @@ export interface RunningWedge {
 
 /** 8 MiB. A CSV export that does not fit in this is not a CSV export. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Read the file a correction applies to.
+ *
+ * The headers are needed because a correction names a COLUMN, and the only way
+ * to know whether that column exists is to hold the header row. A structurally
+ * broken file yields undefined rather than a partial table: correcting a mapping
+ * against a file the parser could not read would store a role for a shape that
+ * is not there.
+ */
+async function readCsvFor(absolute: string): Promise<CsvReadResult | undefined> {
+  const { readFile } = await import("node:fs/promises");
+  const text = await readFile(absolute, "utf8").catch(() => undefined);
+  if (text === undefined) return undefined;
+  const parsed = parseCsv(text);
+  if (parsed.problems.length > 0) return undefined;
+  const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
+  return { path: absolute, headers: parsed.headers, rowCount: rows.length, columns: [], sample: rows.slice(0, 5), rows, problems: parsed.problems };
+}
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
@@ -182,6 +204,80 @@ export function createWedgeServer(options: WedgeOptions): Server {
             title: `Bottleneck report: ${path.basename(target)}`,
           });
           sendJson(response, statusFor(result), toResponse(result));
+          return;
+        }
+
+        if (request.method === "POST" && url.pathname === "/api/feedback") {
+          // THE CORRECTION LOOP. The browser sends a role and a column; the
+          // engine stops guessing that one and the report is regenerated so the
+          // user can SEE the difference they just made.
+          //
+          // The file being corrected comes from the same body as the report
+          // request, so a correction always applies to the file the user is
+          // actually looking at. Inferring it from session state would let a
+          // correction land on the wrong file, and a correction applied to the
+          // wrong file is worse than no correction: it is confidently wrong.
+          const raw = await readBody(request);
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "the request body is not valid JSON" },
+            });
+            return;
+          }
+          const body = (parsed as { path?: unknown; column?: unknown; role?: unknown } | null);
+          const target = body?.path;
+          if (typeof target !== "string" || target.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no file path was supplied, so there is nothing to correct" },
+            });
+            return;
+          }
+
+          const csv = await readCsvFor(path.resolve(cwd, target));
+          if (csv === undefined) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: `the file ${path.basename(target)} could not be read` },
+            });
+            return;
+          }
+
+          const applied = await applyFeedback({
+            cwd,
+            headers: csv.headers,
+            rows: csv.rows,
+            column: body?.column,
+            role: body?.role,
+          });
+          if (!applied.ok) {
+            // A refusal is a 400 with the reason. It is not a policy question
+            // and must not get a 403, which would tell the user the kernel
+            // refused them rather than that the request was wrong.
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: applied.reason },
+            });
+            return;
+          }
+
+          // REGENERATE, so the correction is visible rather than merely stored.
+          const conductor = new Conductor({
+            cwd,
+            defaultsRoot: options.defaultsRoot ?? installRoot,
+            projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
+          });
+          const result = await conductor.run(`bottleneck report; input=${target}`, {
+            mode: "bottleneck",
+            format: "markdown",
+            output: path.join(cwd, "workspace", "bottleneck-report.md"),
+            title: `Bottleneck report: ${path.basename(target)}`,
+          });
+          sendJson(response, statusFor(result), { ...toResponse(result), feedback: { reason: applied.reason, roles: applied.roles ?? {} } });
           return;
         }
 

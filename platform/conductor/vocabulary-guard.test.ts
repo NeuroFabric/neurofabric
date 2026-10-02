@@ -104,15 +104,21 @@ test("threshold language is reserved for a verified schema too", async () => {
   assert.match(md, /over threshold/);
 });
 
-test("a per-checkout learned schema IS verified, and earns Pega wording", async () => {
-  // A user correcting a mapping in their own checkout is as much a person
-  // checking it as the shipped schema is. Treating SESSION_ARCHIVE as
-  // unverified would punish the exact behaviour schema-memory exists to
-  // encourage, so the archive is written out here and the claim is tested
-  // against the resolver rather than asserted in a comment.
+test("a per-checkout learned schema earns ESTABLISHED MAPPINGS but NOT Pega wording", async () => {
+  // CORRECTED BY THE FEATURE THAT FOLLOWED IT, and the correction is the point.
+  // This used to assert that SESSION_ARCHIVE earns "alert", on the argument that
+  // a user correcting a mapping is a person checking it. That is true of the
+  // ROLE and silent about the DOMAIN. Now that a browser can point the duration
+  // role at a column called amount in a sales CSV, an archive entry can exist for
+  // a file with no alerts in it -- and a file of orders is not an alert export,
+  // whoever checked which column was which.
+  //
+  // So the archive earns established MAPPINGS, and the shipped Pega schema alone
+  // earns the Pega NOUNS. A mapping somebody checked is still a mapping ABOUT
+  // SOMETHING, and only the shipped schema says what.
   const cwd = await makeTempWorkspace("nf-archive-");
   await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
-  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), JSON.stringify([
+  await writeFile(path.join(cwd, ".session-archive", "schema-memory.json"), JSON.stringify([
     { id: "my-own-pega", roles: { time: "_time", source: "source_host", category: "alert_code", duration: "elapsed_time", threshold: "threshold" } },
   ]), "utf8");
 
@@ -120,7 +126,20 @@ test("a per-checkout learned schema IS verified, and earns Pega wording", async 
   const learned = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: `${cwd}/none` });
   assert.equal(learned?.source, "SESSION_ARCHIVE", "the archive answers, not the profiler");
   const analysis = analyseBottlenecks(csv, learned);
-  assert.equal(analysis.vocabulary.unit, "alert", "a checked mapping earns the domain vocabulary");
+  assert.equal(analysis.mappings.find((m) => m.role === "duration")?.hypothesis, false,
+    "a checked mapping IS established -- that much the old ruling got right");
+  assert.equal(analysis.vocabulary.unit, "record", "but it does not make the file an alert export");
+  const md = toBottleneckMarkdown(analysis, "Bottleneck report");
+  assert.match(md, /Record categories by frequency/);
+  assert.ok(!md.includes("alert(s)"), "and no Pega noun leaks from a learned mapping");
+});
+
+test("the SHIPPED schema is what earns the Pega wording, and it still does", async () => {
+  const csv = csvOf(PEGA);
+  const shipped = await resolveSchemaMemory({ cwd: "configs/..", headers: csv.headers, rows: csv.rows });
+  assert.equal(shipped?.source, "DEFAULT");
+  const analysis = analyseBottlenecks(csv, shipped);
+  assert.equal(analysis.vocabulary.unit, "alert", "a verified Pega export is an alert export");
   assert.equal(analysis.vocabulary.thresholdLabel, "over threshold");
   assert.match(toBottleneckMarkdown(analysis, "Bottleneck report"), /Alert categories by frequency/);
 });

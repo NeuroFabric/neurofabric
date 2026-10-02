@@ -1,6 +1,7 @@
 import path from "node:path";
 import { scanStrings, truncatedScanReason } from "./policy.ts";
 import { scanCommandText, scanToolPathCandidates } from "./tool-paths.ts";
+import { classifySql } from "./sql-guard.ts";
 import { parseCommandLine } from "./command-position.ts";
 import { globToRegExp, normalizeForMatch, type PolicyConfig, type RuleVerdict } from "./policy-config.ts";
 import { WorkspaceBoundary } from "./workspace.ts";
@@ -475,6 +476,30 @@ export class ConfiguredPolicy implements PolicyEngine {
       where,
     );
     if (tokenDenial) return tokenDenial;
+
+    // 4a. SQL QUERIES, for tools that declare one.
+    //
+    //     The tool NAMES the parameter rather than the policy guessing from its
+    //     shape, because a check that infers what it is guarding is a check
+    //     someone can rename a field to escape. The refusal comes from this
+    //     same function, with the same tier, as a destructive shell command --
+    //     so "the guard denied it" is one answer rather than two code paths that
+    //     happen to agree today.
+    //
+    //     HARD_DENY and not SOFT_REFUSE, and that is not severity for its own
+    //     sake. A soft refusal lets the run CONTINUE, which for a read-only
+    //     analysis product means the caller rephrases and tries again; here the
+    //     next thing it would try is the same DROP with different spacing.
+    const queryParam = tool.governedQueryParameter;
+    if (queryParam !== undefined && input !== null && typeof input === "object") {
+      const raw = (input as Record<string, unknown>)[queryParam];
+      if (raw !== undefined) {
+        const verdict = classifySql(typeof raw === "string" ? raw : "");
+        if (!verdict.allowed) {
+          return this.deny(`${where}: query refused by the read-only SQL guard (${verdict.reason})`, "HARD_DENY");
+        }
+      }
+    }
 
     if (tool.riskLevel === "WRITE") {
       // 4b. Nesting depth (D-027). A payload deeper than the bound is refused

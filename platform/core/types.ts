@@ -143,6 +143,17 @@ export interface ToolDescriptor {
   retryPolicy: RetryPolicy;
   idempotency: Idempotency;
   sideEffect: SideEffect;
+  /**
+   * The input key holding a SQL query, when this tool runs one.
+   *
+   * Named here rather than guessed from the key, because a security check that
+   * infers what it is guarding is a security check someone can move a field to
+   * escape. A tool that declares this gets its query run through the read-only
+   * guard during precheck, and a refusal is HARD_DENY from the same path that
+   * refuses a destructive shell command -- not from a side channel inside the
+   * tool, which a caller could bypass by invoking the tool directly.
+   */
+  governedQueryParameter?: string;
 }
 
 export interface ToolResult<T = unknown> {

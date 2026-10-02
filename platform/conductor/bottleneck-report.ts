@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { analyseBottlenecks, type BottleneckAnalysis, type CategoryStat, type ReportVocabulary, type HourlyProfile } from "./bottlenecks.ts";
 import { resolveSchemaMemory } from "./schema-memory.ts";
+import { barChart, hourlyChart, SVG_STYLE } from "./svg-charts.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 import type { CsvReadResult } from "./capabilities.ts";
 import type { ResolvedSchema } from "./schema-memory.ts";
@@ -379,6 +380,31 @@ function numericalSummaryMarkdown(a: BottleneckAnalysis): string {
   return out.join("\n");
 }
 
+/**
+ * THE CHARTS. Inline SVG, generated here, no CDN and no script.
+ *
+ * A charting library over a CDN is the obvious way to do this and it is wrong
+ * three times over: it breaks the no-remote-references invariant the committed
+ * reports are verified against, it executes third-party JavaScript on a machine
+ * that just handed us a data file, and it is megabytes to avoid computing a
+ * handful of rectangles. See svg-charts.ts for the full argument.
+ *
+ * EACH CHART RENDERS NOTHING RATHER THAN AN EMPTY FRAME. A blank canvas reads as
+ * "we looked and found nothing", which is a stronger and different claim from
+ * "this file has nothing to chart", and only one of the two is true.
+ */
+function chartsSectionHtml(a: BottleneckAnalysis): string {
+  const bars = a.categories.length > 0 ? barChart(a.categories) : "";
+  const hours = a.hourly.hours.length > 0
+    ? hourlyChart(a.hourly.hours, a.hourly.insufficient ? {} : { mean: a.hourly.meanPerHour })
+    : "";
+  if (bars === "" && hours === "") return "";
+  return `<h2>At a glance</h2>
+${bars === "" ? "" : `<h3>Top categories by frequency</h3>
+${bars}`}${hours === "" ? "" : `<h3>Rows by hour</h3>
+${hours}`}`;
+}
+
 function numericalSummaryHtml(a: BottleneckAnalysis): string {
   const n = a.numerical;
   if (n.columns.length === 0) return "";
@@ -683,6 +709,7 @@ export async function renderBottleneckReport(input: {
   .banner-title { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: .8rem; }
   .banner-note { color: #5b616e; font-size: .85rem; }
   tr.top td { font-weight: 600; }
+${SVG_STYLE}
   tr.spike { background: #fdf6f3; }
   tr.spike td { font-weight: 600; }
   .badge { display: inline-block; border: 1px solid #b23c17; color: #b23c17; padding: 0 .3rem; font-size: .7rem; font-weight: 700; letter-spacing: .04em; }
@@ -705,6 +732,7 @@ ${categoryTable(analysis.categoriesByElapsed, `${analysis.vocabulary.headingUnit
     : `<p class="none">${escapeHtml(NO_CATEGORIES_NOTE)}</p>
 ${numericalSummaryHtml(analysis)}`}
 ${hourlyTable(analysis)}
+${chartsSectionHtml(analysis)}
 ${latencyTable(analysis)}
 ${analysis.unreadableTimestamps.length > 0 ? `<h2>Excluded from the hourly view</h2>
 <p class="none">${analysis.unreadableTimestamps.length} row(s) carried an unreadable timestamp: rows ${escapeHtml(cite(analysis.unreadableTimestamps))}.</p>` : ""}

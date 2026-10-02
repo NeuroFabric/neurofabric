@@ -1077,8 +1077,8 @@ export function analyseBottlenecks(
   // only when a mapping a PERSON checked is actually being applied. Three states
   // exist and only two were ever legitimate:
   //
-  //   DEFAULT / SESSION_ARCHIVE -- verified. Someone checked this mapping
-  //     against a real export, so the wording is supported.
+  //   DEFAULT -- the shipped Pega schema, verified against a real export. The
+  //     domain is established, so the wording is supported.
   //   GENERIC -- inferred from column values, always a hypothesis.
   //   undefined -- NOTHING WAS ESTABLISHED. This is the state that used to
   //     claim alerts by default, and it was the worst of the three: absence of
@@ -1086,11 +1086,20 @@ export function analyseBottlenecks(
   //     Pega export is not a verified Pega export, and 20 anonymous numeric
   //     columns described as an alert ranking is a sentence with no referent.
   //
+  // SESSION_ARCHIVE IS NOT ENOUGH, and this changed once interactive corrections
+  // arrived. It used to sit alongside DEFAULT, on the argument that a user
+  // correcting a mapping is a person checking it. That is true of the ROLE and
+  // silent about the DOMAIN: the correction loop lets somebody point the
+  // duration role at a column called amount in a sales CSV, and an archive entry
+  // then exists for a file with no alerts in it. A mapping somebody checked is
+  // still a mapping ABOUT SOMETHING, and only the shipped Pega schema says what.
+  // So the archive earns established MAPPINGS, not Pega NOUNS.
+  //
   // The threshold label follows from the SAME condition rather than from the
   // column being named "threshold". A guessed column is still a guess, so an
   // unverified file gets the neutral "over limit" and only a verified one gets
   // "over threshold".
-  const schemaVerified = schema?.source === "DEFAULT" || schema?.source === "SESSION_ARCHIVE";
+  const schemaVerified = schema?.source === "DEFAULT";
   const generic = !schemaVerified;
   const statesThreshold = thresholdCol !== undefined && csv.headers.includes(thresholdCol);
   const vocabulary: ReportVocabulary = schemaVerified

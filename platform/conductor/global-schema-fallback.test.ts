@@ -105,23 +105,26 @@ test("a correction is merged ROLE BY ROLE, not by picking a whole store", async 
   assert.equal(schema?.roles.alias, "logger_name", "inherited too");
 });
 
-test("the LEGACY archive name still works, because a rename that forgets is worse than a crash", async () => {
-  const cwd = await makeTempWorkspace("nf-legacy-");
-  await writeArchive(cwd, "schemas.json", { category: "alertType" }, "legacy-pega");
-  const csv = csvOf(PEGA);
-  const schema = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: SHIPPED });
-  assert.equal(schema?.source, "SESSION_ARCHIVE", "corrections from an earlier session are not orphaned");
-  assert.equal(schema?.roles.category, "alertType");
-});
-
-test("when BOTH archive names exist, the canonical one wins -- pinned so it cannot become accidental", async () => {
-  const cwd = await makeTempWorkspace("nf-both-");
-  await writeArchive(cwd, "schemas.json", { category: "alertType" }, "legacy-pega");
-  await writeArchive(cwd, "schema-memory.json", { category: "logger_name" }, "canonical-pega");
-  const csv = csvOf(PEGA);
-  const schema = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: SHIPPED });
-  assert.equal(schema?.id, "canonical-pega");
-  assert.equal(schema?.roles.category, "logger_name", "the newer file is the one the user last wrote");
+test("the LEGACY archive name is GONE, deliberately", async () => {
+  // A previous session kept reading .session-archive/schemas.json for
+  // compatibility, on the argument that a hard rename orphans a file a user may
+  // have built by hand. The interactive correction loop changes that calculus:
+  // every write into the archive now goes through one endpoint and one filename,
+  // so a second readable name can only produce a checkout with two memories and
+  // no way to tell which one is being consulted.
+  //
+  // The old behaviour was kept for one release. This pins its removal rather
+  // than merely allowing it, because the failure mode of re-adding it is silent
+  // -- a stale file that quietly outranks or is quietly outranked, with nothing
+  // in the report to say so.
+  const cwd = await makeTempWorkspace("nf-legacy-gone-");
+  await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
+  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), JSON.stringify([
+    { id: "old-pega", roles: { category: "alertType" } },
+  ]), "utf8");
+  const resolved = await resolveSchemaMemory({ cwd, headers: csvOf(PEGA).headers, defaultsRoot: `${cwd}/no-configs` });
+  // Not a learned schema: the file is not read at all.
+  assert.notEqual(resolved?.source, "SESSION_ARCHIVE", "the legacy file is no longer consulted");
 });
 
 test("an EMPTY archive falls through to the baseline rather than shadowing it", async () => {

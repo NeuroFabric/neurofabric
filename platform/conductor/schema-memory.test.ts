@@ -68,7 +68,7 @@ test("a user-learned schema in .session-archive WINS over the shipped default", 
   await mkdir(path.join(cwd, ".session-archive"), { recursive: true });
   // This checkout learned that alertType is the discriminating column. It is
   // right HERE and wrong in general, which is exactly why it is per-checkout.
-  await writeFile(path.join(cwd, ".session-archive", "schemas.json"), JSON.stringify([
+  await writeFile(path.join(cwd, ".session-archive", "schema-memory.json"), JSON.stringify([
     { id: "pega-alert-export", roles: { category: "alertType" } },
   ]), "utf8");
 

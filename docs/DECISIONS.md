@@ -3109,6 +3109,12 @@ re-runs the R9 trap on real customer data instead of on a fixture.
 
 Two stores, one merge, and the order between them is the decision:
 
+> **SUPERSEDED IN PART — see the note at the end of this entry.** The learned
+> store was renamed from `.session-archive/schemas.json` to
+> `.session-archive/schema-memory.json`, and the legacy name is no longer read.
+> The ordering ruling below still stands; only the filename changed, and the
+> reason for the change is recorded in the addendum.
+
 1. `.session-archive/schemas.json` — what THIS checkout has learned. Per
    checkout, gitignored, never shipped. Accepted as either a bare array or a
    `{ "schemas": [...] }` object, because it is a file a person edits by hand.
