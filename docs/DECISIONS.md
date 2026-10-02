@@ -3404,3 +3404,93 @@ the boundary removal this repository refuses to make quietly.
 - D-033 — the first CDN exception, and the isolation argument both rest on.
 - D-032 — why the session archive is sensitive; the chat writes to it.
 - D-034 — the container that serves `/api/dashboard` unchanged.
+
+---
+
+## D-036 — Tailwind, a compiler shipped to the browser, and why the CDN is the lesser evil here
+
+**Date:** 2026-10-04
+**Stage:** 4 (UX overhaul)
+**Status:** Accepted, with debt
+**Affects:** `platform/web/react-report.ts`, `platform/web/page.ts`
+
+### Context
+
+The Owner opened a database performance CSV and was shown a hundred rows of
+table. Task 1 of the UX overhaul asked for Tailwind via CDN to make the page
+look like a product rather than a dump.
+
+Two findings from that work matter more than the styling, and both are recorded
+here because they change how this artifact should be read.
+
+**THE DASHBOARD WAS NEVER SHOWN TO ANYONE.** The dropzone called `/api/report`,
+which returns Markdown, and injected it with `innerHTML`. The React dashboard —
+every chart, the tooltips, the whole conversational UI — was served by
+`/api/dashboard`, which existed, was tested, and had **zero callers**. So the
+product had two front ends: the one a user reached, and the one built for them.
+Every existing test passed throughout, because each held the dashboard in a
+variable and read it as a string. Not one asked whether the product ever
+navigated a user to it. Tests of a generator prove the generator works; only a
+test of the product proves the generator is REACHED.
+
+**THE CHAT PANEL WAS DEAD MARKUP IN A BROWSER.** The correction-refresh function
+searches the re-read document for the end of its data block, so its own source
+contains the literal text that closes an HTML script element. That source is
+emitted inside a script element, and the HTML tokenizer — unlike a JS parser —
+has no idea it is inside a string. It ended the block there, roughly a third of
+the way through, and the entire chat panel was parsed as markup rather than
+script. The fix is to escape the forward slash: in a JavaScript string literal
+`\/` is just `/`, so the search still works while the tokenizer no longer
+recognises an end tag.
+
+It was found only because `react-app-parses.test.ts` extracts the block with a
+naive `indexOf` on the closing tag, which reproduces the browser's reading of the
+document. A cleverer extractor that understood JS string context would have
+hidden the bug and reported a green suite for a page with no chat at all.
+
+### Decision
+
+> **Tailwind joins React and Chart.js on the CDN, and the rule that bounds all
+> three is stated once, in D-035.**
+
+1. **Pinned to `3.4.16`**, never a floating tag, asserted by test. A report about
+   a production incident must not restyle itself because somebody published a
+   build.
+2. **The bespoke stylesheet is cut to what utilities cannot express** — the
+   chart box, the severity pills, the chart-library-off notice. Two sources of
+   truth for one property is how a design system rots.
+3. **A Tailwind failure is survivable by construction.** If the CDN does not
+   answer, the class names simply stop applying. The document is ordered so the
+   *unstyled* reading order is still the right one — findings before raw data,
+   charts before both — and the charts already fall back to tables via
+   `ChartNote`. A test asserts that ordering rather than trusting it.
+4. **The kernel's own page is untouched.** `platform/web/page.ts` keeps
+   `default-src 'none'`, loads nothing remote, and since the dropzone navigates
+   instead of injecting, it has **no HTML-injection sink at all**.
+
+### The trade, stated plainly
+
+Tailwind's Play CDN **compiles utilities in the browser**. It ships a compiler
+to the client, and its own documentation says not to use it in production. That
+is the correct default, and it is being overridden here for one reason: the
+alternative is vendoring Tailwind, which means shipping a build step, and "no
+build step" is the premise of this artifact (D-033). A heavier compiler over
+the wire on a page that already loads React and Chart.js is the smaller cost
+against a toolchain.
+
+**What pinning does not buy, restated from D-035 because it is now three
+dependencies deep:** pinning stops silent drift. It does not stop a compromised
+publisher. The honest closure is vendoring or subresource-integrity hashing, and
+both need the build this repository does not have.
+
+**Trigger to revisit:** the first time a user reports a dashboard that renders
+unstyled, or fails to render, on a network that reaches none of the three CDNs.
+At that point the workaround will be reaching for `unsafe-inline`/`unsafe-eval`,
+and that is the boundary removal this repository refuses to make quietly.
+
+### Cross-references
+
+- D-035 — the exception set and the rule that bounds all three dependencies.
+- D-033 — "no build step", the premise this decision trades against.
+- `page-navigation.test.ts` — the test that asked whether the product is reached.
+- `react-app-parses.test.ts` — the naive extractor that caught the dead chat.

@@ -189,8 +189,15 @@ test("the report renderer escapes hostile content before it transforms it", () =
 
   // AND NO RAW-HTML PATH. Every write to innerHTML must go through render, or a
   // future edit could assign unescaped content and still pass the test above.
+  //
+  // AS OF THE UX OVERHAUL THERE ARE NO innerHTML WRITES AT ALL, which is a
+  // STRONGER state than the one this test was written for and not a weakening:
+  // on success the dropzone now navigates to the dashboard instead of injecting
+  // Markdown, so the page has no injection sink whatsoever. The guard below is
+  // kept, because the failure it catches is a plausible future edit -- someone
+  // reinstating "just render it here" -- and a sink that reappears unwrapped
+  // must fail the build immediately rather than ship.
   const writes = [...PAGE_HTML.matchAll(/innerHTML\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
-  assert.ok(writes.length > 0, "the page should assign innerHTML somewhere");
   for (const value of writes) {
     assert.match(value, /^render\(/,
       `innerHTML is assigned from something other than render(): ${value}`);

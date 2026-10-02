@@ -441,6 +441,22 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
   // still rendered "## Alert categories by frequency" above nothing -- a table
   // that reads as a result.
   if (stats.length === 0) return "";
+  // THE TOP-N CAP, and the sentence that must come with it.
+  //
+  // A ranking is a CLAIM about which rows matter. Past about five, the eye stops
+  // comparing and starts scanning, so rows six through sixteen are not less
+  // important -- they are unread, which is the same as absent as far as the
+  // reader is concerned. A hundred-row table is a document optimised for the
+  // person who wrote it and not for the person holding it, and the Owner's
+  // complaint was precisely that.
+  //
+  // NOTHING IS DELETED. The analysis carries every category, and any consumer
+  // reading the object rather than this Markdown sees all of them. This is a
+  // decision about the first screen, and the sentence below states how many were
+  // held back: a truncated table that does not announce itself is
+  // indistinguishable from one that was genuinely five rows long.
+  const TOP = 5;
+  const shown = stats.length > TOP ? stats.slice(0, TOP) : stats;
   // Same contract as the HTML table: the breach column appears only when the
   // file states a threshold, and the header and the cells decide together.
   const breach = vocabulary.thresholdLabel;
@@ -450,7 +466,7 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
     `| # | category | ${vocabulary.unitPlural} |${breach === null ? "" : ` ${breach} |`} total elapsed (ms) | mean (ms) | median (ms) | p95 (ms) | source rows |`,
     `|---|---|---|${breach === null ? "" : "---|"}---|---|---|---|---|`,
   ];
-  stats.forEach((s, index) => {
+  shown.forEach((s, index) => {
     const cell = (v: number | null): string => (v === null ? "not measurable" : v.toLocaleString());
     // R13: the LABEL, not the bare key. The key alone says PEGA0001; the label
     // says PEGA0001 (HttpAPI), which is the row a person recognises. The key is
@@ -461,6 +477,9 @@ function mdCategoryTable(stats: readonly CategoryStat[], heading: string, measur
     lines.push(`| ${index + 1} | ${mdCell(s.label)} | ${s.count} |${breach === null ? "" : ` ${s.breachCount} |`} ${cell(s.totalElapsed)} | ${cell(s.meanElapsed)} | ${cell(s.medianElapsed)} | ${cell(s.p95Elapsed)} | ${mdRows(s.rows)} |`);
   });
   lines.push("", `_Ranked by ${measure}._`, "");
+  if (stats.length > TOP) {
+    lines.push(`_Showing the top ${TOP} of ${stats.length}. The remaining ${stats.length - TOP} are in the analysis, not in this table._`, "");
+  }
   return lines.join("\n");
 }
 
@@ -535,6 +554,8 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
   const topCategory = analysis.categories[0];
   const topElapsed = analysis.categoriesByElapsed[0];
   const out: string[] = [`# ${mdCell(title)}`, ""];
+  // Collected here, printed LAST. See the note on the provenance block below.
+  const provenance: string[] = [];
   const vocab = analysis.vocabulary;
 
   // THE EXECUTIVE SUMMARY LEADS, above the row count.
@@ -575,27 +596,49 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
   const divergence = markdownDivergenceBanner(analysis);
   if (divergence !== "") out.push(divergence);
 
+  // === THE PROVENANCE BLOCK: BUILT HERE, PRINTED LAST ===
+  //
+  // It used to be printed HERE, near the top, under the heading "How this report
+  // was read". The CONTENT was never the problem, and it is the most important
+  // sentence in the document: it tells the reader whether each column reading
+  // was VERIFIED by a person against a real export, or GUESSED from a header
+  // name and a statistical profile.
+  //
+  // Leading with it was a mistake with an obvious mechanism. A reader opening a
+  // report has exactly one question -- what is wrong with my file -- and a
+  // provenance caveat arriving before any finding answers a question they did
+  // not ask while burying the one they did. Readers do not skim a caveat and
+  // continue; they stop.
+  //
+  // At the foot it does what it should. A reader who has already seen the finding
+  // will look up how the file was read, and a reader who never does is no longer
+  // stopped by it on the way in.
+  //
+  // NOTHING IS REMOVED. The mapping table, the basis column and the
+  // hypothesis/established distinction all move with it. A move that quietly
+  // dropped the table would leave the reader unable to check WHICH columns were
+  // guesses, which is the only reason the section exists at all.
   if (analysis.mappings.length > 0 || analysis.missing.length > 0) {
     const verifiedCount = analysis.verifiedRoles?.length ?? 0;
-    out.push("## How this report was read", "");
-    out.push(analysis.schemaSource === "GENERIC"
+    provenance.push("## Data provenance", "");
+    provenance.push(analysis.schemaSource === "GENERIC"
       ? "_No stored schema matched this file, so every column reading below was **inferred** from the column names and from a statistical profile of the values. None of it has been checked by a person: treat it as a first reading, not a verified mapping._"
       : verifiedCount === 0
       ? "_No stored schema matched this file, so every column reading below is inferred from the column NAME alone and awaits owner confirmation._"
       : `_${verifiedCount} of ${analysis.mappings.length} column reading(s) come from ${analysis.schemaSource === "SESSION_ARCHIVE" ? "this checkout's own learned schema" : "a core schema shipped with the product"}, verified against a real export of this shape._`);
-    out.push("");
+    provenance.push("");
     // The mappings TABLE is conditional for the same reason the ranking tables
     // are. A header with no body reads as "we checked and found nothing", which
     // on a file of anonymous numeric columns is four column names over zero
     // readings. The gap paragraph below still says what could not be answered.
     if (analysis.mappings.length > 0) {
-      out.push("| role | column | basis | note |", "|---|---|---|---|");
+      provenance.push("| role | column | basis | note |", "|---|---|---|---|");
       for (const m of analysis.mappings) {
-        out.push(`| ${mdCell(m.role)} | ${mdCell(m.column)} | ${m.hypothesis ? "hypothesis" : "established"} | ${mdCell(m.note)} |`);
+        provenance.push(`| ${mdCell(m.role)} | ${mdCell(m.column)} | ${m.hypothesis ? "hypothesis" : "established"} | ${mdCell(m.note)} |`);
       }
-      out.push("");
+      provenance.push("");
     } else {
-      out.push("_No column in this file was credibly readable as any role, so there are no readings to report. The columns exist and are described below._", "");
+      provenance.push("_No column in this file was credibly readable as any role, so there are no readings to report. The columns exist and are described below._", "");
     }
   }
 
@@ -642,6 +685,13 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Bott
     for (const p of analysis.problems) out.push(`- ${mdCell(p)}`);
     out.push("");
   }
+  // THE PROVENANCE BLOCK GOES LAST, after the structural problems. Those are
+  // also a caveat, but about the FILE rather than about the reading, and a
+  // reader who has just been told their export is malformed is owed that
+  // sentence next. After that, the document has said everything it knows, and the
+  // last thing it says is how much of it to trust.
+  if (provenance.length > 0) out.push("", ...provenance);
+
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
 }
 
