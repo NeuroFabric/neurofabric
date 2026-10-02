@@ -1,4 +1,5 @@
 import type { ColumnHealth, DataHealth, NumericColumnStat } from "./bottlenecks.ts";
+import { describeCrossColumn, type CrossColumnAnomaly } from "./multivariate.ts";
 
 /**
  * THE "SO WHAT?" ENGINE. Statistics into a sentence a person can act on.
@@ -45,6 +46,16 @@ export interface SynthesisInput {
   readonly columns: readonly NumericColumnStat[];
   /** Dirty cells and outliers across every numeric column. */
   readonly health: DataHealth;
+  /**
+   * Rows whose values CONTRADICT each other, across two columns at once.
+   *
+   * Optional because every finding in this module is per-column, and adding a
+   * required field that only some callers can supply would mean every existing
+   * caller either grew a rows parameter or passed a lie. A summary that
+   * silently omits cross-column findings is wrong, so the renderer states when
+   * the check did not run rather than implying the file was clear.
+   */
+  readonly crossColumn?: readonly CrossColumnAnomaly[];
 }
 
 export interface Finding {
@@ -302,6 +313,18 @@ export function synthesize(input: SynthesisInput): ExecutiveSummary {
     parts.push(`The dataset is generally stable, but it is ${scope} compromised by ${plural(defects.length, "one defect", `${defects.length} defects`)}.`);
   }
 
+  // THE CROSS-COLUMN LINE.
+  //
+  // Every other part of this summary is a per-column statement, and that is the
+  // blind spot this addresses: a row can be perfectly ordinary in each column
+  // separately and still be impossible -- high latency with a tiny payload, for
+  // instance. Nothing above can see that, because nothing above looks at two
+  // columns at once.
+  const cross = input.crossColumn;
+  if (cross !== undefined) {
+    const described = describeCrossColumn(cross);
+    if (described !== null) parts.push(described);
+  }
   // The worst defect, described in full. Never omitted for being dramatic: an
   // enormous factor is more reason to state the finding, not less.
   const lead = defects[0];
