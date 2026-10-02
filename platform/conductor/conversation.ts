@@ -130,6 +130,51 @@ export const CAPABILITIES: readonly { readonly label: string; readonly ask: stri
   { label: "Show me the column statistics", ask: "show me the columns" },
 ];
 
+/**
+ * THE CHIPS, BUILT FROM WHAT THE FILE CAN ACTUALLY ANSWER.
+ *
+ * Five fixed chips sat under every answer, including the ones that could not
+ * possibly apply: "show me the worst hour" on a file with no readable
+ * timestamps, "what are the top categories" on a file with no categorical
+ * column. A suggestion is an INVITATION, and an invitation to ask a question
+ * that is guaranteed to be refused teaches the user that the suggestions are
+ * noise -- which is the fastest way to make nobody click anything again.
+ *
+ * So each chip is offered only when the data behind it exists. Ordering is by
+ * how much the question is worth asking on THIS file: findings first when there
+ * are findings, then the shape, then the mechanics. `answered` drops whatever
+ * the user just clicked, because re-suggesting the question they already asked
+ * is the clearest possible evidence that nothing is paying attention.
+ *
+ * This NEVER changes what the agent answers. It only changes what it offers. A
+ * question with no chip is still answered, and a test pins that, because the
+ * day the chips become a gate the refusal this phase removed comes straight
+ * back through the suggestions instead of the router.
+ */
+function adaptiveSuggestions(data: ConversationData, answered = ""): readonly string[] {
+  const chips: { ask: string; weight: number }[] = [];
+  const seen = answered.trim().toLowerCase();
+
+  const offer = (ask: string, weight: number) => {
+    const a = ask.trim().toLowerCase();
+    // Same intent, different words: "what is wrong" must not be offered back to
+    // someone who just asked it.
+    if (seen !== "" && (a === seen || a.includes(seen) || seen.includes(a))) return;
+    chips.push({ ask, weight });
+  };
+
+  const severe = data.anomalies.filter((a) => a.severity === "critical").length;
+  if (severe > 0) offer("what is wrong with this file?", 100);
+  if (data.purpose.kind === "unknown") offer("tell me what this file is for", 90);
+  if (data.timeline.length > 0) offer("show me the worst hour", 60);
+  if (data.ranking.length > 0) offer("what are the top categories", 55);
+  if (data.columns.length >= 2) offer("are there any complex anomalies?", 50);
+  offer("how did you read the columns?", 40);
+  offer("show me the columns", 30);
+
+  return chips.sort((a, b) => b.weight - a.weight).slice(0, 4).map((c) => c.ask);
+}
+
 /** `nl` is the only number this module is willing to invent. */
 function rows(n: number): string {
   return n.toLocaleString("en-US");
@@ -376,7 +421,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
       kind: "answer",
       text: lead,
       widgets: [lineWidget(data)],
-      suggestions: CAPABILITIES.filter((c) => !/hour/.test(c.ask)).slice(0, 3).map((c) => c.ask),
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -393,7 +438,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
       text: `${rows(data.ranking.length)} distinct value${data.ranking.length === 1 ? "" : "s"} in the category column. ` +
         `The largest is "${top.key}" with ${rows(top.count)} rows.`,
       widgets: [barWidget(data)],
-      suggestions: CAPABILITIES.filter((c) => !/categor/.test(c.ask)).slice(0, 3).map((c) => c.ask),
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -431,7 +476,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
         ? `${rows(data.anomalies.length)} finding${data.anomalies.length === 1 ? "" : "s"}, none of them severe.`
         : `${rows(severe.length)} severe finding${severe.length === 1 ? "" : "s"}. The worst is ${severe[0]!.column}: ${severe[0]!.detail}.`,
       widgets: [findingsWidget(data)],
-      suggestions: ["show me the worst hour", "how did you read the columns?"],
+      suggestions: adaptiveSuggestions(data, lower),
     };
   }
 
@@ -582,7 +627,7 @@ function synthesisResponse(data: ConversationData): Reply {
     widgets: severe.length > 0
       ? [{ kind: "findings", title: "What I found", note: "Severe findings first.", payload: { anomalies: severe.slice(0, 5) } }]
       : [],
-    suggestions: CAPABILITIES.map((c) => c.ask),
+    suggestions: adaptiveSuggestions(data),
   };
 }
 
