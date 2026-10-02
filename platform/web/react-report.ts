@@ -1,4 +1,5 @@
 import type { BottleneckAnalysis, ColumnHealth, NumericColumnStat } from "../conductor/bottlenecks.ts";
+import { synthesize } from "../conductor/synthesis.ts";
 
 /**
  * THE INTERACTIVE DASHBOARD. One string, no build step, no install.
@@ -379,7 +380,12 @@ ReactDOM.createRoot(document.getElementById("__MOUNT_ID__")).render(React.create
 
 /** The generated application, as a complete standalone document. */
 export function toReactDashboard(analysis: BottleneckAnalysis, options: DashboardOptions = {}): string {
-  const data = buildDashboardData(analysis, options);
+  // The SAME summary the Markdown report carries, computed by the same module.
+  // Two generators each writing their own headline would drift, and a reader
+  // comparing the two views would be right to wonder which the tool believes.
+  // Computed here only when the caller did not supply one.
+  const summary = synthesize({ totalRows: analysis.totalRows, columns: analysis.numerical.columns, health: analysis.health });
+  const data = buildDashboardData(analysis, { headline: summary.headline, ...options });
   const source = APP_SOURCE
     .split("__DATA_ID__").join(DASHBOARD_DATA_ID)
     .split("__MOUNT_ID__").join(DASHBOARD_MOUNT_ID);
