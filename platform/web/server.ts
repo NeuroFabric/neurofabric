@@ -5,6 +5,7 @@ import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
 import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { parseCsv, csvRead } from "../conductor/capabilities.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
 
@@ -200,6 +201,58 @@ function statusFor(result: ConductorResult): number {
   return tier === undefined ? 400 : 403;
 }
 
+/**
+ * The findings, worst first, in the shape the conversation router expects.
+ *
+ * One projection so `/api/chat` and the dashboard's embedded greeting cannot
+ * disagree about what the findings ARE -- a conversation whose opening message
+ * and its answer to "what is wrong with this file" describe different data is
+ * worse than no conversation.
+ */
+function anomaliesFor(analysis: BottleneckAnalysis): {
+  column: string; severity: "critical" | "warning" | "info"; kind: string; detail: string; factor: number | null;
+}[] {
+  const byName = new Map(analysis.numerical.columns.map((c) => [c.column, c]));
+  const out: {
+    column: string; severity: "critical" | "warning" | "info"; kind: string; detail: string; factor: number | null;
+  }[] = [];
+  for (const health of analysis.health.columns) {
+    const stat = byName.get(health.column);
+    const factor = (value: number | null, fence: number | null): number | null => {
+      if (fence === null || fence === 0 || value === null) return null;
+      const ratio = Math.abs(value / fence);
+      return Number.isFinite(ratio) ? ratio : null;
+    };
+    if (health.outliers > 0 && health.worstValue !== null) {
+      out.push({
+        column: health.column, severity: "critical", kind: "extreme value",
+        detail: `${Math.abs(health.worstValue).toLocaleString("en-US")} against a fence of ${Math.round(health.fence ?? 0).toLocaleString("en-US")}`,
+        factor: factor(health.worstValue, health.fence),
+      });
+    } else if (stat?.outliers !== undefined && stat.outliers > 0 && stat.outlierMax !== null) {
+      out.push({
+        column: health.column, severity: "warning", kind: "marginal value",
+        detail: `${stat.outliers} value(s) past the 1.5x fence, worst ${stat.outlierMax.toLocaleString("en-US")}`,
+        factor: factor(stat.outlierMax, stat.fenceExtremeUpper ?? null),
+      });
+    }
+    if (health.dirty > 0) {
+      out.push({
+        column: health.column, severity: "warning", kind: "type mismatch",
+        detail: `${health.dirty} cell(s) hold something that is not a number${health.examples.length > 0 ? `, e.g. ${health.examples.join(", ")}` : ""}`,
+        factor: null,
+      });
+    }
+    if (health.empty > 0) {
+      out.push({
+        column: health.column, severity: "info", kind: "missing values",
+        detail: `${health.empty} empty cell(s)`, factor: null,
+      });
+    }
+  }
+  return out;
+}
+
 export function createWedgeServer(options: WedgeOptions): Server {
   const cwd = path.resolve(options.cwd);
   const installRoot = options.installRoot ?? process.cwd();
@@ -379,6 +432,108 @@ export function createWedgeServer(options: WedgeOptions): Server {
             title: titleFor({ fileName: path.basename(target), purpose: UNKNOWN_PURPOSE }),
           });
           sendJson(response, statusFor(result), toResponse(result));
+          return;
+        }
+
+        if (request.method === "POST" && url.pathname === "/api/chat") {
+          // ONE SENTENCE IN, ONE ANSWER OUT.
+          //
+          // The router lives HERE and not in the page, deliberately. The parser
+          // was serialised into the browser because it is one small pure
+          // function; the router is a module that imports the analysis types and
+          // the correction parser, and a copy of it in the page would be a second
+          // implementation that agrees until somebody edits one. That has already
+          // happened twice in this product -- a parser in two places, a title in
+          // four -- so the thing that decides what a sentence MEANS stays in one
+          // file, and the tests exercise it there.
+          //
+          // It is also, plainly, not a language model: it is a deterministic
+          // router over an analysis already computed. It declines rather than
+          // improvise, and an unanswerable question comes back with NO widget,
+          // because a widget is a number and there is no number to give.
+          const raw = await readBody(request);
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "the request body is not valid JSON" },
+            });
+            return;
+          }
+          const chat = (parsed as { path?: unknown; message?: unknown } | null);
+          const target = chat?.path;
+          const message = chat?.message;
+          if (typeof target !== "string" || target.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no file path was supplied" },
+            });
+            return;
+          }
+          if (typeof message !== "string") {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "no question was supplied" },
+            });
+            return;
+          }
+
+          // The same kernel function every other route uses. A chat endpoint that
+          // reached a path by its own rules would be a second control plane, which
+          // is exactly what this server's own header says it must not have.
+          const resolvedChat = resolveWithinRoot(cwd, target);
+          if (!resolvedChat.allowed) {
+            sendJson(response, 403, {
+              status: "FAILED",
+              failure: {
+                code: "PATH_OUTSIDE_WORKSPACE",
+                reason: `path boundary violation: ${resolvedChat.reason ?? "the file is outside the workspace"}`,
+                kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+              },
+            });
+            return;
+          }
+
+          const csvForChat = await readCsvFor(resolvedChat.resolvedPath as string);
+          if (csvForChat === undefined) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: `the file ${path.basename(target)} could not be read` },
+            });
+            return;
+          }
+
+          const rowsForChat = csvForChat.rows.map((cells) =>
+            Object.fromEntries(csvForChat.headers.map((h, i) => [h, cells[i] ?? ""])));
+          const { resolveSchemaMemory } = await import("../conductor/schema-memory.ts");
+          const { replyTo } = await import("../conductor/conversation.ts");
+          const schemaForChat = await resolveSchemaMemory({
+            cwd, headers: csvForChat.headers, rows: rowsForChat,
+            defaultsRoot: options.defaultsRoot ?? installRoot,
+          });
+          const analysisForChat = analyseBottlenecks(csvForChat, schemaForChat);
+
+          sendJson(response, 200, {
+            status: "OK",
+            reply: replyTo({
+              source: target,
+              totalRows: analysisForChat.totalRows,
+              purpose: analysisForChat.purpose,
+              columns: analysisForChat.numerical.columns.map((c) => ({
+                name: c.column, mean: c.mean, min: c.min, max: c.max,
+                measured: c.measured, dirty: c.dirty, empty: c.empty,
+              })),
+              anomalies: anomaliesFor(analysisForChat),
+              ranking: analysisForChat.categories.slice(0, 10).map((c) => ({ key: c.key, count: c.count })),
+              timeline: analysisForChat.hourly.hours.map((h) => ({
+                hour: h.key, count: h.count, share: h.share,
+                multiple: h.multiple, spike: h.isSpike, rule: h.rule,
+              })),
+              learned: schemaForChat?.roles ?? {},
+            }, message),
+          });
           return;
         }
 

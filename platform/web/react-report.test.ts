@@ -125,37 +125,28 @@ test("the analysis is embedded as inert JSON, so a hostile file cannot become sc
     "the hostile name must reach the payload AND round-trip through the escaping intact, or this test is vacuous");
 });
 
-test("the dashboard is interactive: a severity filter and a depth toggle both exist", () => {
+test("the surface is interactive: the conversation changes what is rendered", () => {
   // ASSERTED AT SOURCE LEVEL, and the limitation is worth stating plainly. React
   // builds these elements at runtime, so they are not in the static HTML and no
   // test in this repository can assert on a rendered DOM -- there is no browser
-  // and no React installed, by design. What IS asserted is that the application
-  // source wires each control to state and applies the state, which is the part
-  // that decides whether it is interactive or decorative.
-  const src = appSourceOf(toReactDashboard(analysis, {}));
-  assert.match(src, /"severity-filter"/, "a severity filter the user can drive");
-  assert.match(src, /id: "depth-toggle"/i, "a control that changes how deep the ranking goes");
-  // Both wired to state, and the state actually reaching the render.
-  assert.match(src, /useState/, "and the app must actually hold state");
-  // THE SEVERITY FILTER IS A SEGMENTED BUTTON GROUP NOW, not a <select>.
+  // and no React installed, by design.
   //
-  // That is a deliberate change from the UX overhaul and not a cosmetic one: a
-  // dropdown hides the counts, so picking a severity meant opening a menu to
-  // discover that three of the forty findings were critical. The property under
-  // test is unchanged and is the one that matters -- the control sets state that
-  // the render reads -- so it is asserted that way rather than pinned to the
-  // element type that has since changed.
-  assert.match(src, /setSev\(s\)/,
-    "the filter is driven by a click handler on a segmented control");
-  assert.match(src, /sev === s \? "bg-slate-900 text-white"/,
-    "and the selected segment is visibly distinct, or the control does not read as a control");
-  assert.match(src, /onChange: function \(e\) \{ setDeep/, "and so is the depth toggle");
-  // The filter must be APPLIED, not merely stored. A control that sets state
-  // nothing reads is the exact failure: it looks like the product works.
-  assert.match(src, /D\.anomalies\.filter\(function \(a\) \{ return sev === "all" \|\| a\.severity === sev; \}\)/,
-    "the severity must actually filter the list");
-  assert.match(src, /D\.ranking\.slice\(0, depth\)/,
-    "and the depth must actually change how many are shown");
+  // WHAT CHANGED. This used to assert a severity <select> and a depth toggle.
+  // Both were the dashboard's way of letting a user interrogate the file, and
+  // the Owner's verdict was that the conversation was secondary to them. A chat
+  // that asks "what is wrong with this file?" and gets the findings IS the
+  // severity filter, with a language instead of a dropdown.
+  //
+  // So the property asserted here is the one underneath both: does user input
+  // change state, and does that state reach the render? A control that sets
+  // state nothing reads is the exact failure -- it looks like the product works.
+  const src = appSourceOf(toReactDashboard(analysis, {}));
+  assert.match(src, /useState/, "the app must actually hold state");
+  assert.match(src, /messages\.map|thread\.map/, "and the state must reach what is rendered");
+  // The send path: user input -> state -> the answer that replaces the transcript.
+  assert.match(src, /push\(\[\{ role: "user"/, "a submitted sentence becomes a turn");
+  assert.match(src, /push\(\[\{\s*$/m, "and the answer becomes a turn");
+  assert.match(src, /onSubmit: function \(e\)/, "driven by the composer, not by a hidden control");
 });
 
 test("the app renders the findings the engine produced, not a placeholder", () => {

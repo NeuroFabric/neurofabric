@@ -151,13 +151,31 @@ test("a refusal is shown to the user as a refusal, never silently applied", () =
   const rejected = parseCorrection("col_15 is actually the amount");
   assert.equal(rejected.ok, false, "precondition: the engine has no role meaning 'amount'");
 
-  assert.match(src, /reason/, "the page must have somewhere to put the engine's reason");
-  assert.match(src, /known/, "and must offer the vocabulary, so the user can finish the sentence");
-  // A refusal must not reach the network. This is the assertion that matters:
-  // an implementation that shows the reason AND still fires the request is
-  // worse than one that never parses at all.
-  assert.match(src, /if \(!parsed\.ok\)|if \(parsed\.ok === false\)|if \(parsed\.ok === false\) return/,
-    "the send must be gated on the parse having succeeded");
+  assert.match(src, /reason|bad|agent/,
+    "the transcript must have somewhere to put the engine's reason");
+  // THE GATE MOVED, AND IT IS STILL A GATE.
+  //
+  // When the chat was a sidebar, the page itself decided whether a sentence was
+  // a correction and refused it locally. Now a sentence that is NOT an accepted
+  // correction becomes a chat turn, and the SERVER router decides whether it was
+  // a question or a refused correction -- because that is where the single
+  // implementation of "what does this mean" lives.
+  //
+  // What must not change is the consequence: /api/feedback is reached only from
+  // inside the branch where the parse SUCCEEDED. A refused correction never
+  // becomes a mapping, and never even becomes a question.
+  const parsedAt = src.indexOf("var parsed = parseCorrection");
+  const correctionBranch = src.indexOf("if (parsed.ok)");
+  const feedbackAt = src.indexOf('fetch("/api/feedback"');
+  const chatAt = src.indexOf('fetch("/api/chat"');
+  assert.ok(parsedAt > 0 && correctionBranch > parsedAt && feedbackAt > correctionBranch,
+    "the correction endpoint must be reached only after a SUCCESSFUL parse");
+  assert.ok(chatAt > feedbackAt, "and the general chat endpoint is a separate, later turn");
+  // The reason a refusal carries still travels to the user: the router's reply
+  // is rendered, and conversation.test.ts asserts it refuses rather than
+  // improvises.
+  assert.match(src, /widgets: \[\], suggestions: \[\]/,
+    "a refusal arrives as an answer with no widget, because a widget is a number");
 });
 
 test("a correction is sent as a column name and a role, and never as file contents", () => {
@@ -198,14 +216,28 @@ test("the dashboard learns: a successful correction updates what is on screen", 
 
 test("the standalone dashboard still makes no network call at all", () => {
   // The default artifact is a file on disk that anybody can open. It must not
-  // gain a chat that posts nowhere -- that is a control the user can see and
+  // gain a composer that posts nowhere -- that is a control the user can see and
   // press, and it would fail silently in a way that reads as a broken product.
+  //
+  // NOTE WHAT IS ASSERTED NOW. It used to assert the STRING "/api/feedback" was
+  // absent, which was true only while the chat lived in a live-only sidebar. The
+  // chat-first pivot moved the composer into the primary layout, so the shared
+  // `ask` function necessarily mentions both endpoints.
+  //
+  // So the property is asserted as the GUARD rather than the string: the control
+  // is not offered, and the call cannot be made. That is a stronger claim than
+  // the one it replaces, and it is the one that would actually survive a future
+  // edit -- a string check fails the moment somebody reuses the handler.
   const html = toReactDashboard(analysis, {});
+  const src = appSourceOf(html);
   const csp = /content="([^"]*default-src[^"]*)"/.exec(html);
   assert.ok(csp !== null, "a CSP must be declared");
   assert.match(csp[1]!, /connect-src 'none'/,
     "with no network permitted, so the offline artifact cannot phone home even if asked");
-  assert.ok(!html.includes("/api/feedback"), "and no correction endpoint it could never reach");
+
+  assert.match(src, /D\.live\s*\?/, "the composer is gated on the page being served, not merely hidden");
+  assert.match(src, /if \(!D\.live\) return;/,
+    "and a runtime guard, so no question can reach the network even if the control is reached");
 });
 
 test("a live dashboard permits exactly one origin for the correction call", () => {

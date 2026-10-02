@@ -141,8 +141,11 @@ test("a missing library still costs two pictures, never the report", () => {
   const src = appSourceOf(toReactDashboard(analysis(), {}));
   assert.match(src, /typeof Chart/, "feature-detected before use");
   // The numbers must remain reachable as text, or "charts unavailable" is a lie.
-  assert.match(src, /View raw data/, "the exact tables stay available");
-  assert.match(src, /"details"/, "behind a disclosure, not removed");
+  // After the chat-first pivot this is the COLUMNS WIDGET and the provenance
+  // footer rather than a "View raw data" disclosure -- the data did not shrink,
+  // it moved into the conversation.
+  assert.match(src, /"columns"/, "the exact column statistics are still renderable as a table");
+  assert.match(src, /Data provenance/, "and the file's provenance is still stated");
 });
 
 test("the kernel's own landing page is STILL untouched by any of this", async () => {

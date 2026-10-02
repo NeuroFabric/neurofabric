@@ -54,15 +54,26 @@ function assertParses(label: string, source: string): void {
 test("the STANDALONE application parses, with no chat spliced in", () => {
   const source = appSourceOf(toReactDashboard(analysis, {}));
   assertParses("the standalone application", source);
-  assert.ok(!source.includes("ChatPanel"), "and no chat function, which would be dead weight at best");
-  assert.ok(!source.includes("parseCorrection"), "nor a parser nothing calls");
+  // The re-read helper is spliced in ONLY for a live page, so a standalone
+  // artifact has nothing to call and nothing that calls it. Asserting the
+  // STRING is absent is the wrong test -- `ask` still mentions the function,
+  // and it must, because the function body is shared code. What matters is
+  // that it cannot run, which is what the gate asserts.
+  assert.ok(!source.includes("function refreshFromServer"),
+    "and no re-read helper, which is spliced in only when live");
+  assert.match(source, /if \(!D\.live\) return;/,
+    "and a guard so no question can reach the network from a file that has none");
 });
 
-test("the LIVE application parses, with the parser AND the chat spliced in", () => {
+test("the LIVE application parses, with the parser AND the re-read helper spliced in", () => {
   const source = appSourceOf(toReactDashboard(analysis, { live: { path: "operations.csv" } }));
   assertParses("the live application", source);
-  assert.ok(source.includes("ChatPanel"), "the chat function must actually be there");
+  // The parser is emitted even on a live page, because `ask` calls it in the
+  // browser to recognise a correction BEFORE the sentence is sent to the router.
+  // That is deliberate: a correction changes the engine's memory, so it cannot
+  // be just another chat turn.
   assert.ok(source.includes("function parseCorrection"), "and the parser, verbatim");
+  assert.ok(source.includes("function refreshFromServer"), "and the re-read helper");
 });
 
 test("the spliced parser still parses ON ITS OWN, as the browser evaluates it", () => {
@@ -116,10 +127,14 @@ test("the document's script tags are balanced and the babel block is last", () =
   assert.equal(open, close, `unbalanced script tags: ${open} open, ${close} close`);
 
   const source = appSourceOf(html);
-  const chatAt = source.indexOf("function ChatPanel");
-  const parserAt = source.indexOf("function parseCorrection");
+  const refreshAt = source.indexOf("function refreshFromServer");
   const mountAt = source.lastIndexOf("ReactDOM.createRoot");
-  assert.ok(parserAt > 0 && chatAt > 0 && mountAt > 0, "all three must be present");
-  assert.ok(parserAt < mountAt, "the parser must be declared before the app mounts");
-  assert.ok(chatAt < mountAt, "the chat must be declared before the app mounts");
+  assert.ok(refreshAt > 0 && mountAt > 0, "both must be present");
+  // The order that matters is the one inside the transcript: a correction is
+  // recognised, sent, applied, and only THEN re-read.
+  const parsedAt = source.indexOf("var parsed = parseCorrection");
+  const fetchAt = source.indexOf('fetch("/api/feedback"');
+  assert.ok(parsedAt > 0 && fetchAt > parsedAt,
+    "a correction is parsed before it is sent, so a refusal never reaches the network");
+  assert.ok(refreshAt > 0, "and the re-read helper is emitted for the live page");
 });

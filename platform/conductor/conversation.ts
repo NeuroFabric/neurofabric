@@ -186,14 +186,34 @@ function lineWidget(data: ConversationData): Widget {
 }
 
 function barWidget(data: ConversationData): Widget {
+  // THE CAP LIVES HERE, NOT AT THE CALLER.
+  //
+  // It used to be applied by whichever code built the ConversationData, which
+  // means it held only for the paths that remembered. A caller that passed the
+  // full ranking got a chart of every distinct value in the column -- and a
+  // column of free-text keys can have thousands, which renders as a grey stripe
+  // rather than a chart.
+  //
+  // Applying it where the WIDGET is built means every caller gets the same
+  // promise, and the assertion lives with the reason. Nothing is lost: the
+  // analysis still holds every category, and `show me all categories` is a
+  // question the router can grow a widget for.
+  const points = data.ranking.slice(0, BAR_DEPTH);
+  const hidden = data.ranking.length - points.length;
   return {
     kind: "chart-bar",
     title: "Record categories",
-    note: "How many rows fall in each category.",
-    payload: { points: data.ranking },
+    note: hidden > 0
+      ? `How many rows fall in each category. Showing the top ${BAR_DEPTH} of ${data.ranking.length}.`
+      : "How many rows fall in each category.",
+    payload: { points, hidden },
   };
 }
 
+/** How many bars a category chart draws. Ten fits without becoming a texture. */
+const BAR_DEPTH = 10;
+
+/** Every kind of value the chat can render, as a ranked list. */
 function findingsWidget(data: ConversationData): Widget {
   return {
     kind: "findings",

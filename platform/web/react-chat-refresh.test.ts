@@ -109,20 +109,18 @@ test("THE CHARTS REDRAW, rather than keeping the canvas they were born with", ()
 });
 
 test("the correction flow still refuses before it sends anything", () => {
-  // Unchanged by this commit and still asserted, because it is the property
-  // most likely to be broken by a careless edit to the refresh path: a
-  // re-fetch that fires on the refusal branch would re-read the dashboard for a
-  // correction that was never made.
+  // Unchanged by the pivot and still asserted, because it is the property most
+  // likely to be broken by a careless edit to the refresh path. What CHANGED is
+  // where the refusal is decided: the page still gates /api/feedback on a
+  // SUCCESSFUL parse, and the server router now decides whether a non-correction
+  // sentence was a question or a refused correction. Neither half may reach the
+  // correction endpoint.
   const src = live();
-  const refuse = src.indexOf("if (!parsed.ok)");
-  const send = src.indexOf("fetch(\"/api/feedback\"");
-  // The refresh URL also appears in refreshFromServer's DEFINITION, which sits
-  // above the handler, so the CALL is what carries the ordering meaning -- and
-  // the call is matched on its second argument, because the definition's
-  // parameter list shares the same prefix.
+  const refuse = src.indexOf("if (parsed.ok)");
+  const send = src.indexOf('fetch("/api/feedback"');
   const refresh = src.indexOf("refreshFromServer(setVersion, function");
   assert.ok(refuse > 0 && send > 0 && refresh > 0, "all three must exist");
-  assert.ok(refuse < send, "the refusal returns before the send");
+  assert.ok(refuse < send, "the correction endpoint is reached only from the accepted branch");
   assert.ok(send < refresh, "and the refresh can only follow a send that succeeded");
 });
 
@@ -154,11 +152,20 @@ test("the standalone page is unaffected: no chat, no refresh, no second request"
   const src = appSourceOf(toReactDashboard(analysis, {}));
   assert.ok(!src.includes("/api/dashboard?path="),
     "an offline artifact must not contain a refresh it cannot perform");
-  assert.ok(!src.includes("/api/feedback"), "nor a correction endpoint it cannot reach");
+  // The CALL site is still here -- `ask` is shared code and cannot be rewritten
+  // per artifact -- but the DEFINITION is not spliced in, so calling it would
+  // throw. That combination is only safe because of the guard below, which is
+  // why the guard is the assertion rather than the string.
+  assert.ok(!src.includes("function refreshFromServer"),
+    "the re-read helper itself is not spliced into a standalone artifact");
+  assert.ok(!src.includes("/api/dashboard?path="),
+    "so there is nothing for a re-read to fetch");
   // The [version] dependency is shared code, and that is correct: on a standalone
   // page nothing ever bumps the version, so the effect runs exactly once. What
-  // matters is that the bumping machinery is ABSENT, not that the hook differs.
-  assert.ok(!src.includes("refreshFromServer"), "and no refresh function to call");
+  // matters is that the machinery cannot be REACHED, not that the hook differs.
+  assert.match(src, /if \(!D\.live\) return;/,
+    "and a runtime guard, because the endpoint strings live in the shared handler");
+  assert.match(src, /D\.live\s*\?/, "with the control itself not offered");
 });
 
 test("THE EMITTED SOURCE CONTAINS NO LITERAL </script>, ever", () => {
@@ -190,17 +197,17 @@ test("THE EMITTED SOURCE CONTAINS NO LITERAL </script>, ever", () => {
 });
 
 test("the chat's send path survives ALL the way to the end of the block", () => {
-  // The regression guard for the bug above, stated as the thing that was lost.
-  // If the block truncates early again, the chat is gone and the page still
-  // looks fine -- charts render, no errors are visible on the screen.
+  // The regression guard for the bug that shipped a page with no chat at all.
+  // If the block truncates early again the transcript renders and the composer
+  // renders, and pressing Enter does nothing -- which looks like a slow server.
   const src = live();
-  const refusal = src.indexOf("if (!parsed.ok)");
+  const gate = src.indexOf("if (parsed.ok)");
   const send = src.indexOf('fetch("/api/feedback"');
   const refresh = src.indexOf("refreshFromServer(setVersion, function");
-  assert.ok(refusal > 0, "the refusal gate must be present");
-  assert.ok(send > refusal, "and the send must follow it");
+  assert.ok(gate > 0, "the correction branch must be present");
+  assert.ok(send > gate, "and the send must follow it");
   assert.ok(refresh > send, "with the refresh last");
   // And the input the user types into, which is what was actually invisible.
   assert.match(src, /type: "text"/, "the text input must survive to the browser");
-  assert.match(src, /onSubmit: send/, "and be wired to the handler");
+  assert.match(src, /onSubmit: function \(e\)/, "and be wired to the handler");
 });
