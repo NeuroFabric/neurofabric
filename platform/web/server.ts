@@ -7,6 +7,7 @@ import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { parseCsv, csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
+import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
 
 /**
@@ -319,6 +320,21 @@ export function createWedgeServer(options: WedgeOptions): Server {
   const cwd = path.resolve(options.cwd);
   const installRoot = options.installRoot ?? process.cwd();
 
+  /**
+   * THE SESSION STORE, INSIDE THE WORKSPACE.
+   *
+   * One directory, under the same `cwd` every other write in this server obeys,
+   * so a session inherits the containment rather than inventing its own idea of
+   * where it may live. The ids are constrained by the store itself (hex and
+   * dashes only), so no id can name a path, and the store degrades to "no
+   * memory" on every failure rather than throwing at the page.
+   *
+   * Nothing here is created on disk until a conversation actually happens.
+   * Viewing a dashboard mints an ID and writes nothing, so opening the page
+   * twenty times leaves zero files behind rather than twenty empty ones.
+   */
+  const sessions = path.join(cwd, "workspace", "sessions");
+
   return createServer((request, response) => {
     void (async () => {
       try {
@@ -413,7 +429,19 @@ export function createWedgeServer(options: WedgeOptions): Server {
             title: titleFor({ fileName: path.basename(target), purpose: result.report.analysis.purpose }),
             // The one opt-in that widens the page. It is what lets the chat
             // reach /api/feedback, and it is scoped to this route alone.
-            live: { path: target },
+            //
+            // AND THE SESSION ID, MINTED HERE AND WRITTEN NOWHERE.
+            //
+            // The page has to know which conversation is its own before it has
+            // asked anything, and the id is the only thing that can say so. It
+            // is minted rather than read, and NOTHING is created on disk: an
+            // empty session file per page view would be twenty files on the
+            // twentieth refresh, all of them saying the same thing. The first
+            // question asked is what makes a session exist.
+            //
+            // The browser keeps the id, not this server, so a reload finds the
+            // conversation it already had instead of a new empty one.
+            live: { path: target, sessionId: newSessionId() },
             learned: result.report.schema?.roles ?? {},
           });
           response.writeHead(200, {
@@ -634,7 +662,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             });
             return;
           }
-          const chat = (parsed as { path?: unknown; message?: unknown } | null);
+          const chat = (parsed as { path?: unknown; message?: unknown; sessionId?: unknown } | null);
           const target = chat?.path;
           const message = chat?.message;
           if (typeof target !== "string" || target.trim().length === 0) {
@@ -700,9 +728,26 @@ export function createWedgeServer(options: WedgeOptions): Server {
           });
           const analysisForChat = analyseBottlenecks(csvForChat, schemaForChat);
 
-          sendJson(response, 200, {
-            status: "OK",
-            reply: replyTo({
+          // THE SESSION, TAKEN FROM THE RAW BODY THE BROWSER SENT.
+          //
+          // The id arrives with the question rather than being invented here: it
+          // was minted when the page was served and the browser has been
+          // carrying it since, which is the only way the SAME conversation is
+          // found again after a reload. A body naming no session -- or one
+          // naming an id the store cannot accept -- gets a fresh session rather
+          // than a refusal, because a question must not fail on the grounds
+          // that it could not be remembered.
+          let sessionId = newSessionId();
+          if (typeof chat?.sessionId === "string") {
+            try {
+              sessionId = assertSessionId(chat.sessionId);
+            } catch {
+              sessionId = newSessionId();
+            }
+          }
+
+          // THE ANSWER, HELD RATHER THAN INLINED, because it is now written down.
+          const answer = replyTo({
               source: target,
               totalRows: analysisForChat.totalRows,
               purpose: analysisForChat.purpose,
@@ -723,8 +768,72 @@ export function createWedgeServer(options: WedgeOptions): Server {
               // these the cross-column check has nothing to run on, and the
               // agent must say so rather than claim a file is clean.
               rows: rowsForChat,
-            }, message),
-          });
+            }, message);
+
+          sendJson(response, 200, { status: "OK", sessionId: sessionId, reply: answer });
+
+          // THE TRANSCRIPT IS WRITTEN AFTER THE RESPONSE HAS LEFT.
+          //
+          // Order is the point. The user already has the answer in front of
+          // them; persisting it is bookkeeping, and bookkeeping that delays an
+          // answer is bookkeeping somebody will eventually switch off. So the
+          // response is flushed first and the two turns are written afterwards.
+          //
+          // BOTH turns, or the replay is a lie: a reload that restores the
+          // question without its answer is worse than one that restores
+          // nothing, because it reads as the engine forgetting its own reply.
+          try {
+            await appendTurn(sessions, sessionId, { role: "user", text: message });
+            await appendTurn(sessions, sessionId, {
+              role: "agent",
+              text: answer.text,
+              widgets: answer.widgets,
+              suggestions: answer.suggestions,
+            });
+          } catch {
+            // Swallowed on purpose, and the module's own rule says why: a memory
+            // subsystem that can take the page down is worse than a user who
+            // loses one conversation. The answer was already delivered.
+          }
+          return;
+        }
+
+        if (request.method === "GET" && url.pathname === "/api/session") {
+          // THE CONVERSATION THAT ALREADY HAPPENED.
+          //
+          // One GET, because reading a transcript is one lookup of something
+          // already written and carries nothing but an id -- there is no state
+          // here to be confused by and no path for a caller to supply. The id
+          // is constrained by the store rather than by anything written here,
+          // which is why this route has no validation of its own to get wrong.
+          //
+          // A session that does not exist answers 200 with `session: null`
+          // rather than a 404. "You have no conversation here yet" is the
+          // normal first-load state, not an error, and a page that treats it as
+          // one would open with a failure banner above an empty transcript.
+          const requested = url.searchParams.get("id");
+          if (requested === null || requested.trim().length === 0) {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_REQUEST", reason: "name a session: /api/session?id=<id>" },
+            });
+            return;
+          }
+          // The one refusal this route states for itself: an id that could
+          // express a path is a BAD REQUEST, not a missing session. Both would
+          // otherwise answer 200, and a caller could not tell "nothing is
+          // remembered" from "you asked for something you may not have".
+          try {
+            assertSessionId(requested);
+          } catch {
+            sendJson(response, 400, {
+              status: "FAILED",
+              failure: { code: "BAD_SESSION_ID", reason: "a session id may only contain lowercase hex and dashes" },
+            });
+            return;
+          }
+          const record = await readSession(sessions, requested);
+          sendJson(response, 200, { status: "OK", session: record ?? null });
           return;
         }
 
