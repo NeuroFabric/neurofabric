@@ -100,6 +100,15 @@ const REACT_DOM_CDN = `https://unpkg.com/react-dom@${REACT_VERSION}/umd`;
 const CHART_VERSION = "4.4.1";
 const CHART_CDN = `https://unpkg.com/chart.js@${CHART_VERSION}/dist/chart.umd.min.js`;
 
+/**
+ * Tailwind's Play CDN, pinned for the same reason as everything else here.
+ *
+ * 3.4.16 is a stable 3.4 patch. A floating tag would mean a report could restyle
+ * itself because somebody published a build.
+ */
+const TAILWIND_VERSION = "3.4.16";
+const TAILWIND_CDN = `https://cdn.tailwindcss.com/${TAILWIND_VERSION}`;
+
 /** How many anomalies the dashboard shows before the depth toggle is needed. */
 const DEFAULT_DEPTH = 5;
 const MAX_DEPTH = 10;
@@ -384,6 +393,34 @@ function rolesToMap(analysis: BottleneckAnalysis): Record<string, string> {
  *     generation time, instead of in the browser. Nothing below uses that form.
  */
 const CHAT_SOURCE = String.raw`
+
+/**
+ * THE INVITATION, and the roles it lists.
+ *
+ * The chat failed for one reason above all others before this: a bare text box
+ * invites a user who does not know the engine's vocabulary to invent some. The
+ * parser REFUSES words it does not know, correctly -- "amount" is not a role --
+ * so an unprimed user types a reasonable sentence, is refused, and concludes
+ * the feature is broken.
+ *
+ * So the panel says what it accepts, and offers sentences that work. The roles
+ * below are the parser's own list, duplicated here deliberately rather than read
+ * from the module: this source is serialised for the browser and cannot import.
+ * The chat tests assert the two agree, so a drift fails the build.
+ */
+var EXAMPLES = function () {
+  return React.createElement("div", { className: "rounded-lg bg-slate-50 border border-slate-200 p-2.5" },
+    React.createElement("p", { className: "text-xs font-medium text-slate-700 mb-1" },
+      "Notice a wrong column? Tell me:"),
+    React.createElement("p", { className: "text-xs text-slate-500 leading-relaxed" },
+      "\u201ccol_1 is the duration\u201d"),
+    React.createElement("p", { className: "text-xs text-slate-500 leading-relaxed" },
+      "\u201calert_code should be the category\u201d"),
+    React.createElement("p", { className: "mt-1.5 text-[11px] text-slate-400 leading-relaxed" },
+      "Roles: category, time, source, duration, threshold, alias, status, message.")
+  );
+};
+
 /**
  * THE CONVERSATION. One sentence in, one honest answer out.
  *
@@ -453,33 +490,36 @@ function ChatPanel() {
   }
 
   var keys = Object.keys(learned).sort();
-  return React.createElement("aside", { className: "chat", "aria-label": "Chat and feedback" },
-    React.createElement("h2", null, "Chat"),
-    React.createElement("p", { className: "meta" },
-      "Correct the engine in plain English. It applies the change to " + esc(D.source) + " and re-reads the file."),
-    React.createElement("div", { className: "log", role: "log" },
+  return React.createElement("aside", { className: "chat w-80 shrink-0 sticky top-6 rounded-xl border border-slate-200 bg-white p-4", "aria-label": "Chat and feedback" },
+    React.createElement("h2", { className: "text-sm font-semibold" }, "Chat"),
+    React.createElement("p", { className: "mt-1 text-xs text-slate-500" },
+      "About " + esc(D.source) + ". Correct the engine in plain English and the report rebuilds itself."),
+    React.createElement("div", { className: "log my-3 max-h-72 overflow-y-auto space-y-2", role: "log" },
       log.length === 0
-        ? React.createElement("p", { className: "empty" },
-            "Try: alert_code is the category. Names the engine does not have are refused rather than guessed.")
+        ? h(EXAMPLES, null)
         : log.map(function (m, i) {
-            return React.createElement("p", { key: i, className: m.who + (m.ok ? "" : " bad") },
-              React.createElement("strong", null, m.who === "you" ? "You: " : "Engine: "),
+            return h("p", { key: i, className: "text-xs leading-relaxed " + (m.ok ? "text-slate-600" : "text-rose-700 bg-rose-50 rounded-md px-2 py-1") },
+              h("strong", { className: "font-semibold" }, m.who === "you" ? "You: " : "Engine: "),
               esc(m.body));
           })
     ),
-    React.createElement("form", { className: "composer", onSubmit: send },
+    React.createElement("form", { className: "composer flex gap-2", onSubmit: send },
       React.createElement("input", {
         type: "text",
         value: text,
-        placeholder: "col_15 is the category",
+        placeholder: "col_1 is the duration",
+        className: "min-w-0 flex-1 rounded-lg border border-slate-300 px-2.5 py-2 text-sm",
         "aria-label": "Describe the correction in plain English",
         onChange: function (e) { setText(e.target.value); }
       }),
-      React.createElement("button", { type: "submit", disabled: busy }, busy ? "Working..." : "Send")
+      React.createElement("button", {
+        type: "submit", disabled: busy,
+        className: "shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+      }, busy ? "..." : "Send")
     ),
-    React.createElement("h3", null, "Learned mappings"),
+    React.createElement("h3", { className: "mt-4 mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500" }, "Learned mappings"),
     keys.length === 0
-      ? React.createElement("p", { className: "empty" }, "Nothing learned yet.")
+      ? React.createElement("p", { className: "text-xs text-slate-400" }, "Nothing learned yet.")
       : React.createElement("ul", { className: "learned" }, keys.map(function (k) {
           return React.createElement("li", { key: k },
             React.createElement("span", { className: "role" }, esc(k)),
@@ -705,11 +745,43 @@ function renderTimelineTable() {
   );
 }
 
+/**
+ * A small shorthand, so the tree below is readable. JSX would be nicer and needs
+ * a compiler this artifact deliberately does not have.
+ */
+var h = React.createElement;
+
+/** A disclosure for the exact-but-long data. Charts first; tables on request. */
+function Disclosure(props) {
+  return h("details", { className: "group border border-slate-200 rounded-xl bg-white overflow-hidden" },
+    h("summary", {
+      className: "cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-700 " +
+        "hover:bg-slate-50 flex items-center justify-between gap-3",
+    },
+      h("span", null, props.title),
+      h("span", { className: "text-xs font-normal text-slate-400 group-open:hidden" }, "Show"),
+      h("span", { className: "text-xs font-normal text-slate-400 hidden group-open:inline" }, "Hide")
+    ),
+    h("div", { className: "px-4 pb-4 pt-1 border-t border-slate-100" }, props.children)
+  );
+}
+
+/** A headline number. Four of them, so the file is summarised before it is listed. */
+function Stat(props) {
+  return h("div", { className: "rounded-xl border border-slate-200 bg-white px-4 py-3" },
+    h("div", { className: "text-xs uppercase tracking-wide text-slate-500" }, props.label),
+    h("div", { className: "mt-1 text-2xl font-semibold tabular-nums text-slate-900" }, props.value),
+    props.note ? h("div", { className: "mt-0.5 text-xs text-slate-500" }, props.note) : null
+  );
+}
+
 function App() {
   var sSev = React.useState("all");
   var sev = sSev[0], setSev = sSev[1];
   var sDeep = React.useState(false);
   var deep = sDeep[0], setDeep = sDeep[1];
+  var sShowAll = React.useState(false);
+  var showAll = sShowAll[0], setShowAll = sShowAll[1];
 
   var depth = deep ? D.maxDepth : D.defaultDepth;
   var shown = D.anomalies.filter(function (a) { return sev === "all" || a.severity === sev; });
@@ -718,111 +790,218 @@ function App() {
   var rank = D.ranking.slice(0, depth);
   var maxCount = rank.length ? rank[0].count : 1;
 
-  return React.createElement("main", { className: "wrap" },
-    React.createElement("header", null,
-      React.createElement("h1", null, esc(D.title)),
-      React.createElement("p", { className: "headline" }, esc(D.headline)),
-      React.createElement("p", { className: "meta" },
-        D.totalRows.toLocaleString("en-US") + " rows, " + D.columns.length + " numeric columns, " +
-        D.anomalies.length + " finding(s).")
-    ),
-    React.createElement("section", { className: "controls" },
-      React.createElement("label", { htmlFor: "severity-filter" }, "Severity"),
-      React.createElement("select", {
-        id: "severity-filter", value: sev,
-        onChange: function (e) { setSev(e.target.value); }
-      },
-        React.createElement("option", { value: "all", key: "all" }, "All (" + D.anomalies.length + ")"),
-        SEV.map(function (s) {
-          return React.createElement("option", { value: s, key: s }, LABEL[s] + " (" + counts[s] + ")");
-        })
+  // THE TOP-N RULE, and why it is a constant rather than a slider.
+  //
+  // The Owner opened a database performance file and scrolled past a hundred
+  // rows of table before reaching anything. A ranking is a CLAIM about which
+  // rows matter, and a claim you have to scroll to find is not a claim. Five is
+  // the most a person reliably compares; beyond that the eye stops comparing
+  // and starts scanning. Everything past five is one click away, so nothing is
+  // hidden -- only demoted.
+  var TOP = 5;
+  var listed = showAll ? shown : shown.slice(0, TOP);
+
+  var spikes = D.timeline.filter(function (p) { return p.spike; });
+  var worst = D.timeline.reduce(function (acc, p) { return p.count > (acc ? acc.count : -1) ? p : acc; }, null);
+  var dirty = D.columns.reduce(function (n, c) { return n + c.dirty; }, 0);
+
+  return h("div", { className: "min-h-screen bg-slate-50 text-slate-900" },
+    h("div", { className: "mx-auto max-w-7xl px-4 sm:px-6 py-6 flex gap-6 items-start" },
+
+      // ======================= THE MAIN COLUMN =========================
+      h("main", { className: "flex-1 min-w-0" },
+
+        h("header", { className: "mb-5" },
+          h("h1", { className: "text-2xl font-semibold tracking-tight" }, esc(D.title)),
+          h("p", { className: "mt-1 text-slate-600" }, esc(D.headline)),
+          h("p", { className: "mt-1 text-sm text-slate-500" },
+            D.totalRows.toLocaleString("en-US") + " rows, " +
+            D.columns.length + " numeric columns, " + D.anomalies.length + " finding(s).")
+        ),
+
+        // ---- filters ----
+        h("div", { className: "flex flex-wrap items-center gap-3 mb-5" },
+          h("div", { className: "inline-flex rounded-lg border border-slate-200 bg-white p-0.5" },
+            ["all"].concat(SEV).map(function (s) {
+              return h("button", {
+                key: s,
+                id: s === "all" ? "severity-filter" : "severity-filter-" + s,
+                onClick: function (e) { setSev(s); },
+                className: "px-3 py-1.5 text-sm rounded-md transition " +
+                  (sev === s ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"),
+              }, s === "all" ? "All " + D.anomalies.length : LABEL[s] + " " + counts[s]);
+            })
+          ),
+          h("label", { className: "inline-flex items-center gap-2 text-sm text-slate-600" },
+            h("input", {
+              id: "depth-toggle", type: "checkbox", checked: deep,
+              onChange: function (e) { setDeep(e.target.checked); },
+              className: "rounded border-slate-300"
+            }),
+            "Show all " + D.maxDepth + " categories"
+          )
+        ),
+
+        // ---- the numbers, before anything else ----
+        h("div", { className: "grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6" },
+          h(Stat, { label: "Rows read", value: D.totalRows.toLocaleString("en-US") }),
+          h(Stat, {
+            label: "Findings", value: String(D.anomalies.length),
+            note: counts.critical + " critical"
+          }),
+          h(Stat, {
+            label: "Spike hours", value: String(spikes.length),
+            note: spikes.length ? "flagged by the engine" : "none flagged"
+          }),
+          h(Stat, {
+            label: "Type mismatches", value: String(dirty),
+            note: dirty ? "cells that are not numbers" : "none"
+          })
+        ),
+
+        // ======================= THE CHARTS, FIRST =======================
+        //
+        // ABOVE THE FOLD, BEFORE ANY TABLE. This ordering is the whole of
+        // Task 1: the Owner's first complaint was that the product showed them
+        // a hundred rows of text where a picture belonged. A dashboard whose
+        // answer is below its data is a data dump with decoration on top.
+        h("div", { className: "grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6" },
+          h("section", { className: "rounded-xl border border-slate-200 bg-white p-4" },
+            h("h2", { className: "text-sm font-semibold text-slate-900" }, "Record categories"),
+            h("p", { className: "text-xs text-slate-500 mt-0.5 mb-2" },
+              "How many rows fall in each category."),
+            h(ChartNote, null),
+            D.ranking.length === 0
+              ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
+                  "No categorical column in this file, so there is nothing to rank.")
+              : h(BarChart)
+          ),
+          h("section", { className: "rounded-xl border border-slate-200 bg-white p-4" },
+            h("h2", { className: "text-sm font-semibold text-slate-900" }, "Rows by hour"),
+            h("p", { className: "text-xs text-slate-500 mt-0.5 mb-2" },
+              "Orange points are spikes the engine flagged against its own mean. Hover for the exact count."),
+            h(ChartNote, null),
+            D.timeline.length === 0
+              ? h("p", { className: "text-sm text-slate-500 py-8 text-center" },
+                  "No readable timestamps, so there is no day to plot.")
+              : h(LineChart)
+          )
+        ),
+
+        // ---- findings: the answer, capped ----
+        h("section", { className: "mb-6" },
+          h("div", { className: "flex items-baseline justify-between mb-2" },
+            h("h2", { className: "text-sm font-semibold" }, "Findings"),
+            h("span", { className: "text-xs text-slate-500" },
+              shown.length + " of " + D.anomalies.length + " shown")
+          ),
+          listed.length === 0
+            ? h("div", { className: "rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500" },
+                D.anomalies.length === 0
+                  ? "Nothing to flag. This file is clean by the engine's own thresholds."
+                  : "No findings at this severity. Widen the filter to see the rest.")
+            : h("div", { className: "rounded-xl border border-slate-200 bg-white divide-y divide-slate-100 overflow-hidden" },
+                listed.map(function (a, i) {
+                  return h("div", { key: a.column + a.kind + i, className: "flex items-start gap-3 p-3" },
+                    h("span", { className: "pill " + a.severity }, LABEL[a.severity]),
+                    h("div", { className: "min-w-0" },
+                      h("div", { className: "text-sm font-medium" }, esc(a.column)),
+                      h("div", { className: "text-sm text-slate-600" },
+                        esc(a.kind + ": " + a.detail) + why(a.factor))
+                    )
+                  );
+                }),
+                shown.length > listed.length
+                  ? h("button", {
+                      onClick: function (e) { setShowAll(true); },
+                      className: "w-full p-3 text-sm text-slate-600 hover:bg-slate-50",
+                    }, "Show all " + shown.length + " findings")
+                  : null,
+                showAll && shown.length > TOP
+                  ? h("button", {
+                      onClick: function (e) { setShowAll(false); },
+                      className: "w-full p-3 text-sm text-slate-600 hover:bg-slate-50",
+                    }, "Show fewer")
+                  : null
+              )
+        ),
+
+        // ---- the exact data, on request ----
+        h("div", { className: "space-y-3" },
+          h(Disclosure, { title: "View raw data: " + D.columns.length + " columns" },
+            h("p", { className: "text-xs text-slate-500 py-2" },
+              "Every numeric column the engine measured. The charts above are a summary; this is the arithmetic."),
+            h("table", { className: "w-full text-sm" },
+              h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
+                h("th", { className: "py-1.5 pr-3 font-medium" }, "Column"),
+                h("th", { className: "py-1.5 pr-3 font-medium" }, "Mean"),
+                h("th", { className: "py-1.5 pr-3 font-medium" }, "Min"),
+                h("th", { className: "py-1.5 pr-3 font-medium" }, "Max"),
+                h("th", { className: "py-1.5 font-medium" }, "Measured")
+              )),
+              h("tbody", null, D.columns.map(function (c) {
+                return h("tr", { key: c.name, className: "border-t border-slate-100" },
+                  h("td", { className: "py-1.5 pr-3 font-medium" }, esc(c.name)),
+                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.mean)),
+                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.min)),
+                  h("td", { className: "py-1.5 pr-3 tabular-nums" }, num(c.max)),
+                  h("td", { className: "py-1.5 tabular-nums" }, c.measured.toLocaleString("en-US"))
+                );
+              }))
+            )
+          ),
+          D.ranking.length > TOP ? h(Disclosure, { title: "View raw data: all " + D.ranking.length + " categories" },
+            h("div", { className: "pt-2" }, renderRankingTable(D.ranking))
+          ) : null,
+          D.timeline.length > 0 ? h(Disclosure, { title: "View raw data: every hour" },
+            h("div", { className: "pt-2" }, renderTimelineTable())
+          ) : null,
+          D.learned && Object.keys(D.learned).length > 0
+            ? h(Disclosure, { title: "View raw data: learned mappings" },
+                h("div", { className: "pt-2" }, renderLearned(D.learned))
+              )
+            : null
+        ),
+
+        // ---- provenance, at the bottom, on purpose ----
+        //
+        // "How this report was read" used to lead. It is the most important
+        // sentence in the document -- whether a mapping was verified by a person
+        // or guessed from a column name -- and it was placed where nobody
+        // reads. Leading with a provenance disclaimer makes a reader stop
+        // reading; a reader who has already seen the finding will look it up.
+        h("footer", { className: "mt-8 pt-4 border-t border-slate-200 text-xs text-slate-500" },
+          h("p", null,
+            "Data provenance: " + D.totalRows.toLocaleString("en-US") + " rows read from " +
+            (D.source ? esc(D.source) : "an uploaded file") + ". Column readings marked " +
+            "hypotheses were inferred from column names and a statistical profile, " +
+            "not verified by a person."),
+          h("p", { className: "mt-1" },
+            "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning.")
+        )
       ),
-      React.createElement("label", { htmlFor: "depth-toggle" }, "Ranking depth"),
-      React.createElement("input", {
-        id: "depth-toggle", type: "checkbox", checked: deep,
-        onChange: function (e) { setDeep(e.target.checked); }
-      }),
-      React.createElement("span", { className: "depthlabel" },
-        "Top " + depth + (rank.length < D.ranking.length ? " of " + D.ranking.length : ""))
-    ),
-    React.createElement("section", null,
-      React.createElement("h2", null, "Where the rows are"),
-      React.createElement(ChartNote, null),
-      D.ranking.length === 0
-        ? React.createElement("p", { className: "empty" }, "This file has no categorical ranking to plot.")
-        : React.createElement(React.Fragment, null,
-            React.createElement(BarChart),
-            React.createElement(React.Fragment, null, renderRankingTable(rank))
-          )
-    ),
-    React.createElement("section", null,
-      React.createElement("h2", null, "The shape of the day"),
-      D.timeline.length === 0
-        ? React.createElement("p", { className: "empty" },
-            "No readable timestamps in this file, so there is no day to plot. The engine could not tell when these rows happened.")
-        : React.createElement(React.Fragment, null,
-            React.createElement(LineChart),
-            React.createElement(React.Fragment, null, renderTimelineTable())
-          )
-    ),
-    React.createElement("section", null,
-      React.createElement("h2", null, "Worst " + depth),
-      rank.length === 0
-        ? React.createElement("p", { className: "empty" }, "This file has no categorical ranking to show.")
-        : React.createElement("ol", { className: "rank" }, rank.map(function (r, i) {
-            return React.createElement("li", { key: r.key },
-              React.createElement("span", { className: "k" }, esc(r.key)),
-              React.createElement("span", { className: "bar", style: { width: Math.max(2, (r.count / maxCount) * 100) + "%" } }),
-              React.createElement("span", { className: "n" }, r.count.toLocaleString("en-US"))
-            );
-          }))
-    ),
-    React.createElement("section", null,
-      React.createElement("h2", null, "Findings (" + shown.length + " of " + D.anomalies.length + ")"),
-      shown.length === 0
-        ? React.createElement("p", { className: "empty" },
-            D.anomalies.length === 0
-              ? "Nothing to flag. This file is clean by the engine's own thresholds."
-              : "No findings at this severity. Widen the filter to see the rest.")
-        : React.createElement("table", null,
-            React.createElement("thead", null, React.createElement("tr", null,
-              React.createElement("th", null, "Severity"),
-              React.createElement("th", null, "Column"),
-              React.createElement("th", null, "Finding")
-            )),
-            React.createElement("tbody", null, shown.map(function (a, i) {
-              return React.createElement("tr", { key: a.column + a.kind + i, className: a.severity },
-                React.createElement("td", null, React.createElement("span", { className: "pill " + a.severity }, LABEL[a.severity])),
-                React.createElement("td", null, esc(a.column)),
-                React.createElement("td", null, esc(a.kind + ": " + a.detail) + why(a.factor))
-              );
-            }))
-          )
-    ),
-    React.createElement("section", null,
-      React.createElement("h2", null, "Columns"),
-      React.createElement("table", null,
-        React.createElement("thead", null, React.createElement("tr", null,
-          React.createElement("th", null, "Column"),
-          React.createElement("th", null, "Mean"),
-          React.createElement("th", null, "Min"),
-          React.createElement("th", null, "Max"),
-          React.createElement("th", null, "Measured")
-        )),
-        React.createElement("tbody", null, D.columns.map(function (c) {
-          return React.createElement("tr", { key: c.name },
-            React.createElement("td", null, esc(c.name)),
-            React.createElement("td", null, num(c.mean)),
-            React.createElement("td", null, num(c.min)),
-            React.createElement("td", null, num(c.max)),
-            React.createElement("td", null, c.measured.toLocaleString("en-US"))
-          );
-        }))
-      )
-    ),
-    React.createElement("footer", null,
-      "Thresholds are the engine's own: a value past the 3x-IQR outer fence is Critical, past 1.5x is Warning."),
-    __CHAT__
+
+      // ======================= THE CHAT, ALWAYS VISIBLE =================
+      __CHAT__
+    )
+  );
+}
+
+/** The learned mappings, as a table. Shared by the chat panel and the disclosure. */
+function renderLearned(learned) {
+  var keys = Object.keys(learned).sort();
+  if (keys.length === 0) return h("p", { className: "text-sm text-slate-500 py-2" }, "Nothing learned yet.");
+  return h("table", { className: "w-full text-sm" },
+    h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
+      h("th", { className: "py-1.5 pr-3 font-medium" }, "Role"),
+      h("th", { className: "py-1.5 font-medium" }, "Column")
+    )),
+    h("tbody", null, keys.map(function (k) {
+      return h("tr", { key: k, className: "border-t border-slate-100" },
+        h("td", { className: "py-1.5 pr-3 font-medium" }, esc(k)),
+        h("td", { className: "py-1.5" }, esc(learned[k]))
+      );
+    }))
   );
 }
 
@@ -886,54 +1065,21 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
   unrelated package was published. See platform/web/react-report.ts for what
   pinning does and does not buy.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; connect-src ${connect}; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://unpkg.com https://cdn.tailwindcss.com; style-src 'unsafe-inline' https://cdn.tailwindcss.com; connect-src ${connect}; img-src data:; style-src 'unsafe-inline' https://cdn.tailwindcss.com">
 <style>
-  :root { color-scheme: light dark; }
-  body { margin: 0; background: #f6f7f9; color: #16181d; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .wrap { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-  h1 { font-size: 1.5rem; margin: 0 0 .4rem; }
-  h2 { font-size: 1.02rem; margin: 2rem 0 .5rem; padding-bottom: .3rem; border-bottom: 1px solid #e4e7ee; }
-  .headline { font-size: 1.02rem; color: #2c313c; margin: 0 0 .35rem; max-width: 46rem; }
-  .meta, .empty { color: #5b616e; font-size: .9rem; }
-  .controls { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: 1.25rem 0; }
-  .controls label { font-size: .82rem; color: #5b616e; }
-  select { font: inherit; padding: .25rem .4rem; border: 1px solid #b9bfcc; border-radius: 6px; background: #fff; }
-  .depthlabel { font-size: .82rem; color: #5b616e; }
-  .canvasbox { position: relative; height: 17rem; margin: .8rem 0 1.2rem; }
-  .canvasbox canvas { width: 100% !important; height: 100% !important; }
-  .chartoff { padding: .6rem .8rem; background: #fdf0d5; color: #7a5300; border-radius: 6px; }
-  table.fallback { margin-top: .4rem; }
-  table.fallback th, table.fallback td { font-size: .84rem; }
-  .rank { list-style: none; padding: 0; margin: 0; }
-  .rank li { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr auto; gap: .6rem; align-items: center; padding: .18rem 0; }
-  .rank .k { font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rank .bar { background: #dfe3ea; border-radius: 3px; height: .7rem; }
-  .rank .n { font-size: .82rem; color: #5b616e; font-variant-numeric: tabular-nums; }
-  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #eef0f4; }
-  th { font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; }
-  td { font-variant-numeric: tabular-nums; }
-  .pill { font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; padding: .1rem .4rem; border-radius: 999px; }
-  .pill.critical { background: #fbe3dc; color: #8a2b12; }
-  .pill.warning { background: #fdf0d5; color: #7a5300; }
-  .pill.info { background: #e4ecf6; color: #274a76; }
-  tr.critical td { background: #fef8f6; }
-  footer { margin-top: 2.5rem; font-size: .8rem; color: #5b616e; border-top: 1px solid #e4e7ee; padding-top: .8rem; }
-  .chat { margin-top: 2.5rem; border: 1px solid #e4e7ee; border-radius: 10px; padding: 1rem 1.1rem 1.2rem; background: #fff; }
-  .chat h2 { margin-top: 0; }
-  .chat h3 { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; margin: 1.1rem 0 .4rem; }
-  .log { max-height: 16rem; overflow-y: auto; margin: .8rem 0; }
-  .log p { margin: 0 0 .5rem; font-size: .88rem; }
-  .log p.bad { color: #8a2b12; background: #fef8f6; border-left: 3px solid #d9613f; padding: .3rem .5rem; border-radius: 0 4px 4px 0; }
-  .composer { display: flex; gap: .5rem; }
-  .composer input { flex: 1; font: inherit; padding: .4rem .55rem; border: 1px solid #b9bfcc; border-radius: 6px; }
-  .composer button { font: inherit; padding: .4rem .9rem; border-radius: 6px; border: 1px solid #16181d; background: #16181d; color: #fff; cursor: pointer; }
-  .composer button[disabled] { opacity: .55; cursor: progress; }
-  .learned { list-style: none; padding: 0; margin: 0; font-size: .85rem; }
-  .learned li { display: flex; gap: .45rem; align-items: baseline; padding: .12rem 0; }
-  .learned .role { color: #5b616e; min-width: 6.5rem; }
-  .learned .arrow { color: #a9b0be; }
-  .learned .colname { font-weight: 600; }
+  /* Only what Tailwind utilities cannot express. Chart.js draws into the canvas;
+     everything structural is a class. */
+  .canvasbox { position: relative; height: 16rem; }
+  .pill { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: .15rem .45rem; border-radius: 999px; white-space: nowrap; }
+  .pill.critical { background: #fee2e2; color: #991b1b; }
+  .pill.warning { background: #fef3c7; color: #92400e; }
+  .pill.info { background: #e0e7ff; color: #3730a3; }
+  .chartoff { padding: .6rem .75rem; background: #fef3c7; color: #92400e; border-radius: .5rem; font-size: .8rem; }
+  table.fallback { width: 100%; font-size: .8rem; }
+  table.fallback th, table.fallback td { text-align: left; padding: .25rem .4rem; border-top: 1px solid #f1f5f9; }
+  table.fallback th { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #64748b; font-weight: 500; }
+  tbody tr.critical { background: #fff7f7; }
+  summary::-webkit-details-marker { display: none; }
 </style>
 </head>
 <body>
@@ -942,6 +1088,20 @@ export function toReactDashboard(analysis: BottleneckAnalysis, options: Dashboar
 <script crossorigin src="${REACT_CDN}/react.production.min.js"></script>
 <script crossorigin src="${REACT_DOM_CDN}/react-dom.production.min.js"></script>
 <script crossorigin src="${CHART_CDN}"></script>
+<!--
+  TAILWIND, PINNED, AND THE FOURTH REMOTE DEPENDENCY.
+
+  The Play CDN compiles utilities in the browser. That is normally the wrong
+  choice for production -- it ships a compiler, and its own documentation says
+  so -- and it is the right one here only because the alternative is worse:
+  vendoring Tailwind means shipping a build step, and "no build step" is the
+  premise of this artifact (D-033). The trade is recorded in D-036.
+
+  A CDN failure is survivable by construction: the class names simply do not
+  apply, and the page below is written so that the unstyled document is still
+  readable in source order -- findings before raw data, charts before both.
+-->
+<script src="${TAILWIND_CDN}"></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
 ${source}

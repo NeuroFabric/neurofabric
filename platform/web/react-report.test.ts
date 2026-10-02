@@ -133,11 +133,22 @@ test("the dashboard is interactive: a severity filter and a depth toggle both ex
   // source wires each control to state and applies the state, which is the part
   // that decides whether it is interactive or decorative.
   const src = appSourceOf(toReactDashboard(analysis, {}));
-  assert.match(src, /id: "severity-filter"/, "a severity filter the user can drive");
+  assert.match(src, /"severity-filter"/, "a severity filter the user can drive");
   assert.match(src, /id: "depth-toggle"/i, "a control that changes how deep the ranking goes");
   // Both wired to state, and the state actually reaching the render.
   assert.match(src, /useState/, "and the app must actually hold state");
-  assert.match(src, /onChange: function \(e\) \{ setSev/, "the filter is driven by its change handler");
+  // THE SEVERITY FILTER IS A SEGMENTED BUTTON GROUP NOW, not a <select>.
+  //
+  // That is a deliberate change from the UX overhaul and not a cosmetic one: a
+  // dropdown hides the counts, so picking a severity meant opening a menu to
+  // discover that three of the forty findings were critical. The property under
+  // test is unchanged and is the one that matters -- the control sets state that
+  // the render reads -- so it is asserted that way rather than pinned to the
+  // element type that has since changed.
+  assert.match(src, /setSev\(s\)/,
+    "the filter is driven by a click handler on a segmented control");
+  assert.match(src, /sev === s \? "bg-slate-900 text-white"/,
+    "and the selected segment is visibly distinct, or the control does not read as a control");
   assert.match(src, /onChange: function \(e\) \{ setDeep/, "and so is the depth toggle");
   // The filter must be APPLIED, not merely stored. A control that sets state
   // nothing reads is the exact failure: it looks like the product works.
