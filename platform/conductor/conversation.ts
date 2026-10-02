@@ -1,4 +1,5 @@
 import { parseCorrection, type ParsedCorrection } from "../web/chat-parse.ts";
+import { resolveQuery } from "./query.ts";
 import type { Purpose } from "./semantics.ts";
 
 /**
@@ -46,6 +47,15 @@ export interface ConversationData {
     readonly measured: number;
     readonly dirty: number;
     readonly empty: number;
+    /**
+     * Bucketed distribution, so the agent can COUNT rather than only route.
+     *
+     * Optional because it is genuinely absent for a column with no measurable
+     * values, and a resolver that assumed it was there would answer a range
+     * question from an empty array and report zero rows -- the worst possible
+     * failure, because it looks like an answer.
+     */
+    readonly histogram?: readonly { lo: number; hi: number; count: number }[];
   }[];
   readonly anomalies: readonly {
     readonly column: string;
@@ -76,7 +86,7 @@ export interface ConversationData {
  * discriminant plus a payload, and the renderer owns all the markup.
  */
 export interface Widget {
-  readonly kind: "chart-line" | "chart-bar" | "findings" | "columns" | "mappings" | "capabilities";
+  readonly kind: "chart-line" | "chart-bar" | "histogram" | "findings" | "columns" | "mappings" | "capabilities";
   readonly title: string;
   readonly note?: string;
   /** The data. Shape depends on `kind`; the renderer branches, nothing else. */
@@ -289,7 +299,41 @@ export function replyTo(data: ConversationData, message: string): Reply {
   const looksLikeCorrection = !interrogative && correctionShape && correctionGrammar.test(text);
   if (looksLikeCorrection) return refuseCorrection(parsed.reason, parsed.known);
 
-  // ---- 2. HELP ----
+  // ---- 2. A QUERY ABOUT THE DATA, BEFORE ANY COARSE INTENT ----
+  //
+  // Order matters and this sits above every keyword route. "What are the top
+  // categories?" contains the word "categories" and would otherwise be handled
+  // by the category branch -- which is fine -- but "How many rows took longer
+  // than 5000ms" contains "how many" and would fall through every branch to the
+  // DECLINE, because the router only knew how to find a WIDGET and never how to
+  // COUNT anything.
+  //
+  // The resolver runs first because it is the only thing here that computes.
+  // A `matched: false` means it did not recognise a queryable question, and the
+  // coarse routes below handle it exactly as before.
+  const query = resolveQuery({
+    totalRows: data.totalRows,
+    columns: data.columns,
+    ranking: data.ranking,
+    timeline: data.timeline,
+  }, text);
+  if (query.matched) {
+    return {
+      kind: "answer",
+      text: query.answer,
+      widgets: query.widget === undefined ? [] : [{
+        kind: query.widget.kind === "histogram" ? "histogram" : query.widget.kind === "line" ? "chart-line" : "chart-bar",
+        title: query.widget.title,
+        note: query.widget.note,
+        payload: query.widget.payload,
+      }],
+      suggestions: query.column === null
+        ? ["what is wrong with this file?"]
+        : [`what is the average ${query.column}`, "what is wrong with this file?"],
+    };
+  }
+
+  // ---- 3. HELP ----
   if (/\b(help|what can you|capabilit|how do i|what do you)\b/.test(lower)) {
     return {
       kind: "answer",
@@ -305,7 +349,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
-  // ---- 3. THE SHAPE OF THE DAY ----
+  // ---- 4. THE SHAPE OF THE DAY ----
   if (/\b(hour|when|spike|peak|timeline|time of day|busiest|quietest)\b/.test(lower)) {
     if (data.timeline.length === 0) {
       return decline(
@@ -325,7 +369,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
-  // ---- 4. THE CATEGORIES ----
+  // ---- 5. THE CATEGORIES ----
   if (/\b(categor|top |biggest|largest|most common|breakdown|group|which .*most)\b/.test(lower)) {
     if (data.ranking.length === 0) {
       return decline(
@@ -342,7 +386,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
-  // ---- 5. THE FINDINGS ----
+  // ---- 6. THE FINDINGS ----
   if (/\b(wrong|problem|issue|anomal|findings|broken|bad|error|clean|wrong with)\b/.test(lower)) {
     const severe = data.anomalies.filter((a) => a.severity === "critical");
     if (data.anomalies.length === 0) {
@@ -364,7 +408,7 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
-  // ---- 6. HOW THE COLUMNS WERE READ ----
+  // ---- 7. HOW THE COLUMNS WERE READ ----
   if (/\b(column|schema|mapping|how did you read|guess|assum|verified|mapping)\b/.test(lower)) {
     const learned = Object.entries(data.learned);
     return {
@@ -384,13 +428,13 @@ export function replyTo(data: ConversationData, message: string): Reply {
     };
   }
 
-  // ---- 7. AN OVERVIEW ----
+  // ---- 8. AN OVERVIEW ----
   if (/\b(summary|overview|tell me about|what is this|describe|hello|hi\b|thanks|thank you)\b/.test(lower)) {
     const g = greet(data);
     return { ...g, text: g.text };
   }
 
-  // ---- 8. THE DECLINE ----
+  // ---- 9. THE DECLINE ----
   return decline(
     "I cannot answer that from what I have measured. I report what the engine found in this file -- " +
     "the shape of the day, the categories, the findings and how I read each column -- and I will not invent a figure " +

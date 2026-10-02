@@ -276,6 +276,80 @@ test("and a DECLARATIVE correction attempt still gets the correction answer", ()
   }
 });
 
+// === THE RESOLVER RUNS FIRST ==============================================
+
+test("a DATA question is answered with a CALCULATION, not a schema refusal", () => {
+  // THE CASE THE DIRECTIVE NAMED, and the one the router could not serve before.
+  //
+  // "How many rows took longer than 5000ms" contains no category word, no hour
+  // word and no copula-shaped correction, so it fell through every branch to the
+  // DECLINE -- which meant the agent could find a chart but not count anything.
+  // For somebody with a slow database that is the question they opened the file
+  // to ask.
+  //
+  // It is asserted here at the ROUTER rather than only in query.test.ts, because
+  // the resolver being correct is not the same claim as the router calling it.
+  const withHistogram = {
+    ...DB_LOG,
+    columns: DB_LOG.columns.map((c) => ({
+      ...c,
+      histogram: [
+        { lo: 0, hi: 100, count: 40 }, { lo: 100, hi: 200, count: 60 },
+        { lo: 200, hi: 300, count: 50 }, { lo: 300, hi: 400, count: 30 },
+        { lo: 400, hi: 500, count: 20 },
+      ],
+    })),
+  };
+
+  const reply = replyTo(withHistogram, "how many rows have total_elapsed_time_ms over 200");
+  assert.equal(reply.kind, "answer", "and it must be an ANSWER, not a correction attempt");
+  // Buckets [200,300) + [300,400) + [400,500) = 50 + 30 + 20 = 100. The
+  // boundary convention is stated on countOnSide: "over 200" counts buckets
+  // whose lower bound is >= 200, so a value exactly 200 counts in.
+  assert.match(reply.text, /\b100\b/,
+    `the whole buckets at or above 200 hold 50 + 30 + 20 = 100 rows: ${reply.text}`);
+  assert.ok(!/not a role|is the category|correction/i.test(reply.text),
+    "and specifically NOT a schema refusal");
+  assert.ok(reply.widgets.some((w) => w.kind === "histogram"),
+    "with the distribution attached, because a bare count has no context");
+});
+
+test("a data question does NOT reach the coarse routes", () => {
+  // "categories" is a category-route keyword, and the hour route has "worst".
+  // The resolver has to sit above both or a question that happens to contain a
+  // keyword will be routed to a chart instead of computed.
+  const reply = replyTo(DB_LOG, "how many rows are over 40");
+  assert.equal(reply.kind, "answer");
+  assert.ok(reply.widgets.every((w) => w.kind !== "chart-bar"),
+    "a question with no category named must not return the category chart");
+});
+
+test("a question the resolver DECLINES still falls through to the old routes", () => {
+  // The resolver is additive. It must not have swallowed the router's existing
+  // vocabulary, or the previous release's twenty tests would have caught it --
+  // which is exactly what happened when the correction heuristic was tightened.
+  const reply = replyTo(DB_LOG, "show me the worst hour");
+  assert.ok(reply.widgets.some((w) => w.kind === "chart-line"), "the hour route still works");
+  const categories = replyTo(DB_LOG, "what are the top categories?");
+  assert.ok(categories.widgets.some((w) => w.kind === "chart-bar"), "and so does the category route");
+});
+
+test("a WIDGET is never offered where the answer is a bound, not a number", () => {
+  // If the threshold falls inside a bucket the honest answer is a range. A
+  // histogram is still right -- it SHOWS why the answer is a range -- but the
+  // prose must not imply precision it does not have.
+  const partial = {
+    ...DB_LOG,
+    columns: DB_LOG.columns.map((c) => ({
+      ...c,
+      histogram: [{ lo: 0, hi: 100, count: 10 }, { lo: 100, hi: 200, count: 20 }],
+    })),
+  };
+  const reply = replyTo(partial, "how many rows have total_elapsed_time_ms over 150");
+  assert.match(reply.text, /at least|at most|between/i,
+    `a straddling threshold must not produce a bare count: ${reply.text}`);
+});
+
 test("routing is PURE: the same question twice gives the same answer", () => {
   const a = replyTo(DB_LOG, "show me the worst hour");
   const b = replyTo(DB_LOG, "show me the worst hour");

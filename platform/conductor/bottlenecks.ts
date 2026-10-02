@@ -540,6 +540,64 @@ export interface NumericColumnStat {
   readonly fenceUpper: number | null;
   /** The detection method, or null when too few values were present to apply one. */
   readonly method: "IQR" | null;
+  /**
+   * A bounded histogram, so a question can be ANSWERED rather than routed.
+   *
+   * The conversation can report a mean, a max and a count of outliers, and it
+   * cannot say "how many rows are over 5,000" -- because a summary is not
+   * invertible. The user asks that question constantly, and without this the
+   * agent would have to decline it, which is the same as being a help page.
+   *
+   * Bucketed rather than stored, for two reasons. It is bounded: twenty pairs per
+   * column, whatever the row count. And it is honest -- a bucket is a RANGE, so
+   * an answer computed from one says which range, and `query.ts` refuses to
+   * present a bucket as a point value. Storing every measured value would make
+   * exact answers possible and would put an entire file into the browser payload
+   * of a dashboard whose entire value proposition is that it does not exfiltrate
+   * the CSV.
+   */
+  readonly histogram: readonly HistogramBucket[];
+}
+
+/** One bucket. Inclusive low, exclusive high, except the last which is closed. */
+export interface HistogramBucket {
+  readonly lo: number;
+  readonly hi: number;
+  readonly count: number;
+}
+
+/** How many buckets per numeric column. Enough for a range, bounded for size. */
+export const HISTOGRAM_BUCKETS = 20;
+
+/**
+ * BUCKET THE MEASURED VALUES.
+ *
+ * Computed from the SAME `values` array the mean, the fences and the outlier
+ * counts came from, so a histogram and a summary can never disagree about which
+ * cells were measured. A histogram built from the raw rows would be able to
+ * disagree, and would be able to count a dirty cell the mean excluded.
+ */
+function bucketOf(values: readonly number[], min: number, max: number): HistogramBucket[] {
+  // Mutable while the counters are filled; structurally the published shape, and
+  // the alternative -- rebuilding an array per value -- is an allocation per row.
+  const out: { lo: number; hi: number; count: number }[] = [];
+  if (values.length === 0) return out;
+  const width = (max - min) / HISTOGRAM_BUCKETS;
+  // A column whose every value is identical has a zero-width range. Division by
+  // it would produce NaN buckets, so it gets one bucket that holds everything.
+  if (!(width > 0)) return [{ lo: min, hi: max, count: values.length }];
+  for (let i = 0; i < HISTOGRAM_BUCKETS; i += 1) {
+    out.push({ lo: min + i * width, hi: min + (i + 1) * width, count: 0 });
+  }
+  for (const v of values) {
+    let index = Math.floor((v - min) / width);
+    // The maximum lands exactly on the last bucket's edge, and would index past
+    // the end. It belongs IN the last bucket, which is why that one is closed.
+    if (index >= HISTOGRAM_BUCKETS) index = HISTOGRAM_BUCKETS - 1;
+    if (index < 0) index = 0;
+    out[index]!.count += 1;
+  }
+  return out;
 }
 
 /**
@@ -787,8 +845,8 @@ function numericalProfile(csv: CsvReadResult): { numerical: NumericalProfile; he
     method: (outliers.lower === null ? null : "IQR") as "IQR" | null,
   };
     const shape = { column: c.column, measured, missing: empty + dirty, empty, dirty, dirtyExamples: [...examples], ...tail };
-    if (measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null };
-    return { ...shape, min, max, mean: sum / measured, spread: max - min };
+    if (measured === 0) return { ...shape, min: null, max: null, mean: null, spread: null, histogram: [] };
+    return { ...shape, min, max, mean: sum / measured, spread: max - min, histogram: bucketOf(values, min, max) };
   });
 
   const ordered = [...stats].sort((a, b) => (b.spread ?? -1) - (a.spread ?? -1) || a.column.localeCompare(b.column));

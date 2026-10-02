@@ -524,6 +524,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
               columns: analysisForChat.numerical.columns.map((c) => ({
                 name: c.column, mean: c.mean, min: c.min, max: c.max,
                 measured: c.measured, dirty: c.dirty, empty: c.empty,
+        // Buckets, so the agent can COUNT rather than only route.
+        histogram: c.histogram,
               })),
               anomalies: anomaliesFor(analysisForChat),
               ranking: analysisForChat.categories.slice(0, 10).map((c) => ({ key: c.key, count: c.count })),

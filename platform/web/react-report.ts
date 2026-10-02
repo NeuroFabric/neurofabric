@@ -430,6 +430,8 @@ export function buildDashboardData(analysis: BottleneckAnalysis, options: Dashbo
       columns: analysis.numerical.columns.map((c) => ({
         name: c.column, mean: c.mean, min: c.min, max: c.max,
         measured: c.measured, dirty: c.dirty, empty: c.empty,
+        // Buckets, so the agent can COUNT rather than only route.
+        histogram: c.histogram,
       })),
       anomalies,
       ranking: analysis.categories.slice(0, MAX_DEPTH).map((c) => ({ key: c.key, count: c.count })),
@@ -943,6 +945,46 @@ function renderWidget(w, version) {
       (p.points || []).length === 0
         ? h("p", { className: "text-sm text-slate-500" }, "Nothing to plot.")
         : h(LineChart, { payload: p, version: version })
+    );
+  }
+
+  if (w.kind === "histogram") {
+    var buckets = (p.buckets || []).filter(function (b) { return b.count > 0; });
+    var threshold = p.threshold;
+    var peak = buckets.reduce(function (m, b) { return b.count > (m ? m.count : -1) ? b : m; }, null);
+    return h(WidgetCard, { title: w.title, note: w.note },
+      h("div", { className: "overflow-x-auto" },
+        h("table", { className: "w-full text-sm" },
+          h("thead", null, h("tr", { className: "text-left text-xs uppercase tracking-wide text-slate-500" },
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Range"),
+            h("th", { className: "py-1.5 pr-3 font-medium" }, "Rows"),
+            h("th", { className: "py-1.5 font-medium" }, "Share")
+          )),
+          h("tbody", null, buckets.map(function (b) {
+            // The bars are a RANGE. Labelling one with a point value would be
+            // the same fabrication the resolver refuses in prose, so the label
+            // carries both ends and the width is relative to the peak bucket.
+            var share = peak === null ? 0 : Math.round((b.count / peak.count) * 100);
+            var past = threshold === undefined || threshold === null
+              ? false
+              : (threshold >= b.lo && threshold < b.hi) || b.lo >= threshold;
+            return h("tr", { key: b.lo + "-" + b.hi, className: "border-t border-slate-100" },
+              h("td", { className: "py-1.5 pr-3 font-medium tabular-nums" },
+                esc(b.lo + " – " + b.hi),
+                past ? h("span", { className: "ml-2 text-[10px] uppercase text-slate-400" }, "past") : null),
+              h("td", { className: "py-1.5 pr-3 tabular-nums" }, b.count.toLocaleString("en-US")),
+              h("td", { className: "py-1.5" },
+                h("div", { className: "h-2 rounded bg-slate-100 overflow-hidden" },
+                  h("div", {
+                    className: "h-full rounded " + (past ? "bg-orange-500" : "bg-slate-400"),
+                    style: { width: share + "%" }
+                  })))
+            );
+          }))
+        )),
+      h("p", { className: "text-xs text-slate-500 mt-2" },
+        "Each row is a range, not a single value — which is why a threshold inside one " +
+        "cannot be answered exactly.")
     );
   }
 
