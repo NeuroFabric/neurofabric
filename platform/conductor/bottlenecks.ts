@@ -3,6 +3,9 @@ import {
   fencesFromQuartiles,
   outliersFromSorted,
   percentileSorted,
+  streamCsvRecordsSync,
+  MAX_DURATIONS as MAX_DURATIONS_PER_KEY,
+  MAX_LOGGERS as MAX_LOGGERS_PER_KEY,
   type FenceSummary,
   type StreamColumnSnapshot,
 } from "./stream-profile.ts";
@@ -180,6 +183,35 @@ export interface HourlyProfile {
   readonly insufficient: boolean;
 }
 
+/**
+ * THE EXTENT OF A RANKING, published so a bounded computation can admit it.
+ *
+ * Every ranking accumulator in this file is capped -- keys, citations, durations
+ * -- because an unbounded Map over a `category` column holding a million distinct
+ * strings is the memory wall again wearing a different hat. The caps are what
+ * make a 500,000-row file affordable. The cost is that a ranking can become a
+ * ranking of the most frequent keys rather than of all of them, and that is a
+ * fact about the answer, not about the implementation -- so it travels with the
+ * answer.
+ */
+export interface RankingScope {
+  /** Rows the rankings covered. Equal to `fileRows` -- every row, both paths. */
+  readonly rowsRanked: number;
+  /** The file's true row count, as the reader counted it while streaming. */
+  readonly fileRows: number;
+  /**
+   * True when the rankings came from the streaming pass rather than from the
+   * retained window. Both rank every row; this says which route produced them.
+   */
+  readonly viaStreamingPass: boolean;
+  /** Distinct category keys currently tracked, against the budget. */
+  readonly categoryKeysTracked: number;
+  /** Keys evicted to stay inside the budget. Zero means the ranking is complete. */
+  readonly droppedCategoryKeys: number;
+  /** The key budget, so the report can state the limit it enforced. */
+  readonly categoryKeyBudget: number;
+}
+
 export interface BottleneckAnalysis {
   /** What the engine believes this file IS. See semantics.ts. */
   readonly purpose: Purpose;
@@ -188,6 +220,21 @@ export interface BottleneckAnalysis {
   readonly errorRate: number;
   /** Ranked worst-first by error volume, ties broken by rate then name. */
   readonly bySource: readonly Bottleneck[];
+  /**
+   * WHAT THE RANKINGS ACTUALLY COVER, and what was dropped to keep them bounded.
+   *
+   * This exists because every accumulator behind a ranking is now capped, and a
+   * cap that cannot say it has been hit is a cap that lies. `droppedCategoryKeys`
+   * is non-zero when distinct categories exceeded the budget and the rarest were
+   * evicted -- in which case the ranking is a ranking of the most frequent keys,
+   * not of all of them, and the user is told so instead of being shown a chart
+   * that looks complete.
+   *
+   * `viaStreamingPass` records HOW the same answer was reached. It is not a
+   * quality signal: both paths rank every row, and a reader who believed
+   * otherwise would be right to distrust the numbers.
+   */
+  readonly rankingScope: RankingScope;
   /** Distinct error signatures, ranked by how often they recur. */
   readonly recurring: readonly Bottleneck[];
   /** Error volume bucketed by hour. */
@@ -422,13 +469,31 @@ function isError(status: string): boolean {
   return ERROR_STATUSES.has(status.trim()[0] ?? "");
 }
 
-function rank(entries: Map<string, { error: number; rows: number[] }>): Bottleneck[] {
+/**
+ * A RANKED GROUP OF ROWS: the entries behind a ranking.
+ *
+ * `count` is carried EXPLICITLY rather than being `rows.length`, and that is the
+ * change that made a whole-file ranking possible. Citations are now a SAMPLE --
+ * capped per key -- because a category with 400,000 rows used to hold 400,000
+ * line numbers, so the array that existed to help a reader jump to a row was the
+ * thing preventing the product from ranking 400,000 rows at all.
+ *
+ * So: `count` is a measurement over every row, `rows` is a convenience of bounded
+ * size, and neither is derived from the other.
+ */
+interface RankedGroup {
+  error: number;
+  rows: number[];
+  count: number;
+}
+
+function rank(entries: Map<string, RankedGroup>): Bottleneck[] {
   return [...entries.entries()]
     .map(([key, v]) => ({
       key,
-      count: v.rows.length,
+      count: v.count,
       errorCount: v.error,
-      errorRate: v.rows.length === 0 ? 0 : v.error / v.rows.length,
+      errorRate: v.count === 0 ? 0 : v.error / v.count,
       rows: [...v.rows].sort((a, b) => a - b),
     }))
     .sort((a, b) => b.errorCount - a.errorCount || b.errorRate - a.errorRate || a.key.localeCompare(b.key));
@@ -479,10 +544,14 @@ function durationStats(samples: readonly number[]): { mean: number | null; media
   return { mean, median, p95: sorted[rank - 1] };
 }
 
-function bucket(map: Map<string, { error: number; rows: number[] }>, key: string, error: boolean, row: number): void {
-  const entry = map.get(key) ?? { error: 0, rows: [] };
+/** Line citations kept per key. The COUNT beside them is exact; these are a sample. */
+const MAX_CITATIONS = 200;
+
+function bucket(map: Map<string, RankedGroup>, key: string, error: boolean, row: number): void {
+  const entry = map.get(key) ?? { error: 0, rows: [], count: 0 };
   if (error) entry.error += 1;
-  entry.rows.push(row);
+  entry.count += 1;
+  if (entry.rows.length < MAX_CITATIONS) entry.rows.push(row);
   map.set(key, entry);
 }
 
@@ -988,9 +1057,12 @@ const SPIKE_MULTIPLE = 2;
  * report says the window was too short to judge, because a table that simply
  * omits a column reads as "nothing to see here".
  */
-function hourlyProfile(hours: Map<string, { error: number; rows: number[] }>): HourlyProfile {
+function hourlyProfile(hours: Map<string, RankedGroup>): HourlyProfile {
   const entries = [...hours.entries()].sort(([a], [b]) => a.localeCompare(b));
-  const counts = entries.map(([, v]) => v.rows.length);
+  // THE COUNT, not the citations. See `RankedGroup`: a timeline that summed its
+  // citation arrays would report the busiest hour as 200 and every other hour as
+  // fewer, which is a chart of the sampling policy rather than of the file.
+  const counts = entries.map(([, v]) => v.count);
   const countedRows = counts.reduce((s, n) => s + n, 0);
   const buckets = counts.length;
   const meanPerHour = buckets === 0 ? 0 : countedRows / buckets;
@@ -998,7 +1070,7 @@ function hourlyProfile(hours: Map<string, { error: number; rows: number[] }>): H
   const insufficient = buckets < MIN_HOUR_BUCKETS;
 
   const hours2 = entries.map(([key, v]): HourStat => {
-    const count = v.rows.length;
+    const count = v.count;
     const multiple = meanPerHour > 0 ? count / meanPerHour : null;
     const isSpike = !insufficient && multiple !== null && multiple > SPIKE_MULTIPLE;
     return {
@@ -1043,20 +1115,49 @@ export function analyseBottlenecks(
   const thresholdCol = chosen.threshold;
   const aliasCol = chosen.alias;
 
-  const sources = new Map<string, { error: number; rows: number[] }>();
-  const signatures = new Map<string, { error: number; rows: number[] }>();
-  const hours = new Map<string, { error: number; rows: number[] }>();
+  const sources = new Map<string, RankedGroup>();
+  const signatures = new Map<string, RankedGroup>();
+  const hours = new Map<string, RankedGroup>();
   const unreadable: number[] = [];
-  const bands: { limit: number; label: string; rows: number[] }[] = [
-    { limit: 50, label: "<50ms", rows: [] },
-    { limit: 200, label: "50-200ms", rows: [] },
-    { limit: 1000, label: "200ms-1s", rows: [] },
-    { limit: Infinity, label: ">1s", rows: [] },
+  const bands: { limit: number; label: string; rows: number[]; count: number }[] = [
+    { limit: 50, label: "<50ms", rows: [], count: 0 },
+    { limit: 200, label: "50-200ms", rows: [], count: 0 },
+    { limit: 1000, label: "200ms-1s", rows: [], count: 0 },
+    { limit: Infinity, label: ">1s", rows: [], count: 0 },
   ];
 
   let errorRows = 0;
 
   const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[]; loggers: Set<string>; durations: number[] }>();
+
+  /**
+   * HOW MANY DISTINCT CATEGORY KEYS ARE TRACKED.
+   *
+   * The rankings are Maps, and a Map grows with the number of DISTINCT VALUES --
+   * so a `category` column holding a million different strings would hold a
+   * million entries, which is the memory wall again wearing a different hat.
+   *
+   * 256 is not a tight budget, it is a generous one: it is exact for every real
+   * categorical column this product meets (`alertType`, `channel`, `region`,
+   * `status` -- dozens, not hundreds). Past it the rarest key is dropped and the
+   * analysis records that it did, because a ranking that quietly omits a key is
+   * the silent-partial-answer bug this codebase has paid for twice.
+   */
+  const MAX_CATEGORY_KEYS = 256;
+  let droppedCategoryKeys = 0;
+  const boundCategories = (): void => {
+    if (categories.size <= MAX_CATEGORY_KEYS) return;
+    let smallestKey = "";
+    let smallest = Number.POSITIVE_INFINITY;
+    for (const [key, value] of categories) {
+      if (value.count < smallest) {
+        smallest = value.count;
+        smallestKey = key;
+      }
+    }
+    categories.delete(smallestKey);
+    droppedCategoryKeys += 1;
+  };
 
   let naiveTimestamps = 0;
   let timestampRows = 0;
@@ -1066,28 +1167,40 @@ export function analyseBottlenecks(
   // as host-relative, which is the opposite error and just as misleading.
   const HAS_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
-  csv.rows.forEach((row, index) => {
-    // +2: sample rows start after the header, and the row numbers a reader sees
-    // are file line numbers. Getting this wrong would cite the wrong evidence.
-    const rowNumber = index + 2;
-    const status = statusCol === undefined ? "" : String(row[statusCol] ?? "");
+  /**
+   * ONE ROW, INTO EVERY ACCUMULATOR. The single implementation both drivers use.
+   *
+   * The in-memory driver and the streaming driver differ ONLY in where the row
+   * came from. Everything that decides what a row MEANS -- whether it is an
+   * error, which hour it belongs to, whether its duration breached the threshold
+   * -- is written once, here, so a 500,000-row file and a 400-row file cannot
+   * reach different conclusions about the same row.
+   *
+   * It takes a GETTER rather than an object for a reason that only shows up at
+   * scale: building a `Record<string, string>` for half a million rows would
+   * allocate half a million short-lived objects, which is precisely the GC churn
+   * the streaming rewrite exists to avoid. A closure over a cell array allocates
+   * once per row and nothing that survives it.
+   */
+  const takeRow = (get: (column: string) => string, rowNumber: number): void => {
+    const status = statusCol === undefined ? "" : get(statusCol);
     const error = statusCol === undefined ? false : isError(status);
     if (error) errorRows += 1;
 
-    if (sourceCol !== undefined) bucket(sources, String(row[sourceCol] ?? "(none)"), error, rowNumber);
+    if (sourceCol !== undefined) bucket(sources, get(sourceCol) || "(none)", error, rowNumber);
 
     if (rawCol !== undefined && error) {
-      const signature = errorSignature(String(row[rawCol] ?? ""));
+      const signature = errorSignature(get(rawCol));
       if (signature !== undefined) bucket(signatures, signature, true, rowNumber);
     }
 
     if (timeCol !== undefined) {
-      const raw = String(row[timeCol] ?? "");
+      const raw = get(timeCol);
       timestampRows += 1;
       if (NAIVE_TIME.test(raw.trim()) && !HAS_ZONE.test(raw.trim())) naiveTimestamps += 1;
       const instant = parseInstant(raw);
       if (instant === undefined) {
-        unreadable.push(rowNumber);
+        if (unreadable.length < MAX_CITATIONS) unreadable.push(rowNumber);
       } else {
         const hour = new Date(instant).toISOString().slice(0, 13);
         bucket(hours, hour, error, rowNumber);
@@ -1095,10 +1208,14 @@ export function analyseBottlenecks(
     }
 
     if (latencyCol !== undefined) {
-      const duration = Number(String(row[latencyCol] ?? ""));
+      const duration = Number(get(latencyCol));
       if (Number.isFinite(duration)) {
         for (const band of bands) {
-          if (duration < band.limit) { band.rows.push(rowNumber); break; }
+          if (duration < band.limit) {
+            band.count += 1;
+            if (band.rows.length < MAX_CITATIONS) band.rows.push(rowNumber);
+            break;
+          }
         }
       }
     }
@@ -1107,36 +1224,83 @@ export function analyseBottlenecks(
     // time, because the two orderings routinely disagree and the owner's
     // question asks for both.
     if (categoryCol !== undefined) {
-      const key = String(row[categoryCol] ?? "(none)");
+      const key = get(categoryCol) || "(none)";
       const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [], loggers: new Set<string>(), durations: [] };
-      const raw = latencyCol === undefined ? "" : String(row[latencyCol] ?? "").trim();
       // A BLANK IS NOT A ZERO. `Number("")` is 0 and `Number(" ")` is 0, so the
       // obvious parse silently invents a measurement: a row with no duration was
       // being counted as a row that took 0 ms, which drags the mean down and
       // quietly asserts the work was free. An unparseable cell is therefore NOT
       // MEASURED, and it is excluded from the total and from all three measures
       // alike -- one branch, so the four can never disagree about the sample.
+      const raw = latencyCol === undefined ? "" : get(latencyCol).trim();
       const rawDuration = raw.length === 0 ? Number.NaN : Number(raw);
       // One branch, so the total and the three measures can never disagree about
       // which rows were measured. A blank or non-numeric duration is skipped
       // entirely rather than folded in as a zero.
       if (entry.elapsed !== null && Number.isFinite(rawDuration)) {
         entry.elapsed += rawDuration;
-        entry.durations.push(rawDuration);
+        // DURATIONS ARE SAMPLED, the total is not. The mean and the median are
+        // computed from a bounded window so a category with 400,000 rows cannot
+        // hold 400,000 numbers, while `elapsed` stays exact over every row.
+        if (entry.durations.length < MAX_DURATIONS_PER_KEY) entry.durations.push(rawDuration);
       }
       if (thresholdCol !== undefined && Number.isFinite(rawDuration)
-        && Number(String(row[thresholdCol] ?? Number.NaN)) < rawDuration) {
+        && Number(get(thresholdCol)) < rawDuration) {
         entry.breach += 1;
       }
       entry.count += 1;
-      entry.rows.push(rowNumber);
+      if (entry.rows.length < MAX_CITATIONS) entry.rows.push(rowNumber);
       if (aliasCol !== undefined) {
-        const logger = String(row[aliasCol] ?? "").trim();
-        if (logger.length > 0) entry.loggers.add(logger);
+        const logger = get(aliasCol).trim();
+        if (logger.length > 0 && entry.loggers.size < MAX_LOGGERS_PER_KEY) entry.loggers.add(logger);
       }
       categories.set(key, entry);
     }
-  });
+    // The distinct-key budget, enforced per row rather than in a final sweep, so
+    // the Map never exceeds its cap even transiently.
+    boundCategories();
+  };
+
+  // === THE TWO DRIVERS, AND WHY THE SECOND ONE EXISTS ===
+  //
+  // When the retained window holds the whole file -- which is every file under
+  // 10,000 rows, and every file anybody opens in a browser -- the rows are
+  // already in memory and are read from there. Nothing changes for them.
+  //
+  // When it does not, the same `takeRow` is driven by a SECOND STREAMING PASS
+  // over the file. That is the whole of the fix: the rankings and the timeline
+  // now describe every row instead of the first ten thousand, and they do it
+  // through the identical per-row logic rather than a parallel implementation
+  // that would agree until somebody edited one.
+  //
+  // The pass costs I/O and no memory. Every accumulator it feeds is bounded --
+  // citations capped, durations capped, distinct keys capped -- so a 500,000-row
+  // file costs the same footprint as a 50,000-row one.
+  const windowIsWholeFile = csv.rows.length >= (csv.profile?.rowCount ?? csv.rows.length);
+  let categorisedRows = csv.rows.length;
+  if (windowIsWholeFile) {
+    csv.rows.forEach((row, index) => {
+      // +2: body rows start after the header, and the row numbers a reader sees
+      // are file line numbers. Getting this wrong would cite the wrong evidence.
+      takeRow((column) => String(row[column] ?? ""), index + 2);
+    });
+  } else {
+    // The column positions, resolved ONCE rather than per row: a Map lookup per
+    // column beats an indexOf scan per column, and this runs half a million times.
+    const position = new Map(csv.headers.map((header, index) => [header, index]));
+    let seenHeader = false;
+    streamCsvRecordsSync(csv.path, (cells, line) => {
+      if (!seenHeader) {
+        seenHeader = true;
+        return;
+      }
+      takeRow((column) => {
+        const index = position.get(column);
+        return index === undefined ? "" : cells[index] ?? "";
+      }, line);
+    });
+    categorisedRows = csv.profile?.rowCount ?? csv.rows.length;
+  }
 
   // `rows`, NEVER `sample`. The sample is capped for charting; analysing it
   // would report a confident answer about a fraction of the export, with
@@ -1192,7 +1356,22 @@ export function analyseBottlenecks(
     : null;
 
   const numeric = numericalProfile(csv);
-  const total = csv.rows.length;
+  // THE ROWS THE RANKINGS ACTUALLY COVER. Not `csv.rows.length`: that is the
+  // retained window, and on a file larger than it the window is a fraction of the
+  // file. A product that claims 500,000 rows and then ranks ten thousand of them
+  // is describing a different export from the one the user opened.
+  const total = categorisedRows;
+
+  // THE SCOPE, PUBLISHED. See `RankingScope`: the caps that make a whole-file
+  // ranking affordable are only honest if the answer says when they were reached.
+  const rankingScope: RankingScope = {
+    rowsRanked: total,
+    fileRows: csv.profile?.rowCount ?? csv.rows.length,
+    viaStreamingPass: !windowIsWholeFile,
+    categoryKeysTracked: categories.size,
+    droppedCategoryKeys,
+    categoryKeyBudget: MAX_CATEGORY_KEYS,
+  };
   // PEGA VOCABULARY IS EARNED, NEVER DEFAULTED. "Alert" and "threshold" appear
   // only when a mapping a PERSON checked is actually being applied. Three states
   // exist and only two were ever legitimate:
@@ -1240,12 +1419,13 @@ export function analyseBottlenecks(
     errorRows,
     errorRate: total === 0 ? 0 : errorRows / total,
     bySource: rank(sources),
+    rankingScope,
     recurring: rank(signatures),
     byHour: rank(hours),
     hourly: hourlyProfile(hours),
     numerical: numeric.numerical,
     health: numeric.health,
-    latency: bands.filter((b) => b.rows.length > 0).map((b) => ({ label: b.label, count: b.rows.length, rows: b.rows })),
+    latency: bands.filter((b) => b.count > 0).map((b) => ({ label: b.label, count: b.count, rows: b.rows })),
     unreadableTimestamps: unreadable,
     problems: csv.problems,
     mappings,

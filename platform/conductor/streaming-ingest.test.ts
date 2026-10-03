@@ -204,6 +204,97 @@ test("THE OUTLIER COUNT IS EXACT even when the fences were estimated", async (t)
   await rm(file, { force: true });
 });
 
+test("THE RANKINGS AND THE TIMELINE COVER EVERY ROW, not the retained window", async (t) => {
+  // The property Phase 11 exists to establish, stated as a test rather than as a
+  // claim in a commit message.
+  //
+  // The reader keeps 10,000 rows in memory because some parts of this product
+  // genuinely need records. The RANKINGS do not -- they need counts -- and for one
+  // release they were being computed from that window anyway. So a 60,000-row
+  // export was described as 10,000 rows, with its busiest hours, its top
+  // categories and its error rate all silently drawn from the first sixth of the
+  // file. A product that claims a row count and then ranks a fraction of it is
+  // describing a different export from the one the user opened.
+  const cwd = await makeTempWorkspace("nf-truescale-");
+  const file = path.join(cwd, "scale.csv");
+  const ROWS = 60_000;
+  const CATEGORIES = ["login", "checkout", "search", "payment"];
+
+  const out = createWriteStream(file, { encoding: "utf8", highWaterMark: 1 << 20 });
+  out.write("_time,source,status,_raw,alertType,elapsed_ms,threshold\n");
+  for (let start = 0; start < ROWS; start += 5_000) {
+    let chunk = "";
+    for (let i = start; i < Math.min(start + 5_000, ROWS); i += 1) {
+      const hour = String(i % 24).padStart(2, "0");
+      const day = String((i % 28) + 1).padStart(2, "0");
+      chunk += `2026-09-${day}T${hour}:00:00Z,svc-${i % 500},500,ERROR failure ${i % 9},`
+        + `${CATEGORIES[i % 4]},${100 + (i % 900)},1000\n`;
+    }
+    if (!out.write(chunk)) await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+  }
+  await new Promise<void>((resolve, reject) => {
+    out.end((error?: Error | null) => (error ? reject(error) : resolve()));
+  });
+
+  const csv = await csvRead({ path: file });
+  assert.equal(csv.rows.length, 10_000, "the window stays capped -- the whole point of Phase 10");
+
+  const analysis = analyseBottlenecks(csv);
+  const categorySum = analysis.categories.reduce((sum, c) => sum + c.count, 0);
+  const hourSum = analysis.hourly.hours.reduce((sum, h) => sum + h.count, 0);
+  const sourceSum = analysis.bySource.reduce((sum, b) => sum + b.count, 0);
+
+  t.diagnostic(`rows ${analysis.totalRows} | categories ${categorySum} | hours ${hourSum} | sources ${sourceSum}`);
+
+  assert.equal(analysis.totalRows, ROWS, "the analysis says how many rows the FILE has");
+  for (const [label, sum] of [["categorical", categorySum], ["hourly", hourSum], ["source", sourceSum]] as const) {
+    assert.equal(sum, ROWS,
+      `the ${label} ranking must account for every row, not the 10,000 the window kept; it accounts for ${sum}`);
+    assert.ok(sum > 10_000,
+      `and the ${label} ranking must visibly exceed the old window, or this test proves nothing about scale`);
+  }
+
+  assert.equal(analysis.rankingScope.droppedCategoryKeys, 0,
+    "four real categories are far inside the key budget, so nothing may be dropped");
+  assert.equal(analysis.rankingScope.viaStreamingPass, true,
+    "and this file is only reachable through the streaming pass");
+});
+
+test("a DROPPED category key is announced rather than silently absent", async () => {
+  // The bound that makes a whole-file ranking affordable is only honest if hitting
+  // it is visible. A ranking that quietly omits a key reads as complete, which is
+  // the silent-partial-answer failure this codebase has already paid for twice.
+  const cwd = await makeTempWorkspace("nf-evicted-");
+  const file = path.join(cwd, "many-keys.csv");
+  // More distinct categories than the 256-key budget, each seen enough times to
+  // be a real category and few enough that the tail is provably the dropped part.
+  const KEYS = 400;
+  const out = createWriteStream(file, { encoding: "utf8" });
+  out.write("_time,alertType\n");
+  for (let i = 0; i < KEYS; i += 1) {
+    if (!out.write(`2026-09-30T00:00:00Z,code-${String(i).padStart(4, "0")}\n`)) {
+      await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+    }
+  }
+  await new Promise<void>((resolve, reject) => out.end((error?: Error | null) => (error ? reject(error) : resolve())));
+
+  const csv = await csvRead({ path: file });
+  const analysis = analyseBottlenecks(csv);
+  const scope = analysis.rankingScope;
+  assert.ok(scope.categoryKeysTracked <= scope.categoryKeyBudget,
+    `the key budget must hold; ${scope.categoryKeysTracked} keys tracked against a budget of ${scope.categoryKeyBudget}`);
+  assert.ok(scope.droppedCategoryKeys > 0,
+    "400 distinct categories cannot fit in 256 slots, so the bound must have fired");
+  assert.ok(scope.categoryKeysTracked + scope.droppedCategoryKeys <= KEYS + 1,
+    "and the accounting must add up to what the file contained");
+
+  // AND IT REACHES THE READER, which is the only part that makes the bound honest.
+  const { toBottleneckMarkdown } = await import("./bottleneck-report.ts");
+  const markdown = toBottleneckMarkdown(analysis, "Evicted");
+  assert.match(markdown, /category key\(s\) were dropped/,
+    "a dropped key must be stated in the report, not merely counted in a field nobody renders");
+});
+
 test("the reservoir is BOUNDED, which is the whole claim", async () => {
   const cwd = await makeTempWorkspace("nf-reservoir-");
   const file = path.join(cwd, "huge.csv");

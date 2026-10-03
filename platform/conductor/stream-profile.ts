@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 
 /**
  * STREAMING PROFILING. The memory wall, and the arithmetic that goes through it.
@@ -232,6 +234,228 @@ export function percentileSorted(sorted: readonly number[], p: number): number {
  * the streamed path and the in-memory path are the SAME code rather than two
  * implementations that agree until somebody edits one.
  */
+/** Line numbers kept per key. A convenience, so a sample is the honest budget. */
+export const MAX_CITATIONS = 200;
+
+/** Durations kept per key, for the median and the p95. */
+export const MAX_DURATIONS = 2048;
+
+/** Distinct aliases kept per key. */
+export const MAX_LOGGERS = 64;
+
+/** Distinct hourly buckets kept before the timeline starts dropping hours. */
+export const MAX_HOUR_KEYS = 20_000;
+
+/**
+ * A KEY, with everything the report needs about it, in bounded memory.
+ *
+ * Citations and durations are the two things that made a full-file ranking
+ * impossible: every row used to push its line number into its category's `rows`
+ * array and its duration into `durations`, so a category with 400,000 rows held
+ * 400,000 line numbers -- and the report cites them. So both are now SAMPLED,
+ * while the COUNT beside them stays exact and unbounded.
+ *
+ * That distinction is the whole trick. "How many rows are in this category" must
+ * be a measurement; "which lines should I look at" is a convenience, and a
+ * convenience that costs a million array slots is not one worth keeping.
+ */
+export interface KeyedAggregate {
+  readonly key: string;
+  /** EXACT, over every row the stream saw. */
+  readonly count: number;
+  readonly errors: number;
+  /** The total of the measured durations. Exact. */
+  readonly sum: number;
+  /** Durations, capped, for the median and the p95. */
+  readonly durations: readonly number[];
+  /** Line numbers, capped, for the report's citations. */
+  readonly rows: readonly number[];
+  /** Distinct aliases, capped. */
+  readonly loggers: readonly string[];
+  /** How many rows exceeded the threshold, when one was supplied. */
+  readonly breaches: number;
+}
+
+/**
+ * SPACE-SAVING WITH A PAYLOAD, keyed by a string.
+ *
+ * `HeavyHitters` above tracks counts, which is all the reader needs. The analyser
+ * needs counts AND errors AND elapsed time AND citations per key, and needs them
+ * while streaming. So this carries the payload in the same bounded table: K keys,
+ * each holding a fixed budget of numbers and line references.
+ *
+ * THE ACCURACY CLAIM, stated because it is not free. While the file has K or
+ * fewer distinct keys every count here is EXACT -- which is every real categorical
+ * column: `alertType`, `channel`, `region`, `status`. Beyond K the eviction is
+ * Space-Saving's: a key arriving when the table is full takes the slot of the
+ * smallest counter and starts from that counter's value, so a reported count
+ * over-counts by at most the number of evictions. `approximate` says which regime
+ * the numbers are in, and it is published to the report rather than left for the
+ * reader to guess.
+ */
+export class KeyedAggregator {
+  private readonly keys: Map<string, {
+    count: number;
+    errors: number;
+    sum: number;
+    breaches: number;
+    durations: number[];
+    rows: number[];
+    loggers: Set<string>;
+  }> = new Map();
+  private evicted = false;
+  private readonly capacity: number;
+  private readonly citationCap: number;
+  private readonly durationCap: number;
+  private readonly loggerCap: number;
+
+  constructor(options: {
+    readonly capacity?: number;
+    readonly citations?: number;
+    readonly durations?: number;
+    readonly loggers?: number;
+  } = {}) {
+    this.capacity = options.capacity ?? HEAVY_HITTERS;
+    this.citationCap = options.citations ?? MAX_CITATIONS;
+    this.durationCap = options.durations ?? MAX_DURATIONS;
+    this.loggerCap = options.loggers ?? MAX_LOGGERS;
+  }
+
+  /** True once a key has been evicted, so the counts are Space-Saving estimates. */
+  get approximate(): boolean {
+    return this.evicted;
+  }
+
+  get size(): number {
+    return this.keys.size;
+  }
+
+  add(key: string, options: {
+    readonly row?: number;
+    readonly duration?: number | null;
+    readonly isError?: boolean;
+    readonly breach?: boolean;
+    readonly logger?: string | null;
+  } = {}): void {
+    let entry = this.keys.get(key);
+    if (entry === undefined) {
+      if (this.keys.size >= this.capacity) {
+        // Evict the smallest counter and INHERIT its value, which is what makes a
+        // reported count an over-estimate bounded by the evictions rather than an
+        // under-estimate that silently loses rows.
+        let smallestKey = "";
+        let smallest = Number.POSITIVE_INFINITY;
+        for (const [k, v] of this.keys) {
+          if (v.count < smallest) {
+            smallest = v.count;
+            smallestKey = k;
+          }
+        }
+        const victim = this.keys.get(smallestKey);
+        this.keys.delete(smallestKey);
+        entry = {
+          count: victim?.count ?? 0,
+          errors: victim?.errors ?? 0,
+          sum: victim?.sum ?? 0,
+          breaches: victim?.breaches ?? 0,
+          durations: [],
+          rows: [],
+          loggers: new Set<string>(),
+        };
+        this.evicted = true;
+      }
+      entry = { count: 0, errors: 0, sum: 0, breaches: 0, durations: [], rows: [], loggers: new Set<string>() };
+      this.keys.set(key, entry);
+    }
+    entry.count += 1;
+    if (options.isError === true) entry.errors += 1;
+    if (options.breach === true) entry.breaches += 1;
+    if (typeof options.duration === "number" && Number.isFinite(options.duration)) {
+      entry.sum += options.duration;
+      if (entry.durations.length < this.durationCap) entry.durations.push(options.duration);
+    }
+    if (typeof options.row === "number" && entry.rows.length < this.citationCap) entry.rows.push(options.row);
+    const logger = options.logger;
+    if (typeof logger === "string" && logger.length > 0 && entry.loggers.size < this.loggerCap) {
+      entry.loggers.add(logger);
+    }
+  }
+
+  entries(): KeyedAggregate[] {
+    return [...this.keys.entries()]
+      .map(([key, v]) => ({
+        key,
+        count: v.count,
+        errors: v.errors,
+        sum: v.sum,
+        breaches: v.breaches,
+        durations: [...v.durations].sort((a, b) => a - b),
+        rows: [...v.rows].sort((a, b) => a - b),
+        loggers: [...v.loggers],
+      }));
+  }
+
+  /** The aliases of one key, for the ambiguity check. Empty when it was evicted. */
+  loggersOf(key: string): readonly string[] {
+    const entry = this.keys.get(key);
+    return entry === undefined ? [] : [...entry.loggers];
+  }
+}
+
+/**
+ * A KEYED HOUR COUNTER, which is deliberately NOT Space-Saving.
+ *
+ * Space-Saving keeps the busiest K keys, which is right for a ranking of
+ * categories and catastrophic for a TIMELINE: dropping an hour from the middle of
+ * a day leaves a hole in the chart and makes the spike test compare a real bucket
+ * against a mean computed without it. So every hour is kept, up to a cap high
+ * enough to cover years (20,000 hours is about 2.3 years) and each one costs ONE
+ * number.
+ */
+export class HourlyCounter {
+  private readonly counts = new Map<string, { count: number; errors: number; rows: number[] }>();
+  private overflowed = 0;
+  private readonly keyCap: number;
+  private readonly citationCap: number;
+
+  constructor(options: { readonly keys?: number; readonly citations?: number } = {}) {
+    this.keyCap = options.keys ?? MAX_HOUR_KEYS;
+    this.citationCap = options.citations ?? MAX_CITATIONS;
+  }
+
+  add(hour: string, isError: boolean, row: number): void {
+    let entry = this.counts.get(hour);
+    if (entry === undefined) {
+      // Past the cap the extra hours are COUNTED but not kept, and the analysis is
+      // told the timeline was truncated rather than being handed a chart with
+      // silent holes in it.
+      if (this.counts.size >= this.keyCap) {
+        this.overflowed += 1;
+        return;
+      }
+      entry = { count: 0, errors: 0, rows: [] };
+      this.counts.set(hour, entry);
+    }
+    entry.count += 1;
+    if (isError) entry.errors += 1;
+    if (entry.rows.length < this.citationCap) entry.rows.push(row);
+  }
+
+  /** Hours past the cap: counted, not charted. Zero unless the file spans years. */
+  get dropped(): number {
+    return this.overflowed;
+  }
+
+  entries(): { hour: string; count: number; errors: number; rows: readonly number[] }[] {
+    return [...this.counts.entries()].map(([hour, v]) => ({ hour, ...v, rows: [...v.rows] }));
+  }
+}
+
+/**
+ * A fence summary. The same eight numbers the analyser has always reported, so
+ * the streamed path and the in-memory path are the SAME code rather than two
+ * implementations that agree until somebody edits one.
+ */
 export interface FenceSummary {
   readonly outliers: number;
   readonly low: number | null;
@@ -387,6 +611,154 @@ export async function resolveOutliers(
   return out;
 }
 
+/** Called once per complete record, with the cells and the line it started on. */
+export type CsvRecordSink = (cells: string[], line: number) => void;
+
+/**
+ * THE PARSER, as a state machine with no I/O in it.
+ *
+ * It exists so that the asynchronous reader and the SYNCHRONOUS one run the same
+ * rules. The synchronous driver was added because `analyseBottlenecks` is called
+ * synchronously from a dozen places -- the Conductor, the web server, every
+ * test -- and turning it async to accommodate a streaming pass would have rippled
+ * through all of them. So the reader grew a second driver rather than the
+ * analyser growing a second parser, and this class is the proof that there is
+ * only one.
+ *
+ * Feed it decoded text with `write`, then `end`. Records are handed to the sink
+ * the moment they complete, so the peak holding is one record plus the chunk
+ * being consumed.
+ */
+export class CsvTokenizer {
+  private field = "";
+  private row: string[] = [];
+  private inQuotes = false;
+  private afterQuote = false;
+  private line = 1;
+  private records = 0;
+  private readonly sink: CsvRecordSink;
+  private readonly note: (message: string) => void;
+
+  // Not parameter properties: this repository runs on Node's strip-only type
+  // erasure, which cannot erase them. A green typecheck and a module that will
+  // not load is the worst of both worlds, and it has already cost this codebase
+  // one full debug cycle.
+  constructor(sink: CsvRecordSink, note: (message: string) => void) {
+    this.sink = sink;
+    this.note = note;
+  }
+
+  /** How many records have been emitted, header included. */
+  get count(): number {
+    return this.records;
+  }
+
+  private emit(atLine: number): void {
+    this.row.push(this.field);
+    this.field = "";
+    const cells = this.row;
+    this.row = [];
+    this.records += 1;
+    this.sink(cells, atLine);
+  }
+
+  write(chunk: string): void {
+    for (let i = 0; i < chunk.length; i += 1) {
+      const ch = chunk[i];
+      if (this.inQuotes) {
+        if (this.afterQuote) {
+          this.afterQuote = false;
+          // Two quotes in a row are one literal quote inside the field.
+          if (ch === '"') {
+            this.field += '"';
+            continue;
+          }
+          this.inQuotes = false;
+          // and fall through: this character is OUTSIDE the quoted field.
+        } else {
+          if (ch === '"') {
+            this.afterQuote = true;
+            continue;
+          }
+          if (ch === "\n") this.line += 1;
+          this.field += ch;
+          continue;
+        }
+      }
+      if (ch === '"') {
+        if (this.field.length > 0) this.note(`line ${this.line}: a quote appeared mid-field`);
+        this.inQuotes = true;
+        continue;
+      }
+      if (ch === ",") {
+        this.row.push(this.field);
+        this.field = "";
+        continue;
+      }
+      if (ch === "\r") continue;
+      if (ch === "\n") {
+        // A blank line is not a record. The conventional final newline on a file
+        // must not manufacture a row of one empty value against a twelve-column
+        // header, which is what a real export once did.
+        if (this.row.length > 0 || this.field.length > 0) this.emit(this.line);
+        this.row = [];
+        this.field = "";
+        this.line += 1;
+        continue;
+      }
+      this.field += ch;
+    }
+  }
+
+  end(): void {
+    if (this.inQuotes && !this.afterQuote) this.note("the file ends inside a quoted field");
+    if (this.row.length > 0 || this.field.length > 0) this.emit(this.line);
+  }
+}
+
+/**
+ * READ A CSV AS A STREAM OF RECORDS, synchronously.
+ *
+ * `readSync` in a loop over a fixed buffer: bounded memory, no promise, and it
+ * blocks only for as long as the file takes to read -- which is the same work the
+ * asynchronous reader does, minus the scheduling. Decoding goes through a
+ * `StringDecoder`, so a multi-byte character split across a chunk boundary is
+ * still one character.
+ *
+ * The cost worth naming: it blocks the event loop for the duration of the file.
+ * That is acceptable here because the caller is a synchronous analysis that
+ * would have occupied the thread anyway, and it is NOT acceptable for a server
+ * request -- which is why the asynchronous reader is what the web path uses.
+ */
+export function streamCsvRecordsSync(
+  file: string,
+  onRecord: CsvRecordSink,
+  options: { readonly problems?: string[]; readonly maxProblems?: number } = {},
+): void {
+  const problems = options.problems ?? [];
+  const maxProblems = options.maxProblems ?? MAX_PROBLEMS;
+  const tokenizer = new CsvTokenizer(onRecord, (message) => {
+    if (problems.length < maxProblems) problems.push(message);
+  });
+
+  const fd = openSync(file, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const decoder = new StringDecoder("utf8");
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read <= 0) break;
+      tokenizer.write(decoder.write(buffer.subarray(0, read)));
+    }
+    tokenizer.write(decoder.end());
+    tokenizer.end();
+  } finally {
+    // ALWAYS closed, including on a throw from the sink. A leaked descriptor on a
+    // 500,000-row file is an EMFILE for the rest of the process's life.
+    closeSync(fd);
+  }
+}
+
 /** One record as it comes off the stream: the cells, and the FILE line it started on. */
 export interface StreamRecord {
   readonly cells: string[];
@@ -415,90 +787,28 @@ export interface StreamOutcome {
  * that are not records, a final record with no terminator, and a file that ends
  * inside a quoted field.
  *
- * `onRecord` may be async; the stream is not read faster than it is consumed,
- * which is what keeps the backpressure honest.
+ * `onRecord` is called synchronously, once per record, as each one completes. The
+ * stream is consumed one chunk at a time, so at most one chunk of records is ever
+ * live; the sink must not retain the `cells` array it is handed.
  */
 export async function streamCsvRecords(
   file: string,
-  onRecord: (record: StreamRecord) => void | Promise<void>,
+  onRecord: CsvRecordSink,
   options: { readonly problems?: string[]; readonly maxProblems?: number } = {},
 ): Promise<StreamOutcome> {
   const problems = options.problems ?? [];
   const maxProblems = options.maxProblems ?? MAX_PROBLEMS;
-  const note = (message: string): void => {
+  // THE SAME PARSER as the synchronous driver. One implementation of the rules,
+  // not two that agree until somebody edits one.
+  const tokenizer = new CsvTokenizer(onRecord, (message) => {
     if (problems.length < maxProblems) problems.push(message);
-  };
-
-  let field = "";
-  let row: string[] = [];
-  let inQuotes = false;
-  let afterQuote = false;
-  let line = 1;
-  let records = 0;
-
-  const emit = async (atLine: number): Promise<void> => {
-    row.push(field);
-    field = "";
-    const record = { cells: row, line: atLine };
-    row = [];
-    records += 1;
-    await onRecord(record);
-  };
+  });
 
   const stream = createReadStream(file, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  for await (const chunk of stream as AsyncIterable<string>) tokenizer.write(chunk);
+  tokenizer.end();
 
-  for await (const chunk of stream as AsyncIterable<string>) {
-    for (let i = 0; i < chunk.length; i += 1) {
-      const ch = chunk[i];
-      if (inQuotes) {
-        if (afterQuote) {
-          afterQuote = false;
-          // Two quotes in a row are one literal quote inside the field.
-          if (ch === '"') {
-            field += '"';
-            continue;
-          }
-          inQuotes = false;
-          // and fall through: this character is OUTSIDE the quoted field.
-        } else {
-          if (ch === '"') {
-            afterQuote = true;
-            continue;
-          }
-          if (ch === "\n") line += 1;
-          field += ch;
-          continue;
-        }
-      }
-      if (ch === '"') {
-        if (field.length > 0) note(`line ${line}: a quote appeared mid-field`);
-        inQuotes = true;
-        continue;
-      }
-      if (ch === ",") {
-        row.push(field);
-        field = "";
-        continue;
-      }
-      if (ch === "\r") continue;
-      if (ch === "\n") {
-        // A blank line is not a record. The conventional final newline on a file
-        // must not manufacture a row of one empty value against a twelve-column
-        // header, which is what a real export once did.
-        if (row.length > 0 || field.length > 0) await emit(line);
-        row = [];
-        field = "";
-        line += 1;
-        continue;
-      }
-      field += ch;
-    }
-  }
-
-  if (inQuotes && !afterQuote) note("the file ends inside a quoted field");
-  if (row.length > 0 || field.length > 0) await emit(line);
-
-  return { records, problems };
+  return { records: tokenizer.count, problems };
 }
 
 /** Everything one column has learned, in a form an analysis can read. */
@@ -771,18 +1081,18 @@ export async function countBeyondFences(
   if (wanted.size === 0) return out;
 
   let header: string[] | undefined;
-  await streamCsvRecords(file, (record) => {
+  await streamCsvRecords(file, (cells, line) => {
     // THE FIRST RECORD IS THE HEADER. Reading it as data would put column names
     // into the outlier counts, which is how a column of text gets reported as
     // being full of extreme values.
     if (header === undefined) {
-      header = record.cells.map((cell) => cell.trim());
+      header = cells.map((cell) => cell.trim());
       return;
     }
     for (const [, fence] of wanted) {
       const index = header.indexOf(fence.column);
       if (index < 0) continue;
-      const raw = (record.cells[index] ?? "").trim();
+      const raw = (cells[index] ?? "").trim();
       if (raw.length === 0) continue;
       const value = Number(raw);
       if (!Number.isFinite(value)) continue;

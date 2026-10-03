@@ -575,6 +575,36 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Anal
   const provenance: string[] = [];
   const vocab = analysis.vocabulary;
 
+  /**
+   * WHEN A BOUND WAS REACHED, SAY SO.
+   *
+   * Every ranking accumulator is capped, so a ranking can end up being a ranking
+   * of the most frequent keys rather than of all of them. That is a fact about
+   * the ANSWER, and an answer that quietly dropped rows reads as complete -- which
+   * is the silent-partial-answer failure this codebase has already paid for
+   * twice. So it is stated, in the report itself, in the numbers.
+   *
+   * Gated, not always-on: both conditions are false for every ordinary file, so
+   * this block costs a reader nothing until it has something to say.
+   */
+  const scope = analysis.rankingScope;
+  if (scope.droppedCategoryKeys > 0) {
+    provenance.push(
+      `> [!WARNING]`,
+      `> **${scope.droppedCategoryKeys} category key(s) were dropped** from the ranking, which tracks the ${scope.categoryKeyBudget} most frequent of ${scope.categoryKeysTracked + scope.droppedCategoryKeys} seen. The ranking below is a ranking of the most frequent categories, not of all of them.`,
+    );
+  }
+  if (scope.viaStreamingPass) {
+    // NOT a warning. Both routes rank every row, and a note that implied
+    // otherwise would teach the reader to distrust correct numbers. It is here
+    // because the reader holds a bounded window and a reader who found that
+    // window would reasonably wonder what the report did with the rows outside
+    // it -- so the answer is stated before the question is asked.
+    provenance.push(
+      `> The rankings below cover all ${scope.fileRows.toLocaleString("en-US")} rows of the file. The reader holds a bounded window of records and ranks the remainder as it streams, so the charts describe the whole export rather than its first ten thousand rows.`,
+    );
+  }
+
   // THE EXECUTIVE SUMMARY LEADS, above the row count.
   //
   // Placement is the whole argument. A reader who reads the first paragraph and
