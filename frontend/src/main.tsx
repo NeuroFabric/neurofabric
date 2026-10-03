@@ -1,55 +1,43 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { App } from "./App";
-import { GatewayClient } from "./api/gateway-client";
-import { SchemaStore } from "./store/SchemaStore";
-import { simulateVerdict } from "./api/live-contracts";
+import { Root } from "./Root";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles.css";
 
 /**
- * THE BOOT SEQUENCE.
+ * THE MOUNT POINT.
  *
- * Three objects, constructed here and nowhere else: the transport, the store,
- * and the app. That is the whole composition root, and it is worth being small:
- * every dependency is visible in one screen, so nothing can be imported from
- * somewhere that decides to make its own client.
+ * Three lines of real work, and that is deliberate. The previous version of this
+ * file constructed the gateway client at module scope, so with no credential
+ * configured the constructor threw BEFORE React existed -- no tree, no boundary,
+ * no handler in a position to catch it, and the operator got a blank page.
  *
- * === WHERE THE GATEWAY CREDENTIAL COMES FROM ===
+ * Now nothing is constructed here that can fail on missing configuration. The
+ * credential is read, checked, and handed to `Root`, which renders either the
+ * prompt or a working app. `ErrorBoundary` sits OUTSIDE `Root` so it also covers
+ * Root's own render -- the point of a boundary is the part nobody anticipated.
  *
- * Read from the environment at boot and handed to the client, and never written
- * into a bundle, a source file, or this repository. In a real deployment the
- * sign-in step issues it to the browser; here the variable is the stand-in for
- * that step.
- *
- * The empty-string fallback is deliberate and it is NOT a default credential.
- * `GatewayClient` refuses to be constructed with a blank token, so an
- * unconfigured deployment fails loudly at boot, on this line, naming the reason.
- * What it must never do is start up in a working-looking state that fails every
- * request -- a page that renders and then shows a wall of 401s is much harder to
- * diagnose than a page that refuses to start.
+ * `StrictMode` stays: it only finds bugs while the tree is small, which is the
+ * only time finding them is cheap.
  */
-const gatewayToken = import.meta.env.VITE_GATEWAY_TOKEN ?? "";
-
-const client = new GatewayClient({ gatewayToken });
-const store = new SchemaStore();
-
 const container = document.getElementById("root");
+
+// Loudly, at boot, rather than as a blank page. `index.html` owns this id, so a
+// rename there and a stale selector here would otherwise fail as "the app does
+// not work" with no reason attached.
 if (container === null) {
   throw new Error("index.html must provide #root for the command center to mount into");
 }
 
+const environmentToken = import.meta.env.VITE_GATEWAY_TOKEN;
+
 createRoot(container).render(
   <StrictMode>
-    <App
-      store={store}
-      source={client}
-      // Synthetic, and labelled as such wherever it renders. No backend endpoint
-      // reports a live verdict or a throughput rate yet; `simulateVerdict` exists
-      // so the telemetry views have something to exercise, and it can never be
-      // mistaken for a measurement because every view is required to banner it.
-      verdict={simulateVerdict(1, 250_000)}
-      tenantHint={gatewayToken === "" ? "" : "gateway configured"}
-    />
+    <ErrorBoundary title="The command center could not start">
+      {/* An empty or absent variable falls through to session storage and then to
+          the prompt. It is never passed on blank. */}
+      <Root environmentToken={environmentToken} />
+    </ErrorBoundary>
   </StrictMode>,
 );

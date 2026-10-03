@@ -187,3 +187,39 @@ button:hover { border-color: var(--accent); }
 .topkeys li { margin-bottom: 0.15rem; }
 .ruleset { margin-bottom: 1rem; }
 .dashboard__head { margin-bottom: 0.5rem; }
+
+/* ---- THE GATE: CREDENTIAL PROMPT AND ERROR FALLBACK ---- */
+
+/*
+ * Both are centred on the page rather than living in the normal app shell. They
+ * are full-page states: there is no command center behind them, and rendering
+ * them inside a half-drawn dashboard would imply there is.
+ */
+.gate { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; }
+
+.gate__card {
+  width: min(460px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.75rem;
+}
+.gate__card--error { border-left: 3px solid var(--critical); }
+
+.gate__field { display: grid; gap: 0.35rem; margin: 1.1rem 0 0.75rem; }
+.gate__field span { font-size: 0.85rem; color: var(--muted); }
+
+.gate__input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  /* The credential is never spellchecked or autocapitalised. */
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.gate__submit { width: 100%; padding: 0.55rem; }
+.gate__error { color: var(--bad); font-size: 0.875rem; margin: 0.5rem 0; overflow-wrap: anywhere; }
+.gate__note { font-size: 0.8rem; margin: 0.9rem 0 0; }
