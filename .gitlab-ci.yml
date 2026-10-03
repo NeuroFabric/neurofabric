@@ -121,6 +121,25 @@ typecheck:
 # anything, and the script needs no credentials or network.
 measure-wrappers:
   stage: verify
+  # LINUX ONLY, AND THE FIRST PIPELINE RUN IS WHAT PROVED IT.
+  #
+  # Every job in this file is `npm ci` plus an npm script, which runs anywhere
+  # node does. This one is not: it probes `printf`, `env`, `nice`, `stdbuf` and
+  # `nohup`, and asserts specific exit codes for each (125 for a bad `stdbuf`
+  # mode, 0 for a good one). None of those commands exists on Windows, so on the
+  # Windows runner every probe fails and the job reports a WRAPPER REGRESSION that
+  # is not a regression -- it is the wrong operating system.
+  #
+  # `$CI_OS_NAME` is GitLab's own predefined platform variable, so this asks the
+  # platform rather than inferring it. The job is therefore SKIPPED on Windows
+  # rather than failed, which is the honest outcome: the wrapper table still
+  # needs re-deriving on POSIX, and until a Linux runner exists that check has
+  # not run. It is not evidence, and it must not be read as a green.
+  #
+  # Until a Linux runner is registered this job never executes, which is the
+  # state the header above already described for the whole pipeline.
+  rules:
+    - if: '$CI_OS_NAME == "linux"'
   script:
     - node verification/measure-command-wrappers.mjs
 

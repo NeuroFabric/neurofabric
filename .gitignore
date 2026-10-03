@@ -3,6 +3,19 @@
 .env.*
 !.env.example
 
+# GitLab Runner registration material. These appear in the repository root the
+# moment an operator registers a runner, and they are NOT ignored by default.
+#
+# `config.toml` holds the runner authentication token IN PLAINTEXT. It is untracked,
+# but "untracked" is not a control -- one `git add -A` commits a credential that
+# authenticates every job on the runner. This is the same failure the repository's
+# own policy guard refuses on the write side, arriving through a different door.
+#
+# `.runner_system_id` is the runner's identity; harmless alone, but it is part of
+# the same registration pair and is ignored for the same reason.
+config.toml
+.runner_system_id
+
 # Dependencies
 node_modules/
 venv/
