@@ -1,22 +1,36 @@
 /*
- * THE ONLY STYLESHEET IN THE WORKSPACE, AND IT IS ALMOST EMPTY ON PURPOSE.
+ * THE COMMAND CENTER STYLESHEET.
  *
- * "No heavy charting libraries yet" was the directive, and the equivalent for
- * layout is: no CSS framework yet. A utility framework would arrive as several
- * hundred kilobytes of class names, define a visual language before anyone has
- * seen a single screen, and be load-bearing by the time the design exists. The
- * grid is a design decision that needs the design first.
+ * Hand-written CSS, no framework. The brief allowed Tailwind "whatever is
+ * initialized"; nothing was initialized, and adding a utility framework now
+ * would mean several hundred kilobytes of class names, a visual language decided
+ * before anyone has looked at a screen, and a dependency that is load-bearing by
+ * the time the design exists. This file is the design system: twelve rules for
+ * colour, two for spacing, and everything else composes.
  *
- * What is here is a reset and the two colours. Nothing here decides how the
- * command center should look; it only stops the browser's defaults from making
- * an unstyled page look accidentally broken.
+ * The palette is three inks and one accent on a near-black ground. A dark
+ * command centre earns its dark from long sessions and dense data, and the
+ * accent is reserved for "look here" -- so it appears on breaches and on
+ * nothing else. An accent used decoratively stops meaning anything.
  */
 
 :root {
-  /* The one decision made so far: a near-black ground with a light ink. */
-  --ground: #0f1115;
-  --ink: #e6e8eb;
-  --muted: #8b929c;
+  --ground: #0d0f13;
+  --panel: #151920;
+  --panel-2: #1c212a;
+  --line: #262c37;
+  --ink: #e7eaee;
+  --muted: #8b93a1;
+  --accent: #5aa9ff;
+
+  /* Severity. Named, not numbered, so a colour is never chosen by index. */
+  --bad: #ff6b6b;
+  --warn: #ffb454;
+  --good: #58d6a0;
+  --critical: #ff4d6d;
+
+  --radius: 10px;
+  --gap: 1rem;
 
   color-scheme: dark;
 }
@@ -31,21 +45,145 @@ body {
   margin: 0;
   background: var(--ground);
   color: var(--ink);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-main {
-  padding: 2rem;
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  color: var(--accent);
 }
 
-h1 {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem;
+h1 { font-size: 1.1rem; font-weight: 650; margin: 0; }
+h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.25rem; }
+h3 { font-size: 0.8rem; font-weight: 600; margin: 1.75rem 0 0.6rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+h4 { font-size: 0.85rem; font-weight: 600; margin: 1rem 0 0.4rem; }
+
+p { margin: 0 0 0.5rem; }
+.muted { color: var(--muted); }
+.bad { color: var(--bad); }
+.good { color: var(--good); }
+.warn { color: var(--warn); }
+
+/* ---- SHELL ---- */
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.app__bar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--gap);
+  padding: 0.9rem 1.4rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
 }
 
-p {
-  color: var(--muted);
-  margin: 0;
+.app__actions { display: flex; align-items: center; gap: 0.6rem; }
+
+.app__select { padding: 0.9rem 1.4rem; border-bottom: 1px solid var(--line); background: var(--panel); }
+
+.app__main {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 1.4rem;
+  padding: 1.4rem;
+  align-items: start;
 }
+
+/* One breakpoint, not a scale. Below it the side column stacks, which is the
+   only reflow this layout genuinely needs; a second breakpoint would be
+   responsive design by superstition. */
+@media (max-width: 900px) {
+  .app__main { grid-template-columns: minmax(0, 1fr); }
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- SURFACES ---- */
+
+.card {
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+}
+
+.card--alert { border-left: 3px solid var(--line); }
+.card__head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+
+.grid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.stack { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--gap); }
+
+/* ---- KEY/VALUE ---- */
+
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.15rem 0.8rem; margin: 0; font-size: 0.9rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kv--wide { margin: 0.5rem 0 1rem; }
+
+/* ---- TABLES ---- */
+
+.table { width: 100%; border-collapse: collapse; font-size: 0.875rem; margin-bottom: 0.75rem; }
+.table th, .table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.table tbody tr:hover { background: var(--panel); }
+.table td code { overflow-wrap: anywhere; }
+
+/* ---- INDICATORS ---- */
+
+.pill {
+  display: inline-block; font-size: 0.7rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 0.1rem 0.45rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+}
+.pill--ready, .pill--info, .pill--idle { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.pill--stub, .pill--warning, .pill--loading, .pill--degraded { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.pill--critical, .pill--server, .pill--refused { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, var(--line)); }
+.pill--metric, .pill--table, .pill--chart, .pill--feed { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot--ready { background: var(--good); }
+.dot--stub { background: var(--warn); }
+
+/* ---- BANNERS ---- */
+
+.banner {
+  border-radius: var(--radius); padding: 0.75rem 1rem; margin: 0.75rem 0;
+  border: 1px solid var(--line); background: var(--panel); font-size: 0.9rem;
+}
+.banner ul { margin: 0.5rem 0 0; padding-left: 1.1rem; }
+.banner--warn { border-left: 3px solid var(--warn); }
+.banner--error { border-left: 3px solid var(--critical); }
+
+/* ---- THRESHOLD BAR ---- */
+
+.threshold { display: inline-flex; align-items: center; gap: 0.5rem; }
+.threshold__track { width: 72px; height: 6px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; flex: none; }
+.threshold__fill { display: block; height: 100%; background: var(--good); }
+.threshold__fill--breached { background: var(--bad); }
+.threshold__label { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+
+/* ---- SELECTOR ---- */
+
+.selector { display: inline-flex; align-items: center; gap: 0.6rem; }
+.selector__label { font-size: 0.85rem; color: var(--muted); }
+.selector__input {
+  font: inherit; color: var(--ink); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 0.35rem 0.6rem; min-width: 260px;
+}
+
+.topkeys { margin: 0; padding-left: 1.2rem; font-size: 0.875rem; }
+.topkeys li { margin-bottom: 0.15rem; }
+.ruleset { margin-bottom: 1rem; }
+.dashboard__head { margin-bottom: 0.5rem; }

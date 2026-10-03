@@ -58,6 +58,29 @@ function source(overrides: Partial<PortalSource> = {}): PortalSource {
   };
 }
 
+describe("unbound usage", () => {
+  it("supports being passed as a bare reference, which is what React does", async () => {
+    // `useSyncExternalStore` receives these unbound. Every unit test here called
+    // them WITH a receiver, so a store that broke under a bare reference stayed
+    // green until the first real component handed it to React.
+    const store = new SchemaStore();
+    const getState = store.getState;
+    const subscribe = store.subscribe;
+    expect(getState().status).toBe("idle");
+    const off = subscribe(() => {});
+    expect(typeof off).toBe("function");
+    off();
+  });
+
+  it("keeps a stable subscribe identity across renders", async () => {
+    // An unstable identity makes useSyncExternalStore resubscribe on every
+    // render, which can loop forever.
+    const store = new SchemaStore();
+    expect(store.subscribe).toBe(store.subscribe);
+    expect(store.getState).toBe(store.getState);
+  });
+});
+
 describe("initial state", () => {
   it("starts idle and empty", () => {
     const store = new SchemaStore();

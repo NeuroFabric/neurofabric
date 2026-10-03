@@ -155,11 +155,23 @@ export class SchemaStore {
   /** Monotonic counter; a response older than the current one is discarded. */
   #generation = 0;
 
-  getState(): UIConfig {
-    return this.#state;
-  }
+  /**
+   * BOUND ARROW PROPERTIES, NOT PROTOTYPE METHODS, and this is load-bearing.
+   *
+   * `useSyncExternalStore` receives these as bare function references. A
+   * prototype method passed unbound loses `this`, and every field here is a
+   * private one (`#state`, `#listeners`), so the unbound call throws
+   * "Cannot read properties of undefined". It rendered fine in every unit test
+   * because those all called `store.getState()` -- with the receiver attached --
+   * and failed only on the first real component to hand the reference to React.
+   *
+   * Arrow properties are also stable per instance, which is what
+   * `useSyncExternalStore` requires: an unstable subscribe identity would
+   * resubscribe on every render and can loop.
+   */
+  getState = (): UIConfig => this.#state;
 
-  subscribe(listener: Listener): () => void {
+  subscribe = (listener: Listener): (() => void) => {
     this.#listeners.add(listener);
     return () => {
       // Idempotent by construction: `Set.delete` on an absent member is a no-op,
@@ -167,7 +179,7 @@ export class SchemaStore {
       // cannot corrupt anything or throw.
       this.#listeners.delete(listener);
     };
-  }
+  };
 
   /**
    * Notify every listener, isolating failures.
