@@ -4,10 +4,15 @@ import assert from "node:assert/strict";
 import { createGateway } from "./omniroute-gateway.ts";
 import {
   authenticate,
+  describeVault,
+  environmentVault,
+  filteredVault,
   guard,
   httpResponse,
   issueToken,
+  loadTokens,
   readCredential,
+  staticVault,
   CREDENTIAL_HEADER,
   type EdgeRequest,
   type GatewayToken,
@@ -204,4 +209,161 @@ test("readCredential IGNORES AN EMPTY OR WHITESPACE HEADER", () => {
   assert.equal(readCredential(request({ [CREDENTIAL_HEADER]: "" })), undefined);
   assert.equal(readCredential(request({ [CREDENTIAL_HEADER]: "   " })), undefined);
   assert.equal(readCredential(request({})), undefined);
+});
+
+/* ==================================================================== */
+/* THE VAULT: WHERE THE ACTIVE CREDENTIAL LIST COMES FROM               */
+/* ==================================================================== */
+
+/**
+ * A vault is never a hardcoded array in the repository.
+ *
+ * The properties worth pinning are the four rules in the vault section: read
+ * once, report rejections, refuse unknown fields, and treat empty as closed.
+ */
+
+test("AN ABSENT OR EMPTY VARIABLE MEANS NO CREDENTIALS, NOT AN ERROR", async () => {
+  assert.deepEqual(await loadTokens(environmentVault({})), []);
+  assert.deepEqual(await loadTokens(environmentVault({ NEUROFEBRIC_GATEWAY_TOKENS: "   " })), []);
+});
+
+test("AN ABSENT VARIABLE MEANS THE GATEWAY REFUSES EVERYTHING, NOT EVERYBODY", async () => {
+  // The direction matters more than the length of the list. Empty cannot admit a
+  // stranger; a permissive default could.
+  const tokens = await loadTokens(environmentVault({}));
+  assert.equal(guard(request(presented("anything-at-all")), tokens).ok, false);
+  assert.equal(guard(request(presented("anything-at-all")), tokens).status, 401);
+});
+
+test("THE VARIABLE MAY BE RENAMED, so a deployment is not tied to one name", async () => {
+  const vault = environmentVault(
+    { GATEWAY_TOKENS: '[{"id":"a","credential":"c","providers":["payments"]}]' },
+    "GATEWAY_TOKENS",
+  );
+  assert.equal((await loadTokens(vault)).length, 1);
+});
+
+test("A WELL-FORMED ENTRY LOADS AND ADMITS EXACTLY ITS SCOPE", async () => {
+  const vault = environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: JSON.stringify([
+      { id: "payments-token", credential: "value-1", providers: ["payments", "search"] },
+    ]),
+  });
+
+  const tokens = await loadTokens(vault);
+
+  assert.equal(tokens.length, 1);
+  assert.equal(guard(request(presented("value-1"), { provider: "payments" }), tokens).ok, true);
+  assert.equal(guard(request(presented("value-1"), { provider: "telemetry" }), tokens).status, 403);
+});
+
+test("A MALFORMED PARTNER DOES NOT TAKE THE OTHER PARTNERS DOWN", async () => {
+  // The alternative -- one bad entry invalidating the document -- means a typo in
+  // a manifest entry is a full ingress outage at the worst possible moment.
+  const vault = environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: JSON.stringify([
+      { id: "good", credential: "value-1", providers: ["payments"] },
+      { id: "bad" },
+      { id: "also-good", credential: "value-2", providers: ["search"] },
+    ]),
+  });
+
+  const tokens = await loadTokens(vault);
+
+  assert.deepEqual(tokens.map((t) => t.id), ["good", "also-good"]);
+  assert.equal(guard(request(presented("value-1"), { provider: "payments" }), tokens).ok, true);
+  assert.equal(guard(request(presented("value-2"), { provider: "search" }), tokens).ok, true);
+});
+
+test("A REJECTED ENTRY IS DESCRIBED BY INDEX AND REASON, AND NEVER BY ITS VALUE", async () => {
+  const snapshot = await environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: '[{"id":"a","credential":"do-not-log-me","providers":["payments"],"revoked":"yes"}]',
+  }).load();
+
+  assert.equal(snapshot.rejections.length, 1);
+  assert.equal(snapshot.rejections[0]?.index, 0);
+  assert.match(snapshot.rejections[0]?.reason ?? "", /revoked/);
+  assert.equal(JSON.stringify(snapshot.rejections).includes("do-not-log-me"), false);
+});
+
+test("AN UNRECOGNISED FIELD IS A TYPO, AND IS REFUSED RATHER THAN IGNORED", async () => {
+  // `provider` instead of `providers` would otherwise produce a perfectly
+  // well-formed credential that admits nobody, and the symptom is a partner
+  // being told their key is wrong.
+  const snapshot = await environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: '[{"id":"a","credential":"c","provider":["payments"]}]',
+  }).load();
+
+  assert.deepEqual(snapshot.tokens, []);
+  assert.match(snapshot.rejections[0]?.reason ?? "", /unrecognised field "provider"/);
+});
+
+test("A DOCUMENT THAT IS NOT JSON OR NOT AN ARRAY IS REFUSED AS A WHOLE", async () => {
+  const notJson = await environmentVault({ NEUROFEBRIC_GATEWAY_TOKENS: "nope" }).load();
+  const notArray = await environmentVault({ NEUROFEBRIC_GATEWAY_TOKENS: '{"id":"a"}' }).load();
+
+  assert.deepEqual(notJson.tokens, []);
+  assert.match(notJson.rejections[0]?.reason ?? "", /not valid JSON/);
+  assert.deepEqual(notArray.tokens, []);
+  assert.match(notArray.rejections[0]?.reason ?? "", /not an array/);
+});
+
+test("AN EMPTY PROVIDER LIST IS HELD, AND ADMITS NOBODY", async () => {
+  const vault = environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: '[{"id":"dormant","credential":"value-1","providers":[]}]',
+  });
+
+  const tokens = await loadTokens(vault);
+
+  assert.equal(tokens.length, 1, "a dormant credential is still provisioned");
+  assert.equal(guard(request(presented("value-1"), { provider: "payments" }), tokens).status, 403);
+});
+
+test("STRICT MODE REFUSES TO START rather than booting with part of the list", async () => {
+  const vault = environmentVault({ NEUROFEBRIC_GATEWAY_TOKENS: '[{"id":"bad"}]' });
+
+  await assert.rejects(() => loadTokens(vault, { strict: true }), /1 credential entry was rejected/);
+  // The permissive path is what a partial-provisioning deployment wants.
+  assert.deepEqual(await loadTokens(vault), []);
+});
+
+test("A VAULT IS READ ONCE, AND THE READ IS MEMOISED PER PROVIDER", async () => {
+  let reads = 0;
+  const counting = filteredVault(
+    staticVault([{ id: "a", credential: "c", providers: ["payments"] }]),
+    (snapshot) => { reads += 1; return snapshot; },
+  );
+
+  await loadTokens(counting);
+  await loadTokens(counting);
+  await loadTokens(counting);
+
+  assert.equal(reads, 1, "an environment read per request would be a syscall per event");
+});
+
+test("A FILTER MAY VETO THE WHOLE SNAPSHOT, WHICH IS THE EXTERNAL-STORE SEAM", async () => {
+  // A store that returned a truncated read is not a store that returned nothing,
+  // and the difference decides whether the gateway boots closed or open.
+  const truncated = filteredVault(staticVault([]), () => { throw new Error("store unavailable"); });
+
+  await assert.rejects(() => loadTokens(truncated), /store unavailable/);
+});
+
+test("THE DIAGNOSTIC NAMES THE SOURCE AND THE COUNT, AND NOTHING ELSE", async () => {
+  const snapshot = await environmentVault({
+    NEUROFEBRIC_GATEWAY_TOKENS: '[{"id":"a","credential":"value-1","providers":["payments"]},{"id":"b"}]',
+  }).load();
+
+  const described = describeVault(snapshot);
+
+  assert.match(described, /environment:NEUROFEBRIC_GATEWAY_TOKENS: 1 active/);
+  assert.match(described, /1 rejected/);
+  assert.equal(described.includes("value-1"), false);
+});
+
+test("AN ISSUED CREDENTIAL CAN BE PROVISIONED THROUGH A STATIC VAULT AND WORKS", async () => {
+  const issued = issueToken("fresh", ["payments"]);
+  const tokens = await loadTokens(staticVault([issued], "test-issuance"));
+
+  assert.equal(guard(request(presented(issued.credential)), tokens).ok, true);
 });

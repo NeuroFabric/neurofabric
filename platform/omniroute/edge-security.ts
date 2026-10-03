@@ -33,6 +33,16 @@ import { createHash, timingSafeEqual, randomBytes } from "node:crypto";
  *     because a broker that has already counted it has already paid for it -- and
  *     a flood of unverified events is a CPU attack whether or not it is stored.
  *
+ * === WHERE THE CREDENTIAL LIST COMES FROM ===
+ *
+ * The list used to be a hardcoded array, which meant the values that decide who
+ * may push events lived in the repository, in every fork of it, in every image
+ * built from it. So provisioning is now a `VaultProvider` -- an interface, so an
+ * environment variable in development and an external credential store in
+ * production are
+ * the same call site -- and the rules the loading obeys are stated where the
+ * loading is, not where the caller reads about them. See the vault section below.
+ *
  * === ONE HEADER, AND WHY ===
  *
  * A single dedicated header carries the value. A deployment that fronts this with
@@ -292,4 +302,263 @@ export function httpResponse(decision: EdgeDecision): {
     },
     headers,
   };
+}
+
+/* ==================================================================== */
+/* THE VAULT: WHERE THE ACTIVE CREDENTIAL LIST COMES FROM               */
+/* ==================================================================== */
+
+/**
+ * PROVISIONING, AS AN INTERFACE.
+ *
+ * === WHAT THIS REPLACES AND WHY AN INTERFACE RATHER THAN AN ENV READ ===
+ *
+ * The list was a hardcoded array. That is a specific and serious problem, not a
+ * tidiness one: the values that decide WHO MAY PUSH EVENTS lived in the
+ * repository, so they lived in every clone, every branch, every image built from
+ * it, and in the history of all of them. Rotating meant a code change, and a code
+ * change means a review, and a review is a place a credential ends up written
+ * down.
+ *
+ * So the list is loaded, not declared. The interface exists so that a deployment
+ * reading an environment variable and a deployment reading an external credential store
+ * are the SAME call site: the gateway asks a `VaultProvider` for tokens and never
+ * learns which one it got. A second provider is then a new file rather than a
+ * fork of the gateway.
+ *
+ * === FOUR RULES, EACH OF WHICH IS A FAILURE MODE ALREADY NAMED ===
+ *
+ *  1. READ ONCE, AT STARTUP. Not per request. An environment read on the hot
+ *     path is a syscall per event, and worse, it means a variable changed
+ *     mid-flight silently changes who is admitted -- a token that would have been
+ *     refused at 09:00 starts being honoured at 09:01 with nothing in the logs
+ *     to say why. `loadTokens` memoises, and rotation is therefore a restart,
+ *     which is a decision an operator can see they made.
+ *
+ *  2. A BAD ENTRY IS REPORTED, NEVER SILENTLY DROPPED. Dropping it is the safe
+ *     direction (the token simply does not exist) and it is also how a partner is
+ *     locked out at three in the morning with a configuration that LOOKS
+ *     correct. So every rejected entry is counted and described -- by index and
+ *     by reason, never by value -- and `strict` turns any rejection into a
+ *     thrown error for a deployment that would rather not start.
+ *
+ *  3. UNKNOWN KEYS ARE A REJECTION, NOT A PASS-THROUGH. A typo'd `provider`
+ *     would otherwise produce a well-formed credential that admits nobody, and
+ *     the symptom is a partner being refused with an error that says their key
+ *     is wrong. Failing on the typo is the only version that finds itself.
+ *
+ *  4. EMPTY IS NOT AN ERROR. A missing variable yields NO tokens, and no tokens
+ *     means this gateway refuses everything -- which is the direction
+ *     `GatewayOptions` already documents as the safe default. An environment
+ *     that fails to boot because nobody configured a partner is a platform that
+ *     is down, and being down is worse than being closed.
+ */
+
+/** The variable read when a caller does not name one. */
+export const DEFAULT_TOKEN_VARIABLE = "NEUROFEBRIC_GATEWAY_TOKENS";
+
+/** A provisioner. Two implementations ship; a third needs no change here. */
+export interface VaultProvider {
+  /** For logs and diagnostics. Names the SOURCE, never a value. */
+  readonly name: string;
+  load(): Promise<VaultSnapshot>;
+}
+
+/** An entry that was refused, described without describing its value. */
+export interface VaultRejection {
+  /** Position in the document, so an operator can find the offending entry. */
+  readonly index: number;
+  /** Why it was refused. Names the FIELD, never its content. */
+  readonly reason: string;
+}
+
+export interface VaultSnapshot {
+  readonly tokens: readonly GatewayToken[];
+  readonly rejections: readonly VaultRejection[];
+  /** ISO instant the values were read, so staleness is visible rather than assumed. */
+  readonly loadedAt: string;
+  readonly source: string;
+}
+
+/** The keys a provisionable entry may carry. Anything else is a typo, per rule 3. */
+const TOKEN_FIELDS = new Set(["id", "credential", "providers", "scope", "revoked"]);
+
+/**
+ * AN EMPTY LIST, WHICH MEANS "REFUSES EVERYTHING".
+ *
+ * Named so that every path which has nothing to offer returns the same honest
+ * value rather than inventing a permissive default. A vault that cannot read
+ * anything must not accidentally admit someone.
+ */
+function closedVault(source: string): VaultSnapshot {
+  return { tokens: [], rejections: [], loadedAt: new Date().toISOString(), source };
+}
+
+/**
+ * PARSE A DOCUMENT OF ENTRIES, REPORTING RATHER THAN DROPPING.
+ *
+ * Each entry is validated in its own right: one malformed partner does not
+ * invalidate the other partners, because the alternative is a single typo taking
+ * the entire ingress offline.
+ */
+export function parseTokenDocument(raw: string, source: string): VaultSnapshot {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {
+      tokens: [], rejections: [{ index: -1, reason: "the document is not valid JSON" }],
+      loadedAt: new Date().toISOString(), source,
+    };
+  }
+  if (!Array.isArray(parsed)) {
+    return {
+      tokens: [], rejections: [{ index: -1, reason: "the document is not an array of entries" }],
+      loadedAt: new Date().toISOString(), source,
+    };
+  }
+
+  const tokens: GatewayToken[] = [];
+  const rejections: VaultRejection[] = [];
+
+  parsed.forEach((entry, index) => {
+    const problem = validateEntry(entry);
+    if (problem !== undefined) {
+      rejections.push({ index, reason: problem });
+      return;
+    }
+    tokens.push(entry as GatewayToken);
+  });
+
+  return { tokens, rejections, loadedAt: new Date().toISOString(), source };
+}
+
+/** Why this entry is unusable, or undefined when it is fine. Names fields only. */
+function validateEntry(entry: unknown): string | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return "the entry is not an object";
+  }
+  const record = entry as Record<string, unknown>;
+
+  for (const field of Object.keys(record)) {
+    if (!TOKEN_FIELDS.has(field)) return `unrecognised field "${field}"`;
+  }
+  if (typeof record.id !== "string" || record.id.trim() === "") return "id is missing or empty";
+  if (typeof record.credential !== "string" || record.credential.trim() === "") {
+    return "credential is missing or empty";
+  }
+  if (!Array.isArray(record.providers)) return "providers must be a list of strings";
+  for (const provider of record.providers) {
+    // An EMPTY providers list is allowed and means none: `GatewayToken` documents
+    // it, and a credential that admits nobody is a legitimate thing to hold.
+    if (typeof provider !== "string" || provider.trim() === "") {
+      return "a provider name is empty or is not a string";
+    }
+  }
+  if (record.scope !== undefined && typeof record.scope !== "string") return "scope must be a string";
+  if (record.revoked !== undefined && typeof record.revoked !== "boolean") return "revoked must be a boolean";
+  return undefined;
+}
+
+/**
+ * THE ENVIRONMENT PROVISIONER.
+ *
+ * One variable holding a JSON array, because a per-token variable scheme means the
+ * credential list length is decided by whoever edited the deployment manifest,
+ * and adding a partner becomes a change to an infrastructure file.
+ */
+export function environmentVault(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  variable: string = DEFAULT_TOKEN_VARIABLE,
+): VaultProvider {
+  return {
+    name: `environment:${variable}`,
+    async load(): Promise<VaultSnapshot> {
+      const raw = env[variable];
+      if (raw === undefined || raw.trim() === "") return closedVault(`environment:${variable}`);
+      return parseTokenDocument(raw, `environment:${variable}`);
+    },
+  };
+}
+
+/**
+ * AN IN-MEMORY PROVISIONER, for tests and for programmatic issuance.
+ *
+ * It exists so that `issueToken` and a test do not need an environment, and so
+ * that a deployment which mints its own credentials can hand the result to the
+ * same call site. It is not a default: a caller has to choose it.
+ */
+export function staticVault(tokens: readonly GatewayToken[], name = "static"): VaultProvider {
+  return {
+    name,
+    async load(): Promise<VaultSnapshot> {
+      return { tokens: [...tokens], rejections: [], loadedAt: new Date().toISOString(), source: name };
+    },
+  };
+}
+
+/**
+ * A provisioner that DECORATES another, and can veto what it returns.
+ *
+ * This is the seam an external credential store plugs into: it reads through to the
+ * provider underneath, and its hook can reject the whole snapshot -- a store that
+ * returned a truncated read, for instance, is not a store that returned no
+ * entries, and the difference decides whether the gateway boots closed or open.
+ */
+export function filteredVault(
+  inner: VaultProvider,
+  check: (snapshot: VaultSnapshot) => VaultSnapshot | Promise<VaultSnapshot>,
+): VaultProvider {
+  return {
+    name: `${inner.name}+filtered`,
+    async load(): Promise<VaultSnapshot> {
+      return check(await inner.load());
+    },
+  };
+}
+
+/**
+ * ONE READ PER VAULT, AND THE ONLY WAY TO GET THE LIST.
+ *
+ * The memo table is keyed on the provider object, so two gateways sharing a vault
+ * share one read, and dropping the provider drops its cached values -- there is
+ * no module-level cache that outlives the thing it describes.
+ */
+const SNAPSHOTS = new WeakMap<VaultProvider, Promise<VaultSnapshot>>();
+
+/**
+ * LOAD THE ACTIVE LIST, ONCE.
+ *
+ * `strict` makes any rejected entry fatal. That is the right setting for a
+ * deployment whose manifest is expected to be correct and whose silence would be
+ * indistinguishable from success; the permissive setting is right for one that
+ * expects partial provisioning and reads the rejection count at startup.
+ */
+export async function loadTokens(
+  vault: VaultProvider,
+  options: { strict?: boolean } = {},
+): Promise<readonly GatewayToken[]> {
+  const existing = SNAPSHOTS.get(vault);
+  const pending = existing ?? vault.load();
+  if (existing === undefined) SNAPSHOTS.set(vault, pending);
+
+  const snapshot = await pending;
+  const rejected = snapshot.rejections;
+  if (options.strict === true && rejected.length > 0) {
+    // Thrown, not logged-and-continued: a start-up that cannot load what it was
+    // given should not proceed into a state where it refuses every partner.
+    throw new Error(
+      `${snapshot.source}: ${rejected.length} credential entr${rejected.length === 1 ? "y was" : "ies were"} rejected `
+      + rejected.map((rejection) => `[${rejection.index}] ${rejection.reason}`).join("; "),
+    );
+  }
+  return snapshot.tokens;
+}
+
+/** Diagnostics a caller can log at start-up. Carries no credential material. */
+export function describeVault(snapshot: VaultSnapshot): string {
+  const parts = [`${snapshot.source}: ${snapshot.tokens.length} active`];
+  if (snapshot.rejections.length > 0) parts.push(`${snapshot.rejections.length} rejected`);
+  parts.push(`read at ${snapshot.loadedAt}`);
+  return parts.join(", ");
 }
