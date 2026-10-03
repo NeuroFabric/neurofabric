@@ -3757,3 +3757,117 @@ because there has not been one.
 - D-036 — the recorded CDN debt, unchanged by V2.
 - `multivariate.test.ts` — the maths, and the naive-sigma comparison.
 - `v2-top-categories.test.ts` — the size sweep that proved there was no boundary.
+
+## D-039 — Egress, the credential vault, and a second agent contract beside the Conductor's
+
+**Date:** 2026-10-14
+**Stage:** 7 (Multi-agent platform)
+**Status:** Accepted
+**Affects:** `platform/egress/webhook-dispatcher.ts`, `platform/omniroute/edge-security.ts`, `platform/swarm/`, `platform/api/ui-routes.ts`, `Dockerfile`, `docker-compose.yml`, `package.json`
+
+### Context
+
+Three decisions in one epic, each of which forecloses an alternative that looks
+obvious until it is written down.
+
+### D-039.1 — Egress is a separate module, and it shares no rules with ingress
+
+Ingress fails by accepting something it should refuse; egress fails by omitting
+something it should send. A shared abstraction would have to pretend those are the
+same problem. Egress therefore has no caller to prove, so it presents no
+credential — and its failure mode is a silent blind spot, which is why **every
+attempt is returned** rather than logged and dropped, and why `delivered` counts
+endpoints rather than attempts.
+
+Retries are split into transient and permanent because lumping them is how a
+partner's outage becomes our load: a 4xx that is not transient is attempted once
+and reported, since retrying an identical refusal is a request to be ignored. A
+429 that states `Retry-After` outranks our own ladder.
+
+**Refused:** a durable outbox. Retry within a process is not a delivery
+guarantee, and the honest upgrade is an inspectable queue — a design decision, not
+a bug.
+
+### D-039.2 — Provisioning is a `VaultProvider`, loaded once at startup
+
+The gateway credential list was a hardcoded array, so the values deciding who may
+push events lived in the repository, and therefore in every clone, every branch
+and every image built from it. Provisioning is now an interface, so an environment
+variable in development and an external credential store in production are one
+call site.
+
+Four rules, each a named failure mode: **read once and memoise**, so a mid-flight
+change cannot silently alter who is admitted; **report a rejected entry by index
+and reason rather than dropping it**, because dropping it is safe *and* how a
+partner gets locked out against a manifest that looks correct; **refuse unknown
+fields**, so a typo cannot mint a well-formed credential that admits nobody; and
+**treat empty as closed**, because an environment that refuses to boot is a
+platform that is down.
+
+Values never appear in a rejection, a diagnostic or an error.
+
+### D-039.3 — `DiagnosticAgent` sits BESIDE `Subagent`, and does not replace it
+
+`Subagent` is a good contract for what it does: synchronous, question-shaped,
+returning one `Reply` the renderer already draws. It cannot carry an AML sweep or a
+supply-chain walk, because those are async, are selected by scope rather than by
+prompt, and produce findings with evidence rather than a widget.
+
+So there are two contracts. `fromSubagent` adapts the three existing Conductor
+agents, which means **no conductor code changed** — the refactor is the adapter.
+
+`evidence` is a required field, so an unverifiable claim is a type error rather
+than a review comment.
+
+### D-039.4 — A stub must not produce findings
+
+A stub answering "3 high-severity vulnerabilities" is a fabrication. It will be
+screenshotted, quoted in a status report and acted on. Each of the three
+specialists is therefore selectable by vocabulary and refuses with
+`status: "unavailable"`; the registry will not route to a stub unless a caller
+opts in, and even then the refusal is what comes back. An empty roster that says
+so is useful; a populated one that lies is worse than useless.
+
+### D-039.5 — The command center has no HTTP server in it
+
+`handle` is a function from (method, path, headers) to a response value, so the
+decisions are testable without a socket and the transport stays someone else's
+problem. All three routes prove the caller with the **same** `guard` and the same
+vault as the ingress: a route that validated credentials its own way would be a
+second control plane that drifts from the one under attack.
+
+An unknown path is 404ed *before* proof and does not name the routes, because
+naming them hands a stranger the reconnaissance this edge exists to prevent.
+
+`OmniRouteGateway.providerNames()` was added rather than recovering a name from a
+partition label such as `push:payments` — that is a prefix dependency on an
+internal detail, and it silently returns the wrong name the day a second prefix
+appears.
+
+### D-039.6 — The container's GC limits are a documented default, not a measurement
+
+`--max-old-space-size=256` against the existing 512 MiB container limit, so the
+bounded-memory claim in the streaming reader is enforced by the image rather than
+assumed. Deliberately half the container limit: the heap is only part of a
+process, and a cap at or above the kernel's buys an OOM kill with no runtime
+explanation.
+
+The Dockerfile was **appended to, not replaced** — its non-root user, read-only
+root contract and honest "never built" status are load-bearing. `docker-compose.yml`
+repeats the command so one deployment can raise the ceiling without a rebuild;
+both copies are verified identical.
+
+**Not verified:** no build and no load test, because Docker is unavailable in the
+authoring environment. The flag names and the resulting heap limit were verified
+against the local Node; the values are not benchmarked.
+
+### Cross-references
+
+- D-018 — zero runtime dependencies, so the egress dispatcher uses global `fetch`
+  and no new packages.
+- D-037 — the wedge declaration, whose non-root and loopback contract this
+  container inherits unchanged.
+- `webhook-dispatcher.test.ts` — the retry ladder, asserted without waiting.
+- `edge-security.test.ts` — the four vault rules.
+- `agent-registry.test.ts` — a stub that cannot be mistaken for a capability.
+- `ui-routes.test.ts` — proof before data, and 404 before proof.
