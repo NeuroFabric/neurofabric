@@ -41,7 +41,10 @@ coverage/
 
 !tests/fixtures/**/*.log
 .session-archive/
-OmniRoute/
+# Root-anchored: without the leading slash this also matched
+# platform/omniroute/, because git match-ignores case on Windows. That silently
+# dropped the entire Omniroute gateway from every commit that added it.
+/OmniRoute/
 .pi-tools/
 
 # Spent probe/epitaph files. These were kept because the deletion guard refused

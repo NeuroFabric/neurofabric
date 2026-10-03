@@ -26,9 +26,18 @@ import { OUTLIER_IQR_FACTOR, EXTREME_IQR_FACTOR } from "./stream-profile.ts";
  * not exist, and the number would change under the reader's feet.
  */
 
-/** One column's live standing. */
-export interface LiveColumnVerdict {
+/**
+ * ONE PARTITION'S VIEW OF ONE COLUMN -- before consolidation.
+ *
+ * Distinct from the verdict because the two answer different questions. A standing
+ * is a measurement; a verdict is a judgement across partitions. Collapsing them
+ * into one type is how a consolidated alert ends up claiming a partition it did
+ * not come from.
+ */
+export interface LiveColumnStanding {
   readonly column: string;
+  /** Which partition this standing came from. Empty for a consolidated verdict. */
+  readonly partition: string;
   readonly measured: number;
   readonly min: number | null;
   readonly max: number | null;
@@ -44,6 +53,29 @@ export interface LiveColumnVerdict {
   readonly extremeMultiple: number | null;
   /** True when the observed maximum is beyond the OUTER (3x) fence. */
   readonly breached: boolean;
+}
+
+/**
+ * ONE COLUMN, ACROSS EVERY PARTITION.
+ *
+ * The consolidated form: one sentence per column, carrying the worst standing and
+ * enough provenance to know what was folded into it.
+ */
+export interface LiveColumnVerdict extends Omit<LiveColumnStanding, "partition"> {
+  /**
+   * How many partitions contributed to this standing.
+   *
+   * Present because a consolidated verdict necessarily hides something: it reports
+   * ONE column standing when N partitions each have their own. An operator reading
+   * "latency_ms is 4x past its fence" needs to know whether that is one sick
+   * partition or all of them, and the answer changes what they do next -- restart a
+   * replica, or page the fleet.
+   */
+  readonly partitions: number;
+  /** Per-partition measured counts, so a consolidated alert can still be drilled into. */
+  readonly partitionColumns: Readonly<Record<string, number>>;
+  /** True when EVERY contributing partition breached, not merely one. */
+  readonly breachedEverywhere: boolean;
 }
 
 export interface LiveVerdict {
@@ -62,7 +94,7 @@ export interface LiveVerdict {
  * can be called on a timer, per request, or in a test, and the three agree.
  */
 export function evaluateLive(snapshot: BrokerSnapshot): LiveVerdict {
-  const columns: LiveColumnVerdict[] = [];
+  const columns: LiveColumnStanding[] = [];
   for (const partition of snapshot.partitions) {
     for (const [name, stats] of Object.entries(partition.columns)) {
       if (stats.measured < 2 || stats.q1 === null || stats.q3 === null) continue;
@@ -80,8 +112,11 @@ export function evaluateLive(snapshot: BrokerSnapshot): LiveVerdict {
       const extremeMultiple = breached && max !== null && span > 0
         ? (max - extremeUpper) / span
         : null;
+      // Partition is carried so a column seen in several places can be
+      // CONSOLIDATED below, rather than reported once per partition.
       columns.push({
         column: name,
+        partition: partition.name,
         measured: stats.measured,
         min: stats.min,
         max,
@@ -110,15 +145,83 @@ export function evaluateLive(snapshot: BrokerSnapshot): LiveVerdict {
     }, new Map<string, { key: string; count: number }>())
     .values();
 
+  const consolidated = consolidateColumns(columns);
   return {
     at: snapshot.at,
     records: snapshot.records,
     open: snapshot.open,
-    columns: columns.sort((a, b) => Number(b.breached) - Number(a.breached) || a.column.localeCompare(b.column)),
-    breachedColumns: columns.filter((column) => column.breached).length,
+    columns: consolidated.sort((a, b) => Number(b.breached) - Number(a.breached) || a.column.localeCompare(b.column)),
+    breachedColumns: consolidated.filter((column) => column.breached).length,
     busiestHour: busiest === undefined ? null : { hour: busiest[0], count: busiest[1] },
     topKeys: [...topKeys].sort((a, b) => b.count - a.count).slice(0, 10),
   };
+}
+
+/**
+ * ONE SENTENCE PER COLUMN, across every partition.
+ *
+ * === THE UX DEFECT THIS FIXES ===
+ *
+ * Columns are tracked PER PARTITION, so a stream split three ways reported
+ * `latency_ms` three times -- once per partition. On screen that reads as three
+ * independent problems, so an operator triages three things when there is one
+ * column to investigate, and the third line is dismissed as a duplicate of the
+ * first without ever being read.
+ *
+ * === WHICH STANDING SURVIVES, AND WHY IT IS NOT "THE FIRST" ===
+ *
+ * The WORST one, and "worst" is deliberately defined rather than picked:
+ *
+ *   - a breach outranks no breach. A column clean in two partitions and breached
+ *     in the third is a problem, and averaging that into "mostly fine" is how a
+ *     sick replica hides inside a healthy fleet;
+ *   - among breaches, the one FURTHEST past its outer fence wins, because that is
+ *     the one an operator should act on first;
+ *   - among non-breaches, the TIGHTEST interquartile spread wins, because that is
+ *     the partition most able to reveal the next anomaly -- the most sensitive
+ *     detector, not the most comfortable one.
+ *
+ * And the consolidation reports its own SCOPE: how many partitions contributed,
+ * their measured counts, and whether all of them breached. Collapsing three
+ * columns into one would be tidier and worse, because the reader would no longer
+ * be able to tell one sick replica from a sick fleet -- which is the difference
+ * between restarting a pod and paging someone.
+ */
+function consolidateColumns(standings: readonly LiveColumnStanding[]): LiveColumnVerdict[] {
+  const grouped = new Map<string, LiveColumnStanding[]>();
+  for (const standing of standings) {
+    const existing = grouped.get(standing.column);
+    if (existing === undefined) grouped.set(standing.column, [standing]);
+    else existing.push(standing);
+  }
+
+  const worse = (a: LiveColumnStanding, b: LiveColumnStanding): LiveColumnStanding => {
+    if (a.breached !== b.breached) return a.breached ? a : b;
+    if (a.breached) {
+      // Both are breached: the further past its fence wins, and a null multiple
+      // (a degenerate column whose spread is zero) never beats a real one.
+      return (a.extremeMultiple ?? -1) >= (b.extremeMultiple ?? -1) ? a : b;
+    }
+    // Neither breached: the tighter spread is the more sensitive detector.
+    const spreadA = (a.q3 ?? 0) - (a.q1 ?? 0);
+    const spreadB = (b.q3 ?? 0) - (b.q1 ?? 0);
+    return spreadA <= spreadB ? a : b;
+  };
+
+  const out: LiveColumnVerdict[] = [];
+  for (const [column, group] of grouped) {
+    const worst = group.reduce(worse);
+    const partitionColumns: Record<string, number> = {};
+    for (const standing of group) partitionColumns[standing.partition] = standing.measured;
+    const { partition: _winner, ...rest } = worst;
+    out.push({
+      ...rest,
+      partitions: group.length,
+      partitionColumns,
+      breachedEverywhere: group.every((standing) => standing.breached),
+    });
+  }
+  return out;
 }
 
 /**
