@@ -146,7 +146,71 @@ test("a schema POSTed over HTTP appears in the roster a later GET reads", async 
     const body = (await roster.json()) as { total: number; ready: number; agents: { id: string }[] };
     assert.equal(body.total, 1);
     assert.equal(body.ready, 1);
-    assert.equal(body.agents[0]?.id, "log-anomaly");
+    // THE COMPOSITE ID IS BUILT FROM THE CREDENTIAL, NOT TYPED IN.
+    //
+    // The registry namespaces by tenant -- `d221f3d` -- so a roster id is
+    // `acme/log-anomaly`. This assertion used to expect the bare id and has been
+    // failing since that change; it is not a behaviour that regressed, it is a
+    // literal that stopped describing the contract. Deriving it from
+    // `TENANT_TOKEN.id` means it cannot go stale against the id format again.
+    assert.equal(body.agents[0]?.id, `${TENANT_TOKEN.id}/log-anomaly`);
+  } finally {
+    await server.close();
+  }
+});
+
+test("the roster id is the one the schema route accepts, so the UI's round trip closes", async () => {
+  // THE DEFECT THIS FILE WAS POINTING AT, NOW STATED AS A CLAIM.
+  //
+  // The command center takes an id from the roster, puts it in a select, and
+  // sends it back to fetch that agent's schema. When the roster published
+  // composite ids and the schema route resolved only bare ones, that round trip
+  // was a 404 for every agent -- the UI listed an agent and could not open it.
+  // Measured before the fix:
+  //   GET /api/portal/schema/acme%2Flog-anomaly  ->  404
+  //   GET /api/portal/schema/log-anomaly         ->  200
+  const server = await harness();
+  try {
+    await call(server, "/api/portal/schema", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(VALID_SCHEMA),
+    });
+
+    const roster = (await (await call(server, "/api/portal/agents")).json()) as { agents: { id: string }[] };
+    const fromRoster = roster.agents[0]?.id ?? "";
+
+    // Sent exactly as the UI sends it: the roster's own value, encoded.
+    const composite = await call(server, `/api/portal/schema/${encodeURIComponent(fromRoster)}`);
+    assert.equal(composite.status, 200, "the id the roster publishes must be the id the schema route accepts");
+
+    // And the bare form still works, because a deep link may carry either.
+    const bare = await call(server, "/api/portal/schema/log-anomaly");
+    assert.equal(bare.status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a composite id naming ANOTHER tenant is a 404, never a 403", async () => {
+  // A 403 here would confirm the agent exists for somebody else, which turns this
+  // endpoint into an oracle for enumerating another customer's agent names. Not
+  // found and not permitted must be indistinguishable from outside.
+  const server = await harness();
+  try {
+    await call(server, "/api/portal/schema", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(VALID_SCHEMA),
+    });
+
+    const foreign = await call(server, "/api/portal/schema/globex%2Flog-anomaly");
+    assert.equal(foreign.status, 404);
+
+    const absent = await call(server, "/api/portal/schema/globex%2Fnever-registered");
+    // Byte-identical in status and body: the response must not leak existence.
+    assert.equal(foreign.status, absent.status);
+    assert.deepEqual(await foreign.json(), await absent.json());
   } finally {
     await server.close();
   }

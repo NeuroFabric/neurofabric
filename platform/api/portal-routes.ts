@@ -711,8 +711,35 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
     // export writes. Scoped to the caller, so a schema id another tenant happens
     // to use is not readable here -- it is not merely hidden by the URL, it is not
     // in this tenant's namespace at all.
+    //
+    // === BOTH ID FORMS, BECAUSE THE ROSTER PUBLISHES ONE AND THE UI SENDS IT ===
+    //
+    // `GET /api/portal/agents` publishes COMPOSITE ids -- `demo/log-anomaly` --
+    // and the command center puts that value in a select and sends it straight
+    // back here. Resolving it against the authenticated tenant produced
+    // `demo/demo/log-anomaly` and a 404 for every agent in the UI. Measured on a
+    // running wedge before this change:
+    //
+    //   GET /api/portal/schema/demo%2Flog-anomaly  ->  404
+    //   GET /api/portal/schema/log-anomaly         ->  200
+    //
+    // So a bare id and a composite id are both accepted. A composite id whose
+    // tenant is NOT the proven one is a 404, not a 403: it must be
+    // indistinguishable from an id nobody registered, or this endpoint becomes an
+    // oracle for asking whether another customer has an agent by that name.
+    //
+    // See docs/DECISIONS.md D-042.1 for why the roster does not simply publish
+    // bare ids instead.
     const id = decodeURIComponent(clean.slice(SCHEMA_PATH.length + 1));
-    const schema: AgentSchema | undefined = registry.schemaOf(tenant, id);
+    const separator = id.indexOf("/");
+    const schema: AgentSchema | undefined =
+      separator > 0
+        ? // Composite. The tenant in the path is HONOURED ONLY when it matches the
+          // proven one; otherwise the whole thing is treated as absent.
+          id.slice(0, separator) === tenant
+          ? registry.schemaOf(tenant, id.slice(separator + 1))
+          : undefined
+        : registry.schemaOf(tenant, id);
     if (schema === undefined) return json(404, { error: "no agent with that id is registered" });
     return json(200, { schema });
   }

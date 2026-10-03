@@ -4100,3 +4100,102 @@ rather than fixed inside an epic whose scope is explicitly no new features.
 - `dynamic-registry.test.ts` — the two inverted heuristic tests.
 - `scripts/demo.ts` — the end-to-end proof, which throws rather than reporting its
   own failure in passing prose.
+
+### D-042.1 — ROSTER IDS STAY TENANT-QUALIFIED; THE SCHEMA ROUTE MUST ACCEPT THEM
+
+**The question.** `GET /api/portal/agents` publishes `demo/log-anomaly`.
+`GET /api/portal/schema/:id` resolves `schemaOf(tenant, id)`, which builds
+`${tenant}/${id}` internally. So the id the roster hands out is **not** the id the
+schema route accepts, and the command center's own round trip is broken. Measured
+against a running wedge on the current tree:
+
+```
+GET /api/portal/agents                    ->  "id": "demo/log-anomaly"
+GET /api/portal/schema/demo%2Flog-anomaly  ->  404
+GET /api/portal/schema/log-anomaly         ->  200
+```
+
+**Decision: qualified ids stay. The route accepts them.**
+
+Two options were on the table. Publishing bare ids from the roster is simpler and
+would make the round trip work with no code change. It is refused for a reason
+that is not tidiness:
+
+**A bare id is not addressable.** The schema route resolves its tenant from the
+PROVEN CREDENTIAL, never from the request — that is `decision.tokenId`, and it is
+load-bearing (`portal-routes.ts`: "THE TENANT IS THE PROVEN TOKEN ID. Nothing in
+the request chose it"). If ids are bare, one id means different things to
+different callers, and the only thing keeping them apart is the credential behind
+each request. The moment any surface resolved a tenant FROM an id — a deep link,
+a bookmark, a roster cached from another session — the namespace opens. Qualified
+ids make the tenant visible at every hop, so a mismatch is a visible 404 rather
+than an invisible cross-tenant read.
+
+Reverting the composite id in `DynamicAgentRegistry` is refused for a second
+reason: it was a deliberate multi-tenancy change (`d221f3d`, alongside `49f7713`
+multi-tenant stream routing), and undoing it to make two stale tests pass would
+trade a correctness property for a convenience.
+
+**So the defect is on the route**, and it is fixed by accepting BOTH forms: a bare
+id resolves against the authenticated tenant, and a composite id resolves only
+when its tenant equals the authenticated tenant. A composite id naming another
+tenant is a **404, not a 403** — it must be indistinguishable from an id that does
+not exist, or this endpoint becomes an oracle for testing whether another
+customer has registered a given agent.
+
+### D-042.2 — VERSION REFLECTION IS REQUIRED; THE TEST WAS STALE, NOT THE BEHAVIOUR
+
+The failing assertion was `registry.get("financial-agent")?.version === "2.0.0"`,
+and `get` now takes `(tenant, id)` — so it returned `undefined`. Two readings: the
+behaviour was dropped, or the call was stale.
+
+The behaviour is intact and is **required**. `POST /api/portal/schema` answers
+`{ agent, replacedVersion }`, and `replacedVersion` exists to tell an author their
+upgrade replaced a prior version rather than creating a second agent. A portal
+that reflects only the first version cannot show that an upgrade happened. The
+assertion was written against the pre-`d221f3d` signature.
+
+**Derived, not literal**: the tests build the id from the same tenant string they
+provision the registry with, so they cannot go stale against an id format again.
+This is one lesson wearing four coats now — the port, the route count, the id
+format, and the version. **A literal in a test is a place the contract can change
+without the test noticing.**
+
+### D-042.3 — THE !78 GATE WAS HONEST. THE MERGE CHANGED THE RESULT.
+
+It was implied — and I briefly implied it — that the !78 gate was misreported,
+because `main` is red and a regular merge cannot change a tree. **That is right
+about the merge and wrong about the gate.** Measured:
+
+```
+259931c (Merge main into epic/ui-command-center-core) IS an ancestor of 0573ea0
+259931c is NOT an ancestor of 964032f   <- the !78 branch tip that was gated
+d221f3d (composite ids)    is NOT an ancestor of 964032f
+d221f3d                   IS an ancestor of 0573ea0
+```
+
+The gate ran on a tree that did not contain the composite-id change, was green,
+and was correct for what it ran. `main` went red when `259931c` brought `d221f3d`
+in, and no test was updated.
+
+**This is the CI argument in its sharpest form, and it is now evidence rather
+than an argument: a green gate on a pre-merge tree is not a gate on what ships.**
+The pipeline must run on the MERGED RESULT. Nothing was misreported; the
+measurement was of the wrong tree — which is exactly the mistake the absence of a
+runner makes invisible, because a developer gate runs before the merge that breaks
+it.
+
+**Correction to my own record, stated rather than quietly amended.** I wrote that
+route commits "landed after !78's branch was cut" and that `main` had grown "24
+commits". The 24 was measured from the old local `main` (`0265121`); the
+relationship that mattered was the merge `259931c`. Both numbers were real and
+neither was about the same thing. **State the merge-base whenever a commit count is
+cited.** That is now a standing reporting rule.
+
+### D-042.4 — A DECISION RECORD LANDS WITH ITS FIX, NOT AFTER
+
+These three sub-decisions and the code that implements them ship together. A
+record written after the change is a description of a change, and a description
+cannot be reviewed against what it describes. The cost is that this MR is larger
+than the bug — the bug is one branch in one handler, and the other half is the
+reason the next person will not reintroduce it.
