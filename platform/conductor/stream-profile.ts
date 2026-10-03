@@ -304,6 +304,7 @@ export class KeyedAggregator {
     loggers: Set<string>;
   }> = new Map();
   private evicted = false;
+  private evictionCount = 0;
   private readonly capacity: number;
   private readonly citationCap: number;
   private readonly durationCap: number;
@@ -324,6 +325,17 @@ export class KeyedAggregator {
   /** True once a key has been evicted, so the counts are Space-Saving estimates. */
   get approximate(): boolean {
     return this.evicted;
+  }
+
+  /**
+   * HOW MANY KEYS WERE EVICTED.
+   *
+   * The count, not a flag. "This ranking may be incomplete" is not something a
+   * user can act on; "17 of your 400 categories are not in this table" is. So the
+   * aggregator counts its own evictions and the report publishes the number.
+   */
+  get evictions(): number {
+    return this.evictionCount;
   }
 
   get size(): number {
@@ -358,14 +370,20 @@ export class KeyedAggregator {
           errors: victim?.errors ?? 0,
           sum: victim?.sum ?? 0,
           breaches: victim?.breaches ?? 0,
+          // NOT the victim's payload. The durations, citations and aliases belong
+          // to the key that was evicted; carrying them would attribute one
+          // category's evidence to another, which is worse than carrying none.
           durations: [],
           rows: [],
           loggers: new Set<string>(),
         };
+        this.keys.set(key, entry);
         this.evicted = true;
+        this.evictionCount += 1;
+      } else {
+        entry = { count: 0, errors: 0, sum: 0, breaches: 0, durations: [], rows: [], loggers: new Set<string>() };
+        this.keys.set(key, entry);
       }
-      entry = { count: 0, errors: 0, sum: 0, breaches: 0, durations: [], rows: [], loggers: new Set<string>() };
-      this.keys.set(key, entry);
     }
     entry.count += 1;
     if (options.isError === true) entry.errors += 1;

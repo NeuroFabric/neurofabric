@@ -4,7 +4,7 @@ import path from "node:path";
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
 import { titleFor, type Purpose } from "../conductor/semantics.ts";
-import { parseCsv, csvRead } from "../conductor/capabilities.ts";
+import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
@@ -107,22 +107,31 @@ export interface RunningWedge {
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 /**
- * Read the file a correction applies to.
+ * Read the file a route needs, THROUGH THE STREAMING READER.
  *
- * The headers are needed because a correction names a COLUMN, and the only way
- * to know whether that column exists is to hold the header row. A structurally
- * broken file yields undefined rather than a partial table: correcting a mapping
- * against a file the parser could not read would store a role for a shape that
- * is not there.
+ * This used to be a second reader: `readFile(absolute, "utf8")` followed by
+ * `parseCsv`, which meant the web layer held every byte of the export as one
+ * string and then rebuilt every row as an object. On the small files the tests use
+ * that is invisible. On the enterprise export this product is aimed at it is the
+ * difference between serving a request and being OOM-killed by one -- and the
+ * server is the worst place for that, because it is a long-lived process holding
+ * the heap for every OTHER request too.
+ *
+ * So it delegates to `csvRead`, which streams and retains a bounded window. The
+ * consolidation also removes a second implementation of the CSV rules from the
+ * web layer: a parser that answers differently from the reader the rest of the
+ * product uses is how a file becomes analysable by the CLI and unreadable by the
+ * dashboard.
+ *
+ * THE CONTRACT IS UNCHANGED. Undefined means "cannot be used", for every reason:
+ * unreadable, or structurally broken. Correcting a mapping against a file the
+ * parser could not read would store a role for a shape that is not there.
  */
 async function readCsvFor(absolute: string): Promise<CsvReadResult | undefined> {
-  const { readFile } = await import("node:fs/promises");
-  const text = await readFile(absolute, "utf8").catch(() => undefined);
-  if (text === undefined) return undefined;
-  const parsed = parseCsv(text);
-  if (parsed.problems.length > 0) return undefined;
-  const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return { path: absolute, headers: parsed.headers, rowCount: rows.length, columns: [], sample: rows.slice(0, 5), rows, problems: parsed.problems };
+  const csv = await csvRead({ path: absolute }).catch(() => undefined);
+  if (csv === undefined) return undefined;
+  if (csv.problems.length > 0) return undefined;
+  return csv;
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {

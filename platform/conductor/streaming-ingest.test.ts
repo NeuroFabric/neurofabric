@@ -7,7 +7,7 @@ import path from "node:path";
 import { csvRead } from "./capabilities.ts";
 import { analyseBottlenecks } from "./bottlenecks.ts";
 import { makeTempWorkspace } from "../test-support/temp-workspace.ts";
-import { RESERVOIR_SIZE } from "./stream-profile.ts";
+import { RESERVOIR_SIZE, KeyedAggregator } from "./stream-profile.ts";
 
 /**
  * THE MEMORY WALL, MEASURED.
@@ -202,6 +202,47 @@ test("THE OUTLIER COUNT IS EXACT even when the fences were estimated", async (t)
 
   t.diagnostic(`planted ${expectedBad} outliers in ${rows} rows, counted ${shot.outliers}`);
   await rm(file, { force: true });
+});
+
+test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", () => {
+  // This test exists because the implementation got it WRONG first.
+  //
+  // The eviction created an entry carrying the victim's count, and then -- one
+  // line later -- overwrote that entry with a fresh zeroed one. So the
+  // inheritance was dead code, and every evicted key reset to zero. The visible
+  // symptom was a 60,000-row file whose `bySource` ranking accounted for 256
+  // rows in total, which is not an approximation of the truth, it is the
+  // opposite of it.
+  //
+  // It survived every existing test because the bug needs BOTH conditions: a key
+  // budget that is exceeded AND a consumer that sums the counts. Every fixture in
+  // the suite has fewer distinct values than the budget.
+  const aggregator = new KeyedAggregator({ capacity: 8, citations: 5, durations: 5, loggers: 5 });
+  const ROWS = 400;
+  const KEYS = 100;
+  for (let i = 0; i < ROWS; i += 1) aggregator.add(`key-${i % KEYS}`, { row: i + 2, duration: i % 97 });
+
+  const entries = aggregator.entries();
+  assert.ok(entries.length <= 8, `the budget must hold; ${entries.length} keys tracked`);
+  assert.ok(aggregator.evictions > 0, "the budget must have been exceeded, or this test proves nothing");
+
+  // THE SHARP ASSERTION. Inheritance makes the tracked counts an OVER-estimate
+  // bounded by the evictions, so the sum can only grow past the rows offered.
+  // Without inheritance the sum collapses to roughly the table size -- the bug.
+  const sum = entries.reduce((total, e) => total + e.count, 0);
+  assert.ok(sum >= ROWS,
+    `the tracked counts must account for at least every row offered; got ${sum} of ${ROWS}. Counts that ` +
+    "collapse under eviction are not an approximation, they are a lie.");
+});
+
+test("a table that never overflows is EXACT, which is the case every fixture is", () => {
+  const aggregator = new KeyedAggregator({ capacity: 256 });
+  for (let i = 0; i < 100; i += 1) aggregator.add("only", { row: i + 2, duration: i });
+  const entries = aggregator.entries();
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.count, 100, "a real categorical column is counted exactly");
+  assert.equal(aggregator.evictions, 0, "and nothing is reported as dropped");
+  assert.equal(entries[0]!.rows.length, 100, "citations are bounded by the cap, not by the file");
 });
 
 test("THE RANKINGS AND THE TIMELINE COVER EVERY ROW, not the retained window", async (t) => {
