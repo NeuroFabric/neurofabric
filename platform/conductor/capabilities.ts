@@ -2,6 +2,9 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDescriptor } from "../core/types.ts";
 import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords } from "./stream-profile.ts";
+import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
+import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
+import { open, readFile } from "node:fs/promises";
 
 /**
  * The Stage 1 capability set: exactly two, because the acceptance scenario needs
@@ -67,7 +70,67 @@ const SAMPLE_ROWS = 50;
 const RETAINED_ROWS = MAX_ROWS_SCANNED;
 
 /**
- * READ A CSV AS A STREAM.
+ * THE FORMATS THIS READER ACCEPTS.
+ *
+ * A `.csv` was the only door into this product, which meant a DevSecOps team
+ * holding a JSONL telemetry feed or a pile of server logs had nothing to point
+ * it at. Omnivorosity is the fix, and the formats are recognised rather than
+ * declared because a file's name is a convention and its contents are evidence.
+ */
+export type DocumentFormat = "csv" | "jsonl" | "log";
+
+const FORMAT_BY_EXTENSION: Record<string, DocumentFormat> = {
+  ".jsonl": "jsonl", ".ndjson": "jsonl", ".jsonlines": "jsonl",
+  ".log": "log",
+  ".csv": "csv", ".tsv": "csv",
+};
+
+/** The head of a file, which is all the sniff needs and never the whole file. */
+async function sampleHead(target: string, bytes = 8 * 1024): Promise<string> {
+  const handle = await open(target, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(bytes);
+    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * DECIDE WHAT A FILE IS.
+ *
+ * The extension is a HINT and the content decides, in that order. Content wins
+ * because the case that matters is exactly the one where the name lies: a file
+ * called `service.log` holding one JSON object per line is a JSONL feed, and
+ * treating it as text throws away every field it has. Equally, a file called
+ * `.jsonl` holding a CSV is read as the CSV it is.
+ *
+ * Falls back to CSV, because CSV is the format this product has always read and
+ * the fallback that treats an unrecognised file as something has always worked is
+ * safer than one that refuses.
+ */
+export async function detectFormat(target: string): Promise<DocumentFormat> {
+  const extension = path.extname(target).toLowerCase();
+  const hinted = FORMAT_BY_EXTENSION[extension];
+  let sample: string;
+  try {
+    sample = await sampleHead(target);
+  } catch {
+    return hinted ?? "csv";
+  }
+  if (looksLikeJsonl(sample)) return "jsonl";
+  // The extension decides between the remaining two, and the CONTENT is only
+  // consulted for a file whose extension says nothing useful. That ordering is
+  // deliberate: a structural log heuristic applied to a named CSV is how an
+  // ordinary export gets handed to the wrong reader with total confidence.
+  if (hinted === "log") return "log";
+  if (hinted === "csv") return "csv";
+  return looksLikeLog(sample) ? "log" : "csv";
+}
+
+/**
+ * READ A DELIMITED FILE AS A STREAM.
  *
  * The replacement for `readFile(path, "utf8")`, and the change is not stylistic:
  * the old call put the entire export in memory as one string before a single row
@@ -250,7 +313,56 @@ export async function csvRead(input: { path: string }, boundary?: { boundary?: {
     const verdict = boundary.boundary.check(target);
     if (!verdict.allowed) throw new Error(`csv_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
   }
-  return streamCsvRead(target);
+
+  // THE FRONT DOOR IS FORMAT-AGNOSTIC NOW. Each branch produces the same
+  // normalised record shape, so everything downstream -- the profile, the fences,
+  // the aggregators, the report, the dashboard -- is unchanged and format-blind.
+  // That is what "omnivorous" has to mean: one pipeline, several diets.
+  const format = await detectFormat(target);
+  if (format === "csv") return streamCsvRead(target);
+
+  const problems: string[] = [];
+  const note = (message: string): void => {
+    if (problems.length < MAX_PROBLEMS) problems.push(message);
+  };
+  const parsed = format === "jsonl"
+    ? await readJsonl(target, { retain: RETAINED_ROWS, problems })
+    : await readLog(target, { retain: RETAINED_ROWS, problems });
+
+  if (parsed.headers.length === 0) {
+    return { path: target, headers: [], rowCount: 0, columns: [], sample: [], rows: [], problems: [...problems, "the file has no rows"] };
+  }
+
+  // The same profile, built from the tokenised window. The accumulators downstream
+  // cannot tell a JSONL feed from a CSV export, which is the point: the anomaly
+  // agent answers the same questions about both.
+  const profile = new FileProfile(target, { retain: RETAINED_ROWS });
+  profile.setHeaders(parsed.headers);
+  for (const row of parsed.rows) profile.push(parsed.headers.map((header) => row[header] ?? ""));
+  const snapshot = profile.snapshot();
+  snapshot.outliers = await resolveOutliers(target, snapshot);
+
+  const columns = parsed.headers.map((name) => {
+    const shot = snapshot.columns[name];
+    const present = (shot?.seen ?? 0) - (shot?.empty ?? 0);
+    if (present === 0) return { name, kind: "empty" as const };
+    if ((shot?.measured ?? 0) !== present) return { name, kind: "text" as const };
+    return {
+      name, kind: "number" as const,
+      min: shot?.min ?? undefined, max: shot?.max ?? undefined, sum: shot?.sum ?? undefined,
+    };
+  });
+
+  return {
+    path: target,
+    headers: parsed.headers,
+    rowCount: parsed.records,
+    columns,
+    sample: parsed.rows.slice(0, SAMPLE_ROWS),
+    rows: parsed.rows,
+    problems,
+    profile: snapshot,
+  };
 }
 
 /**

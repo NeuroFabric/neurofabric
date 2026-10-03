@@ -332,7 +332,7 @@ const ERROR_STATUSES = new Set(["4", "5"]);
  * additionally checked for cardinality below.
  */
 const ROLE_CANDIDATES: Record<string, readonly string[]> = {
-  time: ["_time", "timestamp", "time"],
+  time: ["_time", "timestamp", "time", "ts", "@timestamp", "event_time", "eventtime"],
   source: ["source", "source_host", "sourcetype", "host", "host_name"],
   // Most specific first: a code discriminates better than a type.
   category: ["alert_code", "alertcode", "alert_type", "alertType", "category", "event_type", "type"],
