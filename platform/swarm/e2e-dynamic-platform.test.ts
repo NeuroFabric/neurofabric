@@ -6,6 +6,9 @@ import type { TelemetryEvent } from "./diagnostic-agent.ts";
 import { InMemoryPortalStore, createPortalRoutes } from "../api/portal-routes.ts";
 import { CREDENTIAL_HEADER, staticVault } from "../omniroute/edge-security.ts";
 
+/** The owning tenant for the registry in these tests. There is no default bucket. */
+const T = "acme";
+
 /**
  * THE PLATFORM PROOF. Two generated agents, a real flood, and the memory claim
  * under test rather than asserted in a comment.
@@ -123,12 +126,13 @@ async function* flood(total: number, clock: () => number): AsyncGenerator<Teleme
 
 test("BOTH SCHEMAS REGISTER AND BECOME ORDINARY AGENTS", () => {
   const registry = new DynamicAgentRegistry();
-  registry.register(FINANCIAL_SCHEMA);
-  registry.register(SERVER_SCHEMA);
+  registry.register(FINANCIAL_SCHEMA, { tenant: T });
+  registry.register(SERVER_SCHEMA, { tenant: T });
 
   const roster = registry.describeAll();
   assert.equal(roster.length, 2);
-  assert.deepEqual(roster.map((a) => a.id).sort(), ["financial-agent", "server-health"]);
+  assert.deepEqual(roster.map((a) => a.id).sort(), ["acme/financial-agent", "acme/server-health"]);
+  assert.deepEqual(roster.map((a) => a.tenant), [T, T], "and every descriptor names its owner");
   for (const descriptor of roster) assert.equal(descriptor.maturity, "ready");
 });
 
@@ -136,8 +140,8 @@ test("EACH AGENT EVALUATES ONLY ITS OWN DECLARED STREAM", async () => {
   // The premise of a shared platform: two agents on one stream, each answering for
   // itself, neither firing on the other's telemetry.
   const registry = new DynamicAgentRegistry();
-  const financial = registry.register(FINANCIAL_SCHEMA).agent;
-  const server = registry.register(SERVER_SCHEMA).agent;
+  const financial = registry.register(FINANCIAL_SCHEMA, { tenant: T }).agent;
+  const server = registry.register(SERVER_SCHEMA, { tenant: T }).agent;
 
   const money = await financial.diagnose({
     prompt: "",
@@ -169,8 +173,8 @@ test("EACH AGENT EVALUATES ONLY ITS OWN DECLARED STREAM", async () => {
 
 test("EVERY RULE KIND FIRES ON A REAL PAYLOAD", async () => {
   const registry = new DynamicAgentRegistry();
-  const financial = registry.register(FINANCIAL_SCHEMA).agent;
-  const server = registry.register(SERVER_SCHEMA).agent;
+  const financial = registry.register(FINANCIAL_SCHEMA, { tenant: T }).agent;
+  const server = registry.register(SERVER_SCHEMA, { tenant: T }).agent;
   let now = 1_000_000;
   const clock = () => now;
 
@@ -212,7 +216,7 @@ test("A REGEX FINDING CARRIES A CLIPPED VALUE, NOT A FOUR-KILOBYTE EVIDENCE STRI
   // copy of the subject into a finding array, and the finding array is the one
   // thing a verdict serialises.
   const registry = new DynamicAgentRegistry();
-  const agent = registry.register(FINANCIAL_SCHEMA).agent;
+  const agent = registry.register(FINANCIAL_SCHEMA, { tenant: T }).agent;
 
   const result = await agent.diagnose({
     prompt: "",
@@ -240,7 +244,7 @@ test("THE FINDING LIST IS CAPPED AT 5,000 EVENTS AND AT 50,000 ALIKE", async () 
   // would prove less, not more: "38 findings at 1,000 events" and "50 at 50,000"
   // is consistent with a list that grows, which is the failure being ruled out.
   const registry = new DynamicAgentRegistry();
-  const agent = registry.register(SERVER_SCHEMA, { sinkCap: 50 }).agent;
+  const agent = registry.register(SERVER_SCHEMA, { tenant: T, sinkCap: 50 }).agent;
   let clockValue = 1_000_000;
   const clock = () => { clockValue += 1; return clockValue; };
 
@@ -260,7 +264,7 @@ test("EVERY STATISTIC IS EXACT, WHATEVER THE INPUT SIZE", async () => {
   // An O(1) implementation that quietly undercounts is worse than a slow one: the
   // number looks authoritative and is wrong.
   const registry = new DynamicAgentRegistry();
-  const agent = registry.register(FINANCIAL_SCHEMA, { sinkCap: 1 }).agent;
+  const agent = registry.register(FINANCIAL_SCHEMA, { tenant: T, sinkCap: 1 }).agent;
   let clockValue = 2_000_000;
   const clock = () => { clockValue += 1; return clockValue; };
 
@@ -280,8 +284,8 @@ test("EVERY STATISTIC IS EXACT, WHATEVER THE INPUT SIZE", async () => {
 
 test("A 50,000-EVENT FLOOD OF 4 KiB PAYLOADS DOES NOT RETAIN THE PAYLOADS", async () => {
   const registry = new DynamicAgentRegistry();
-  const financial = registry.register(FINANCIAL_SCHEMA).agent;
-  const server = registry.register(SERVER_SCHEMA).agent;
+  const financial = registry.register(FINANCIAL_SCHEMA, { tenant: T }).agent;
+  const server = registry.register(SERVER_SCHEMA, { tenant: T }).agent;
   let clockValue = 3_000_000;
   const clock = () => { clockValue += 1; return clockValue; };
 
@@ -313,7 +317,7 @@ test("A 50,000-EVENT FLOOD OF 4 KiB PAYLOADS DOES NOT RETAIN THE PAYLOADS", asyn
 
 test("THE VERDICT ITSELF IS BOUNDED, SO IT IS SAFE TO SERIALISE", async () => {
   const registry = new DynamicAgentRegistry();
-  const agent = registry.register(SERVER_SCHEMA, { sinkCap: 20 }).agent;
+  const agent = registry.register(SERVER_SCHEMA, { tenant: T, sinkCap: 20 }).agent;
   let clockValue = 4_000_000;
   const clock = () => { clockValue += 1; return clockValue; };
 
@@ -349,23 +353,23 @@ test("A TENANT'S PORTAL IS GENERATED FROM ITS REGISTERED AGENTS, END TO END", as
 
   assert.equal(body.derived, true);
   assert.equal(body.config.tenant, "acme");
-  assert.deepEqual(body.config.dashboards.map((d: { agentId: string }) => d.agentId).sort(), ["financial-agent", "server-health"]);
-  assert.deepEqual(body.config.widgets.map((w: { agentId: string }) => w.agentId).sort(), ["financial-agent", "server-health"]);
+  assert.deepEqual(body.config.dashboards.map((d: { agentId: string }) => d.agentId).sort(), ["acme/financial-agent", "acme/server-health"]);
+  assert.deepEqual(body.config.widgets.map((w: { agentId: string }) => w.agentId).sort(), ["acme/financial-agent", "acme/server-health"]);
   // A dashboard column count derived from capabilities, not a constant.
   assert.ok(body.config.dashboards.every((d: { columns: number }) => d.columns >= 1));
 });
 
 test("AN UPGRADED SCHEMA IS REFLECTED IN THE PORTAL WITHOUT A STORED CONFIG", async () => {
   const registry = new DynamicAgentRegistry();
-  registry.register(FINANCIAL_SCHEMA);
+  registry.register(FINANCIAL_SCHEMA, { tenant: T });
   const routes = createPortalRoutes({
     registry, store: new InMemoryPortalStore(), vault: staticVault([], "unused"),
   });
 
-  const before = registry.get("financial-agent")?.version;
-  registry.register({ ...FINANCIAL_SCHEMA, version: "2.0.0", capabilities: ["now also flags chargebacks"] });
+  const before = registry.get(T, "financial-agent")?.version;
+  registry.register({ ...FINANCIAL_SCHEMA, version: "2.0.0", capabilities: ["now also flags chargebacks"] }, { tenant: T });
 
   assert.equal(before, "1.0.0");
-  assert.equal(registry.get("financial-agent")?.version, "2.0.0");
+  assert.equal(registry.get(T, "financial-agent")?.version, "2.0.0");
   assert.equal(routes.routes.length, 4);
 });

@@ -11,6 +11,9 @@ import {
 import { CREDENTIAL_HEADER, staticVault, type GatewayToken } from "../omniroute/edge-security.ts";
 import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
 
+/** The owning tenant for the registry in these tests. There is no default bucket. */
+const T = "acme";
+
 /**
  * THE PORTAL API. Multi-tenancy, the credential boundary, and generation.
  *
@@ -125,20 +128,20 @@ test("A REFUSAL NEVER CARRIES THE PRESENTED VALUE", async () => {
 
 test("A TENANT WITH NO STORED CONFIG GETS A PORTAL DERIVED FROM ITS AGENTS", async () => {
   const { registry, routes } = harness();
-  registry.register(schema("orders"));
+  registry.register(schema("orders"), { tenant: T });
 
   const body = JSON.parse(JSON.stringify((await routes.handle("GET", CONFIG, as("acme-value"))).body));
 
   assert.equal(body.derived, true, "and it says it was derived, so the UI can offer to customise");
   assert.equal(body.config.tenant, "acme");
   assert.equal(body.config.dashboards.length, 1);
-  assert.equal(body.config.dashboards[0].agentId, "orders");
+  assert.equal(body.config.dashboards[0].agentId, "acme/orders");
 });
 
 test("A STORED CONFIG OVERRIDES THE DERIVED ONE, AND SAYS IT IS NOT DERIVED", async () => {
   const store = new InMemoryPortalStore();
   const { registry, routes } = harness({ store });
-  registry.register(schema("orders"));
+  registry.register(schema("orders"), { tenant: T });
   const written = validatePortalConfig({ title: "Curated", version: "9", widgets: [] }, "acme");
   if (written.ok) store.put(written.config);
 
@@ -248,7 +251,7 @@ test("A VALID SCHEMA POSTED THROUGH THE API IS REGISTERED AND THEN READABLE", as
   const written = await routes.handle("POST", SCHEMA, as("acme-value"), schema("orders"));
   assert.equal(written.status, 200);
 
-  assert.equal(registry.get("orders")?.id, "orders");
+  assert.equal(registry.get(T, "orders")?.id, "acme/orders");
   const read = await routes.handle("GET", `${SCHEMA}/orders`, as("acme-value"));
   assert.equal(JSON.parse(JSON.stringify(read.body)).schema.id, "orders");
 });
@@ -275,7 +278,7 @@ test("THE SCHEMA WRITE PATH IS PROVED LIKE EVERY OTHER PATH", async () => {
 
 test("THE AGENTS LISTING PUBLISHES MATURITY, SO A PORTAL ADMITS WHAT IS NOT BUILT", async () => {
   const { registry, routes } = harness();
-  registry.register(schema("orders"));
+  registry.register(schema("orders"), { tenant: T });
 
   const body = JSON.parse(JSON.stringify((await routes.handle("GET", AGENTS, as("acme-value"))).body));
 

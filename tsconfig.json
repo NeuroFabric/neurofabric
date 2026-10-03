@@ -14,7 +14,14 @@
     "    errors. They are tracked as the next increment. Excluding them is a",
     "    measured scope boundary, NOT a blanket suppression: the gate covers",
     "    every line of production code, which is where the security controls live.",
-    "    No @ts-ignore and no `any` is used to reach green anywhere."
+    "    No @ts-ignore and no `any` is used to reach green anywhere.",
+    "",
+    "  scripts/demo.ts INCLUDED, and only that script. The type gate never covered",
+    "    scripts/ at all, and widening it to the whole directory turns up a real",
+    "    pre-existing error in generate-synthetic-data.ts that is unrelated to any",
+    "    current work. Scoping the gate to the new demo rather than fixing that debt",
+    "    is a scope decision, not an oversight: the debt is recorded for the next",
+    "    increment that owns it."
   ],
   "compilerOptions": {
     "target": "ES2023",
@@ -35,6 +42,6 @@
 
     "types": ["node"]
   },
-  "include": ["platform/**/*.ts", ".pi/extensions/*.ts"],
+  "include": ["platform/**/*.ts", "scripts/demo.ts", ".pi/extensions/*.ts"],
   "exclude": ["node_modules", "platform/**/*.test.ts"]
 }
