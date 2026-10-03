@@ -3871,3 +3871,119 @@ against the local Node; the values are not benchmarked.
 - `edge-security.test.ts` — the four vault rules.
 - `agent-registry.test.ts` — a stub that cannot be mistaken for a capability.
 - `ui-routes.test.ts` — proof before data, and 404 before proof.
+
+## D-040 — The platform as a factory: schema-driven agents and generated portals
+
+**Date:** 2026-10-21
+**Stage:** 8 (Dynamic platform)
+**Status:** Accepted
+**Affects:** `platform/swarm/dynamic-registry.ts`, `platform/api/portal-routes.ts`, `platform/swarm/agents/stream-harness.ts`, `package.json`
+
+### Context
+
+The platform stops shipping agents and starts shipping a factory. Two consequences
+follow, and both foreclose an alternative that looks obvious.
+
+### D-040.1 — A schema is DATA interpreted by code that already exists
+
+`AgentSchema` is a JSON document: patterns, thresholds, rate windows, and the
+streams a customer says are theirs. Nothing in a schema can read a file, open a
+socket, or reach another agent, and the reason is structural rather than a matter
+of trust — there is no interpreter for a customer's intentions to escape through.
+The three hand-written specialists from D-039 are unaffected; they were never the
+product.
+
+A generated agent implements `DiagnosticAgent` with **no special case anywhere**,
+so it routes, registers, publishes through the command center and appears on a
+portal through exactly the interfaces a hand-written one uses. That property is
+the whole claim of the pivot, and it is pinned by test.
+
+### D-040.2 — The regex is MITIGATED, NOT SOLVED, and says so
+
+Every other part of a schema is bounded by construction. A regular expression is
+not: `(a+)+` runs in time exponential in the subject length, and the subjects here
+arrived off a network.
+
+Four defences, all mitigation:
+
+1. a ceiling on pattern length;
+2. rejection of the classic nested-quantifier shape **at validation**, so a
+   customer authoring a portal gets a field-level error rather than a wedged
+   process;
+3. compilation **once** at registration;
+4. bounded subjects, via the line ceiling in the stream harness.
+
+What this does *not* do is bound worst-case time in general. The heuristic does not
+catch nesting two groups deep. The real fix is a linear-time engine (RE2, or WASM)
+and the platform has **zero runtime dependencies by decision (D-018)**, so adding
+one is an Owner decision, not a detail to assume. `SCHEMA_LIMITS` is where that
+ceiling lives in code instead of in a caveat.
+
+The `g` flag is refused outright: with it, `RegExp.test` remembers `lastIndex`, so
+a pattern would find every second event differently depending on what preceded it.
+
+### D-040.3 — A portal is a VALUE, and the tenant is the proven credential
+
+Portals are returned as JSON, not rendered as HTML. A layout change is a data
+change, a customer's portal is exportable, and the server never assembles markup
+for somebody else to paste. It also avoids putting a template language on a
+platform whose claim is that it has one.
+
+The tenancy boundary is the token's own `id`. **No tenant name in a path, header
+or body is ever consulted**, because a tenant parameter a caller can choose is a
+tenant parameter an attacker chooses. Adding a `tenant` field to `GatewayToken` was
+rejected: the token list is vault-provisioned, and a second tenant field is a
+second thing to get wrong at issuance. The id is already unique and already proven.
+
+Tenant isolation is tested with **two live credentials**, not one.
+
+Stored portal configs are validated on write *and re-validated on read*: the store
+is replaceable, and a read path that trusts it is one refactor from serving a
+malformed layout to every tenant at once.
+
+### D-040.4 — Unknown fields are refused, everywhere
+
+A misspelled `treshold` produces a rule that never fires and an agent that reports
+a clean pipeline for ever. A misspelled `dashbords` produces a portal that renders
+nothing, and nothing is the hardest failure to notice. Both are refusals with a
+path, not defaults.
+
+### D-040.5 — Three defects the tests caught, recorded so they are not reintroduced
+
+- **`RateWindow` tracked a modulo.** With `bucketCount === 1` — a legitimate
+  configuration — every instant maps to slot 0, so `count()` saw its own slot and
+  could never forget. It now tracks the **unmodded** bucket index, and the
+  elapsed-bucket arithmetic is correct for any ring size.
+- **`ZapXmlScanner` watched tag names.** ZAP uses `<alert>` as both the container
+  and one of its fields, so a name watcher emitted on the *inner* close and every
+  finding it produced was a fragment. It is now a nesting stack that emits only
+  when the close leaves no `alert` open.
+- **The E2E flood carried no anomalies.** Keying them off the loop index meant
+  `i % 30 === 0` was only ever true for even `i`, so every anomaly landed on the
+  payments branch. A flood that silently has nothing to find proves the opposite
+  of what it claims.
+
+### D-040.6 — The O(1) claim is measured, not asserted
+
+100,000 events at 4 KiB each — 391 MiB of payload volume — through two generated
+agents: **4.9 MiB retained**, 64.6 MiB peak RSS, ~257k events/sec. Buffering would
+have held 391 MiB of live strings.
+
+The stronger half of the proof needs no GC and no threshold: the finding list is
+capped at 50 both at 5,000 events and at 50,000, and every counter is exact at both
+sizes. A retention that scaled with input fails that outright.
+
+Both halves matter because `heapUsed` is read without forcing a collection (the
+suites run under plain `node --test`, no `--expose-gc`), so the empirical figure
+includes transient garbage. The deterministic assertions are the ones that cannot
+fluke.
+
+### Cross-references
+
+- D-018 — zero runtime dependencies, which is why the regex risk is mitigated in
+  code rather than fixed with a library.
+- D-039.3 — the `Subagent` versus `DiagnosticAgent` split this extends.
+- D-039.2 — the `VaultProvider` that issues the portal credential.
+- `dynamic-registry.test.ts` — the nested-quantifier refusal, and the O(1) primitives.
+- `portal-routes.test.ts` — two-credential tenant isolation.
+- `e2e-dynamic-platform.test.ts` — the memory proof.
