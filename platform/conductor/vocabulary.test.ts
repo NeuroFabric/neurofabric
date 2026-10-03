@@ -69,7 +69,7 @@ async function genericAnalysis(text: string) {
   const csv = csvOf(text);
   const schema = await resolveSchemaMemory({ cwd: ".", headers: csv.headers, rows: csv.rows });
   assert.equal(schema?.source, "GENERIC", "the fixture really is being handled generically");
-  return { csv, schema, analysis: analyseBottlenecks(csv, schema) };
+  return { csv, schema, analysis: await analyseBottlenecks(csv, schema) };
 }
 
 test("a generic file is described in records, never in alerts", async () => {
@@ -128,7 +128,7 @@ test("a Pega export keeps its own vocabulary -- this is not a global neutering",
   const csv = csvOf(PEGA);
   const schema = await resolveSchemaMemory({ cwd: "configs/..", headers: csv.headers, rows: csv.rows });
   assert.notEqual(schema?.source, "GENERIC");
-  const analysis = analyseBottlenecks(csv, schema);
+  const analysis = await analyseBottlenecks(csv, schema);
   assert.equal(analysis.vocabulary.unit, "alert");
   assert.equal(analysis.vocabulary.thresholdLabel, "over threshold");
   const md = toBottleneckMarkdown(analysis, "Bottleneck report");
@@ -137,10 +137,10 @@ test("a Pega export keeps its own vocabulary -- this is not a global neutering",
   assert.match(md, /over threshold/);
 });
 
-test("a Pega export with NO threshold column also drops the breach column", () => {
+test("a Pega export with NO threshold column also drops the breach column", async () => {
   // The zero-brief is not a Pega problem, it is a problem with claiming a count
   // against a limit the file never stated.
-  const analysis = analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time
+  const analysis = await analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time
 2026-09-30 12:00:00.000,host-web,PEGA0001,1200
 2026-09-30 12:01:00.000,host-bg,PEGA0002,800`));
   assert.equal(analysis.vocabulary.thresholdLabel, null);

@@ -41,7 +41,7 @@ const PEGA = `_time,source_host,alertType,alert_code,elapsed_time,threshold
 
 const PEGA_HEADERS = PEGA.split("\n")[0].split(",");
 
-test("a stored mapping is applied and reported as established, not inferred", () => {
+test("a stored mapping is applied and reported as established, not inferred", async () => {
   const schema: ResolvedSchema = {
     id: "pega-alert-export",
     roles: { time: "_time", source: "source_host", category: "alertType", duration: "elapsed_time", threshold: "threshold" },
@@ -50,7 +50,7 @@ test("a stored mapping is applied and reported as established, not inferred", ()
     absent: [],
     unresolved: [],
   };
-  const analysis = analyseBottlenecks(csvOf(PEGA), schema);
+  const analysis = await analyseBottlenecks(csvOf(PEGA), schema);
   // alertType is degenerate (one distinct value). A stored mapping must not be
   // able to force it past the cardinality check -- the rejection is a property
   // of the DATA, and a config file cannot overrule arithmetic.
@@ -77,14 +77,14 @@ test("a stored mapping is applied and reported as established, not inferred", ()
   assert.ok((analysis.verifiedRoles ?? []).includes("duration"));
 });
 
-test("with no stored schema every mapping is still a hypothesis (unchanged behaviour)", () => {
-  const analysis = analyseBottlenecks(csvOf(PEGA));
+test("with no stored schema every mapping is still a hypothesis (unchanged behaviour)", async () => {
+  const analysis = await analyseBottlenecks(csvOf(PEGA));
   assert.ok(analysis.mappings.every((m) => m.hypothesis), "no memory, no certainty");
   assert.equal(analysis.schemaSource, undefined);
   assert.deepEqual(analysis.verifiedRoles, [], "no memory means nothing is verified");
 });
 
-test("the markdown report states its basis and cannot be broken by file content", () => {
+test("the markdown report states its basis and cannot be broken by file content", async () => {
   // NOTE ON THE HEADING BELOW. These fixtures are Pega-shaped but are analysed
   // with NO schema, and a file nothing has been verified about is described in
   // records. So the neutral heading is the correct one to split on, and this is
@@ -97,7 +97,7 @@ second line`;
   const text = `_time,source_host,alertType,alert_code,elapsed_time,threshold
 2026-09-30 12:00:00.000,host-web,performance,"${hostile}",1200,1000
 2026-09-30 12:01:00.000,host-bg,performance,PEGA0002,800,1000`;
-  const analysis = analyseBottlenecks(csvOf(text));
+  const analysis = await analyseBottlenecks(csvOf(text));
   const md = toBottleneckMarkdown(analysis, "Bottleneck report");
 
   assert.match(md, /^# Bottleneck report/m, "it is a report");
@@ -119,7 +119,7 @@ test("markdown and html renderings come from ONE analysis and agree on the leade
   const cwd = await makeTempWorkspace("nf-md-");
   const file = await writeFixture(cwd, "pega.csv", PEGA);
   const csv = await csvRead({ path: file }, { boundary: { check: (p: string) => ({ allowed: true, reason: "test", resolved: p }), assert: (p: string) => p } } as never);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const md = toBottleneckMarkdown(analysis, "Bottleneck report");
   const html = await renderBottleneckReport({ path: `${cwd}/r.html`, title: "Bottleneck report", csv });
 
@@ -162,8 +162,8 @@ const DIVERGING = `_time,source_host,logger_name,alert_code,elapsed_time,thresho
 2026-09-30 12:02:00.000,host-web,com.pega.pegarules.session.internal.engineinterface.service.HttpAPI,PEGA0001,1300,1000
 2026-09-30 12:03:00.000,host-api,com.pega.pegarules.exec.internal.declare.infengine.pages.Declarative,PEGA0005,900000,1000`;
 
-test("markdown leads with a dedicated DIVERGENCE block naming the time-cost multiplier", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
+test("markdown leads with a dedicated DIVERGENCE block naming the time-cost multiplier", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
   assert.match(md, /\[!WARNING\]/, "the divergence is a callout, not a clause in the lead sentence");
   assert.match(md, /The two rankings disagree/, "and it says what it is about");
   // PEGA0001 costs 1,200 + 1,300 = 2,500 ms. PEGA0005 costs 900,000 x 2 =
@@ -181,16 +181,16 @@ test("markdown leads with a dedicated DIVERGENCE block naming the time-cost mult
   assert.ok(bannerAt > leadAt && bannerAt - leadAt < 400, "the warning follows the lead rather than replacing it");
 });
 
-test("D2 survives into markdown: no divergence block when the two rankings agree", () => {
+test("D2 survives into markdown: no divergence block when the two rankings agree", async () => {
   // PEGA0001 wins on both frequency and cost, so there is nothing to warn about.
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(PEGA)), "Bottleneck report");
-  assert.ok(analyseBottlenecks(csvOf(PEGA)).divergence === null, "the fixture really does agree");
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(PEGA)), "Bottleneck report");
+  assert.ok((await analyseBottlenecks(csvOf(PEGA))).divergence === null, "the fixture really does agree");
   assert.ok(!md.includes("[!WARNING]"), "a headline that always shouts is one nobody reads");
   assert.ok(!md.includes("x the total elapsed time"), "and no stale multiple is printed either");
 });
 
-test("R13 the markdown tables carry the alias, and column names keep their underscores", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
+test("R13 the markdown tables carry the alias, and column names keep their underscores", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
   const table = md.split("## Record categories by frequency")[1].split("## ")[0];
   assert.ok(table.includes("PEGA0001 (HttpAPI)"), "the unambiguous alias is appended to the code");
   assert.ok(table.includes("| PEGA0005 |") || table.includes("PEGA0005 |"), "the bare key is still the prefix, so matching on the code still works");
@@ -209,10 +209,10 @@ test("R13 the markdown tables carry the alias, and column names keep their under
   assert.ok(!mappings.includes("| alertcode |"), "and it is not the mangled name the old code produced");
 });
 
-test("R10 the elapsed columns state their unit in the header", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
+test("R10 the elapsed columns state their unit in the header", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
   assert.match(md, /total elapsed \(ms\)/, "markdown states the unit");
-  const html = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
+  const html = toBottleneckMarkdown(await analyseBottlenecks(csvOf(DIVERGING)), "Bottleneck report");
   assert.ok(html.includes("total elapsed (ms)"));
 });
 
@@ -225,7 +225,7 @@ test("the shipped Pega schema establishes alert_code AND logger_name", async () 
   assert.equal(schema?.id, "pega-alert-export");
   assert.equal(schema?.roles.category, "alert_code", "the category role is stored, not inferred");
   assert.equal(schema?.roles.alias, "logger_name", "the alias role is stored, so it stops printing as a hypothesis");
-  const analysis = analyseBottlenecks(csvOf(DIVERGING), schema);
+  const analysis = await analyseBottlenecks(csvOf(DIVERGING), schema);
   for (const role of ["category", "alias", "duration", "time", "source", "threshold"]) {
     const m = analysis.mappings.find((x) => x.role === role);
     assert.equal(m?.hypothesis, false, `${role} must be established, not a hypothesis`);

@@ -55,10 +55,10 @@ const NUMERIC_ONLY = `col_1,col_2,col_3,col_4,col_5
 3.75,-0.5,2.0,2.5,175
 0.0,1.0,-1.5,1.5,225`;
 
-test("NO resolved schema means neutral vocabulary, not Pega", () => {
+test("NO resolved schema means neutral vocabulary, not Pega", async () => {
   // The leak itself. This file has an alert_code column and no verified mapping,
   // which is precisely the state that was asserting alerts it could not support.
-  const analysis = analyseBottlenecks(csvOf(PEGA));
+  const analysis = await analyseBottlenecks(csvOf(PEGA));
   assert.equal(analysis.schemaSource, undefined, "nothing was established about this file");
   assert.equal(analysis.vocabulary.unit, "record", "so it is described in records");
   assert.equal(analysis.vocabulary.unitPlural, "record(s)");
@@ -79,8 +79,8 @@ test("NO resolved schema means neutral vocabulary, not Pega", () => {
   assert.match(md, /alert\\_code/, "the real column name survives");
 });
 
-test("a numeric-only file never claims alerts either", () => {
-  const analysis = analyseBottlenecks(csvOf(NUMERIC_ONLY));
+test("a numeric-only file never claims alerts either", async () => {
+  const analysis = await analyseBottlenecks(csvOf(NUMERIC_ONLY));
   assert.equal(analysis.vocabulary.unit, "record");
   const md = toBottleneckMarkdown(analysis, "Numerical file");
   assert.ok(!/alert/i.test(md), "a file of numbers described as alerts is the reported bug, in miniature");
@@ -89,13 +89,13 @@ test("a numeric-only file never claims alerts either", () => {
 test("threshold language is reserved for a verified schema too", async () => {
   const csv = csvOf(PEGA);
   // Unverified: the column is NAMED threshold and that is not enough.
-  assert.equal(analyseBottlenecks(csv).vocabulary.thresholdLabel, "over limit",
+  assert.equal((await analyseBottlenecks(csv)).vocabulary.thresholdLabel, "over limit",
     "a guessed column is still a guess, so the wording is the neutral one");
 
   // Verified: now, and only now, it is a threshold.
   const schema = await resolveSchemaMemory({ cwd: "configs/..", headers: csv.headers, rows: csv.rows });
   assert.equal(schema?.source, "DEFAULT");
-  const verified = analyseBottlenecks(csv, schema);
+  const verified = await analyseBottlenecks(csv, schema);
   assert.equal(verified.vocabulary.unit, "alert");
   assert.equal(verified.vocabulary.thresholdLabel, "over threshold");
   const md = toBottleneckMarkdown(verified, "Bottleneck report");
@@ -125,7 +125,7 @@ test("a per-checkout learned schema earns ESTABLISHED MAPPINGS but NOT Pega word
   const csv = csvOf(PEGA);
   const learned = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: `${cwd}/none` });
   assert.equal(learned?.source, "SESSION_ARCHIVE", "the archive answers, not the profiler");
-  const analysis = analyseBottlenecks(csv, learned);
+  const analysis = await analyseBottlenecks(csv, learned);
   assert.equal(analysis.mappings.find((m) => m.role === "duration")?.hypothesis, false,
     "a checked mapping IS established -- that much the old ruling got right");
   assert.equal(analysis.vocabulary.unit, "record", "but it does not make the file an alert export");
@@ -138,7 +138,7 @@ test("the SHIPPED schema is what earns the Pega wording, and it still does", asy
   const csv = csvOf(PEGA);
   const shipped = await resolveSchemaMemory({ cwd: "configs/..", headers: csv.headers, rows: csv.rows });
   assert.equal(shipped?.source, "DEFAULT");
-  const analysis = analyseBottlenecks(csv, shipped);
+  const analysis = await analyseBottlenecks(csv, shipped);
   assert.equal(analysis.vocabulary.unit, "alert", "a verified Pega export is an alert export");
   assert.equal(analysis.vocabulary.thresholdLabel, "over threshold");
   assert.match(toBottleneckMarkdown(analysis, "Bottleneck report"), /Alert categories by frequency/);
@@ -151,7 +151,7 @@ test("an empty memory is not a verified one -- the profiler's answer stays neutr
   const csv = csvOf(PEGA);
   const inferred = await resolveSchemaMemory({ cwd: "configs/..", headers: csv.headers, rows: csv.rows, defaultsRoot: "does-not-exist" });
   assert.equal(inferred?.source, "GENERIC");
-  assert.equal(analyseBottlenecks(csv, inferred).vocabulary.unit, "record");
+  assert.equal((await analyseBottlenecks(csv, inferred)).vocabulary.unit, "record");
 });
 
 test("the html path is guarded the same way", async () => {

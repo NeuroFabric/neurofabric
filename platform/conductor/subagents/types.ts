@@ -1,3 +1,5 @@
+import type { BrokerSnapshot } from "../stream-broker.ts";
+
 /**
  * WHAT A SUBAGENT IS, AND WHY IT IS THIS SHAPE.
  *
@@ -61,6 +63,19 @@ export interface Subagent {
    * question end up sharing one answer.
    */
   answer(ctx: AgentContext, prompt: string): Reply | null;
+  /**
+   * THE SAME QUESTION, ASKED OF A STREAM THAT IS STILL RUNNING.
+   *
+   * Optional because most agents are file-shaped and should stay that way. It
+   * exists because the router cannot tell a live topic from a closed file: a
+   * handler that reaches for the rows of an open stream finds nothing and answers
+   * "nothing is wrong", which is the most dangerous sentence this product can
+   * emit, because it is indistinguishable from a clean stream.
+   *
+   * An agent that implements this is saying: when there is a live verdict, answer
+   * from it, and never claim a running stream is clean.
+   */
+  answerLive?(snapshot: BrokerSnapshot): Reply;
 }
 
 /** `nl` formatting, shared so three agents cannot disagree about a number. */

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toReactDashboard, DASHBOARD_DATA_ID } from "./react-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 
 /**
  * A file WITH a time column and a category column.
@@ -46,7 +46,7 @@ async function buildTemporalAnalysis() {
   const parsed = parseCsv(buildCsvWithTimeAndCategory());
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
   const schema = await resolveSchemaMemory({ cwd: "configs/..", headers: parsed.headers, rows });
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "operations.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -94,7 +94,7 @@ const analysis = await buildTemporalAnalysis();
  */
 
 /** Precondition, asserted once: a chart test on empty data proves nothing. */
-test("the fixture really has a ranking and a planted spike to plot", () => {
+test("the fixture really has a ranking and a planted spike to plot", async () => {
   assert.ok(analysis.categories.length > 0,
     "the fixture must have categorical frequencies, or the bar chart asserts on an empty array");
   assert.ok(analysis.hourly.hours.length > 0, "and hours, or the line chart has nothing to draw");
@@ -118,7 +118,7 @@ function appSourceOf(html: string): string {
   return html.slice(from, html.indexOf("</script>", from));
 }
 
-test("Chart.js is loaded from a CDN at a PINNED version, and the pin is asserted", () => {
+test("Chart.js is loaded from a CDN at a PINNED version, and the pin is asserted", async () => {
   const html = toReactDashboard(analysis, {});
   const script = /<script[^>]+src="([^"]*chart[^"]*)"/i.exec(html);
   assert.ok(script !== null, "the charting library must actually be loaded");
@@ -129,7 +129,7 @@ test("Chart.js is loaded from a CDN at a PINNED version, and the pin is asserted
   assert.ok(!/chart\.js@latest/.test(script[1]!), "never a floating tag");
 });
 
-test("the categorical ranking is a BAR chart over the real frequencies", () => {
+test("the categorical ranking is a BAR chart over the real frequencies", async () => {
   const html = toReactDashboard(analysis, {});
   const src = appSourceOf(html);
   const data = payloadOf(html);
@@ -148,7 +148,7 @@ test("the categorical ranking is a BAR chart over the real frequencies", () => {
     "driven by the widget's own payload, which the server computed");
 });
 
-test("the temporal spikes are a LINE chart, and the hours travel in the payload", () => {
+test("the temporal spikes are a LINE chart, and the hours travel in the payload", async () => {
   const html = toReactDashboard(analysis, {});
   const src = appSourceOf(html);
   const data = payloadOf(html);
@@ -170,7 +170,7 @@ test("the temporal spikes are a LINE chart, and the hours travel in the payload"
     "driven by the widget's own payload, which the server computed");
 });
 
-test("the payload's timeline AGREES with the engine's own hourly profile", () => {
+test("the payload's timeline AGREES with the engine's own hourly profile", async () => {
   // The page must not re-derive this. A chart that buckets hours its own way
   // would disagree with the report beside it, and a reader comparing the two
   // would be right to wonder which one the tool believes.
@@ -188,7 +188,7 @@ test("the payload's timeline AGREES with the engine's own hourly profile", () =>
   assert.equal(timeline[0]?.spike, engine[0]?.isSpike, "flagged exactly where the engine flagged it");
 });
 
-test("hovering a spike shows the EXACT value AND the hour", () => {
+test("hovering a spike shows the EXACT value AND the hour", async () => {
   const html = toReactDashboard(analysis, {});
   const src = appSourceOf(html);
 
@@ -203,7 +203,7 @@ test("hovering a spike shows the EXACT value AND the hour", () => {
   assert.match(src, /spike|multiple|rule/, "and whether the engine considered it abnormal");
 });
 
-test("a chart that cannot load leaves the REST of the dashboard working", () => {
+test("a chart that cannot load leaves the REST of the dashboard working", async () => {
   // THE resilience property. The library is remote; the data is not. If the CDN
   // is unreachable, the user must still get their report and their chat.
   const html = toReactDashboard(analysis, {});
@@ -219,7 +219,7 @@ test("a chart that cannot load leaves the REST of the dashboard working", () => 
   assert.ok(guardAt > -1);
 });
 
-test("a chart is created once and destroyed on cleanup, or it stacks on every render", () => {
+test("a chart is created once and destroyed on cleanup, or it stacks on every render", async () => {
   // React re-renders on every filter change. Without a destroy, each render
   // leaves another chart drawing into the same canvas: the bars double, then
   // triple, and nothing in the code explains why.
@@ -230,7 +230,7 @@ test("a chart is created once and destroyed on cleanup, or it stacks on every re
   assert.match(src, /return function \(\)/, "which means the effect returns a teardown");
 });
 
-test("the charts stay inside the declared policy", () => {
+test("the charts stay inside the declared policy", async () => {
   const html = toReactDashboard(analysis, {});
   const csp = /content="([^"]*default-src[^"]*)"/.exec(html);
   assert.ok(csp !== null);

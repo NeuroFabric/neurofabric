@@ -328,7 +328,7 @@ export class Conductor {
     } else {
       this.emit("EXECUTE", "no stored schema matched; inferring from column names");
     }
-    const analysis = analyseBottlenecks(csv, schema);
+    const analysis = await analyseBottlenecks(csv, schema);
     // ONE TITLE, COMPUTED ONCE, for the artifact and the returned Markdown.
     //
     // It used to be the string "Bottleneck report: <file>", written out at four

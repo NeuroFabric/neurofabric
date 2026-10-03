@@ -1,7 +1,10 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDescriptor } from "../core/types.ts";
-import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords } from "./stream-profile.ts";
+import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords, streamCsvRecordsSync } from "./stream-profile.ts";
+import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
+import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
+import { open, readFile } from "node:fs/promises";
 
 /**
  * The Stage 1 capability set: exactly two, because the acceptance scenario needs
@@ -67,7 +70,67 @@ const SAMPLE_ROWS = 50;
 const RETAINED_ROWS = MAX_ROWS_SCANNED;
 
 /**
- * READ A CSV AS A STREAM.
+ * THE FORMATS THIS READER ACCEPTS.
+ *
+ * A `.csv` was the only door into this product, which meant a DevSecOps team
+ * holding a JSONL telemetry feed or a pile of server logs had nothing to point
+ * it at. Omnivorosity is the fix, and the formats are recognised rather than
+ * declared because a file's name is a convention and its contents are evidence.
+ */
+export type DocumentFormat = "csv" | "jsonl" | "log";
+
+const FORMAT_BY_EXTENSION: Record<string, DocumentFormat> = {
+  ".jsonl": "jsonl", ".ndjson": "jsonl", ".jsonlines": "jsonl",
+  ".log": "log",
+  ".csv": "csv", ".tsv": "csv",
+};
+
+/** The head of a file, which is all the sniff needs and never the whole file. */
+async function sampleHead(target: string, bytes = 8 * 1024): Promise<string> {
+  const handle = await open(target, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(bytes);
+    const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * DECIDE WHAT A FILE IS.
+ *
+ * The extension is a HINT and the content decides, in that order. Content wins
+ * because the case that matters is exactly the one where the name lies: a file
+ * called `service.log` holding one JSON object per line is a JSONL feed, and
+ * treating it as text throws away every field it has. Equally, a file called
+ * `.jsonl` holding a CSV is read as the CSV it is.
+ *
+ * Falls back to CSV, because CSV is the format this product has always read and
+ * the fallback that treats an unrecognised file as something has always worked is
+ * safer than one that refuses.
+ */
+export async function detectFormat(target: string): Promise<DocumentFormat> {
+  const extension = path.extname(target).toLowerCase();
+  const hinted = FORMAT_BY_EXTENSION[extension];
+  let sample: string;
+  try {
+    sample = await sampleHead(target);
+  } catch {
+    return hinted ?? "csv";
+  }
+  if (looksLikeJsonl(sample)) return "jsonl";
+  // The extension decides between the remaining two, and the CONTENT is only
+  // consulted for a file whose extension says nothing useful. That ordering is
+  // deliberate: a structural log heuristic applied to a named CSV is how an
+  // ordinary export gets handed to the wrong reader with total confidence.
+  if (hinted === "log") return "log";
+  if (hinted === "csv") return "csv";
+  return looksLikeLog(sample) ? "log" : "csv";
+}
+
+/**
+ * READ A DELIMITED FILE AS A STREAM.
  *
  * The replacement for `readFile(path, "utf8")`, and the change is not stylistic:
  * the old call put the entire export in memory as one string before a single row
@@ -244,13 +307,121 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][]; p
  * answers about the same file.
  */
 
+/**
+ * RE-READ A FILE, IN WHATEVER FORMAT IT ACTUALLY IS.
+ *
+ * The analyser needs a second pass over the file to rank every row rather than the
+ * retained window -- and that pass used to assume a delimited file. A JSONL feed
+ * or a log therefore got parsed a second time BY THE CSV PARSER, which produced
+ * nonsense: no header row to map columns from, so every ranking came back empty
+ * and the timeline was blank.
+ *
+ * That is a silent wrong answer of the worst kind: the analysis succeeded, the
+ * charts rendered, and the log simply appeared to have no traffic pattern. The
+ * re-read therefore dispatches on the same detection the front door uses, and
+ * both routes agree about what a file is by construction.
+ *
+ * Row numbers: for a delimited file these are FILE lines, so a citation points at
+ * the line a person sees. A headerless format has no such line, so records are
+ * numbered from 1 -- stated rather than faked, because a citation that points at
+ * the wrong line is worse than one that points at no line.
+ */
+export async function streamDocument(
+  target: string,
+  onRow: (fields: Record<string, string>, rowNumber: number) => void,
+): Promise<number> {
+  const format = await detectFormat(target);
+  let rows = 0;
+  if (format === "csv") {
+    const position = new Map<string, number>();
+    let seenHeader = false;
+    streamCsvRecordsSync(target, (cells, line) => {
+      if (!seenHeader) {
+        seenHeader = true;
+        cells.forEach((cell, index) => position.set(cell.trim(), index));
+        return;
+      }
+      rows += 1;
+      const fields: Record<string, string> = {};
+      for (const [name, index] of position) fields[name] = cells[index] ?? "";
+      onRow(fields, line);
+    });
+    return rows;
+  }
+  const problems: string[] = [];
+  const sink = (fields: Record<string, string>): void => {
+    rows += 1;
+    onRow(fields, rows);
+  };
+  if (format === "jsonl") await readJsonl(target, { retain: 0, problems, onRecord: sink });
+  else await readLog(target, { retain: 0, problems, onRecord: sink });
+  return rows;
+}
+
 export async function csvRead(input: { path: string }, boundary?: { boundary?: { check(p: string): { allowed: boolean } } }): Promise<CsvReadResult> {
   const target = String(input.path ?? "");
   if (boundary?.boundary) {
     const verdict = boundary.boundary.check(target);
     if (!verdict.allowed) throw new Error(`csv_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
   }
-  return streamCsvRead(target);
+
+  // THE FRONT DOOR IS FORMAT-AGNOSTIC NOW. Each branch produces the same
+  // normalised record shape, so everything downstream -- the profile, the fences,
+  // the aggregators, the report, the dashboard -- is unchanged and format-blind.
+  // That is what "omnivorous" has to mean: one pipeline, several diets.
+  const format = await detectFormat(target);
+  if (format === "csv") return streamCsvRead(target);
+
+  const problems: string[] = [];
+  const note = (message: string): void => {
+    if (problems.length < MAX_PROBLEMS) problems.push(message);
+  };
+
+  // THE PROFILE IS FED DURING THE READ, exactly as it is for a delimited file.
+  //
+  // This is the parity. Before, the tokenisers built a bounded row window and the
+  // profile was assembled from it afterwards -- so a 500,000-event telemetry feed
+  // was profiled over the first 10,000 events, and nothing anywhere said so. The
+  // statistics a JSONL or log feed produces now describe the WHOLE file, which is
+  // the only thing "omnivorous" can mean if it is to mean anything at all.
+  const profile = new FileProfile(target, { retain: RETAINED_ROWS });
+  const onRecord = (fields: Record<string, string>, headers: readonly string[]): void => {
+    profile.ensureHeaders(headers);
+    profile.push(headers.map((header) => fields[header] ?? ""));
+  };
+
+  const parsed = format === "jsonl"
+    ? await readJsonl(target, { retain: RETAINED_ROWS, problems, onRecord })
+    : await readLog(target, { retain: RETAINED_ROWS, problems, onRecord });
+
+  if (parsed.headers.length === 0) {
+    return { path: target, headers: [], rowCount: 0, columns: [], sample: [], rows: [], problems: [...problems, "the file has no rows"] };
+  }
+
+  const snapshot = profile.snapshot();
+  snapshot.outliers = await resolveOutliers(target, snapshot);
+
+  const columns = parsed.headers.map((name) => {
+    const shot = snapshot.columns[name];
+    const present = (shot?.seen ?? 0) - (shot?.empty ?? 0);
+    if (present === 0) return { name, kind: "empty" as const };
+    if ((shot?.measured ?? 0) !== present) return { name, kind: "text" as const };
+    return {
+      name, kind: "number" as const,
+      min: shot?.min ?? undefined, max: shot?.max ?? undefined, sum: shot?.sum ?? undefined,
+    };
+  });
+
+  return {
+    path: target,
+    headers: parsed.headers,
+    rowCount: parsed.records,
+    columns,
+    sample: parsed.rows.slice(0, SAMPLE_ROWS),
+    rows: parsed.rows,
+    problems,
+    profile: snapshot,
+  };
 }
 
 /**

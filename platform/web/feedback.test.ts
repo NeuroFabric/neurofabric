@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { applyFeedback, type FeedbackResult } from "./feedback.ts";
 import { resolveSchemaMemory } from "../conductor/schema-memory.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { toBottleneckMarkdown } from "../conductor/bottleneck-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
 import type { CsvReadResult } from "./feedback.ts";
@@ -60,7 +60,7 @@ test("a correction changes what the report says, which is the whole point", asyn
   // BEFORE. The profiler has no duration column to find, so the report declines
   // to state a cost.
   const before = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: "configs/.." });
-  const analysisBefore = analyseBottlenecks(csv, before);
+  const analysisBefore = await analyseBottlenecks(csv, before);
   assert.equal(analysisBefore.categories[0]?.totalElapsed, null, "no duration column was found");
   assert.equal(analysisBefore.vocabulary.thresholdLabel, null, "and so no limit is claimed");
 
@@ -71,7 +71,7 @@ test("a correction changes what the report says, which is the whole point", asyn
   // AFTER. Same file, same engine, different answer.
   const after = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: "configs/.." });
   assert.equal(after?.source, "SESSION_ARCHIVE", "the correction is user-learned, not verified");
-  const analysisAfter = analyseBottlenecks(csv, after);
+  const analysisAfter = await analyseBottlenecks(csv, after);
   assert.equal(analysisAfter.mappings.find((m) => m.role === "duration")?.column, "amount", "the mapping moved");
   // 140.49 is EMEA alone -- 10.5 + 30.0 + 99.99, the three EMEA rows. The whole
   // file totals 201.49; asserting that here would test the wrong bucket, since
@@ -101,7 +101,7 @@ test("a correction does NOT make the guess VERIFIED, because a role is not a uni
   const csv = csvOf(GENERIC);
   await applyFeedback({ cwd, defaultsRoot: "configs/..", headers: csv.headers, rows: csv.rows, column: "amount", role: "duration" });
   const schema = await resolveSchemaMemory({ cwd, headers: csv.headers, rows: csv.rows, defaultsRoot: "configs/.." });
-  const analysis = analyseBottlenecks(csv, schema);
+  const analysis = await analyseBottlenecks(csv, schema);
   assert.equal(analysis.vocabulary.unit, "record", "naming a role does not establish the domain");
   assert.equal(analysis.vocabulary.thresholdLabel, null, "and it does not conjure a threshold");
 });

@@ -82,8 +82,8 @@ const ONE_CAT = `_time,source_host,alert_code,elapsed_time,threshold
 2026-09-30 12:00:19.000,h,PEGA0001,10000,1000
 2026-09-30 12:00:20.000,h,PEGA0009,50,1000`;
 
-test("mean, median and p95 are computed per category from the measured durations", () => {
-  const a = analyseBottlenecks(csvOf(ONE_CAT));
+test("mean, median and p95 are computed per category from the measured durations", async () => {
+  const a = await analyseBottlenecks(csvOf(ONE_CAT));
   const c = a.categories[0];
   assert.equal(c.count, 20);
   assert.equal(c.totalElapsed, 21800, "the total counts every measured row");
@@ -95,9 +95,9 @@ test("mean, median and p95 are computed per category from the measured durations
   assert.ok((c.p95Elapsed ?? 0) > (c.meanElapsed ?? 0), "and p95 above it means the tail is real");
 });
 
-test("median averages the two middle values on an even count", () => {
+test("median averages the two middle values on an even count", async () => {
   // 4 durations: 10, 20, 30, 40 -> median 25, not 20 or 30.
-  const a = analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
+  const a = await analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
 2026-09-30 12:00:00.000,h,PEGA0001,40,1000
 2026-09-30 12:00:01.000,h,PEGA0001,10,1000
 2026-09-30 12:00:02.000,h,PEGA0001,30,1000
@@ -107,9 +107,9 @@ test("median averages the two middle values on an even count", () => {
   assert.equal(a.categories[0].p95Elapsed, 40, "nearest-rank p95 = ceil(0.95*4)=4 -> the 4th value");
 });
 
-test("every measure is null, not zero, when no credible duration column exists", () => {
+test("every measure is null, not zero, when no credible duration column exists", async () => {
   // No elapsed_time. A zero here would be a claim that the work was free.
-  const a = analyseBottlenecks(csvOf(`_time,source_host,alert_code,threshold
+  const a = await analyseBottlenecks(csvOf(`_time,source_host,alert_code,threshold
 2026-09-30 12:00:00.000,h,PEGA0001,1000
 2026-09-30 12:00:01.000,h,PEGA0002,1000`));
   const c = a.categories[0];
@@ -119,10 +119,10 @@ test("every measure is null, not zero, when no credible duration column exists",
   assert.equal(c.p95Elapsed, null);
 });
 
-test("unparseable durations are excluded rather than counted as zero", () => {
+test("unparseable durations are excluded rather than counted as zero", async () => {
   // A blank or non-numeric elapsed_time must not drag the mean toward zero.
   // Counting it as 0 is the single easiest way to make this report lie.
-  const a = analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
+  const a = await analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
 2026-09-30 12:00:00.000,h,PEGA0001,200,1000
 2026-09-30 12:00:01.000,h,PEGA0001,,1000
 2026-09-30 12:00:02.000,h,PEGA0001,n/a,1000
@@ -136,8 +136,8 @@ test("unparseable durations are excluded rather than counted as zero", () => {
   assert.equal(c.p95Elapsed, 400);
 });
 
-test("markdown prints mean, median and p95 with ms headers beside the total", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(ONE_CAT)), "Bottleneck report");
+test("markdown prints mean, median and p95 with ms headers beside the total", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(ONE_CAT)), "Bottleneck report");
   assert.match(md, /\| total elapsed \(ms\) \| mean \(ms\) \| median \(ms\) \| p95 \(ms\) \|/, "all four headers, all stating the unit");
   const row = md.split("\n").find((l) => l.startsWith("| 1 |"))!;
   assert.ok(row.includes("| 21,800 |"), "the total is in the row");
@@ -146,8 +146,8 @@ test("markdown prints mean, median and p95 with ms headers beside the total", ()
   assert.ok(row.includes("| 10,000 |"), "p95 is in the row, formatted like every other figure");
 });
 
-test("markdown prints 'not measurable' rather than a zero when there is no duration", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(`_time,source_host,alert_code
+test("markdown prints 'not measurable' rather than a zero when there is no duration", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(`_time,source_host,alert_code
 2026-09-30 12:00:00.000,h,PEGA0001
 2026-09-30 12:00:01.000,h,PEGA0002`)), "Bottleneck report");
   const row = md.split("\n").find((l) => l.startsWith("| 1 |"))!;

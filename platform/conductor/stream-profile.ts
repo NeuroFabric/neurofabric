@@ -1020,6 +1020,28 @@ export class FileProfile {
   }
 
   /**
+   * ADD COLUMNS AS THEY ARE DISCOVERED, without resetting what is already there.
+   *
+   * A delimited file announces its columns in a header row, so `setHeaders` is
+   * called once and the profile is fixed. JSONL and logs have no header row at
+   * all: their field set is LEARNED, and a telemetry feed routinely introduces a
+   * field at event forty thousand.
+   *
+   * Calling `setHeaders` again would throw away every accumulator, so a profile
+   * that silently reset each time a new field appeared would report statistics
+   * for the fields seen since the LAST arrival -- which is to say, for almost
+   * nothing, while looking like a complete profile.
+   */
+  ensureHeaders(cells: readonly string[]): void {
+    for (const cell of cells) {
+      const name = cell.trim();
+      if (this.headers.includes(name)) continue;
+      this.headers.push(name);
+      this.accumulators.push(new ColumnAccumulator(name));
+    }
+  }
+
+  /**
    * ONE RECORD. The only allocation that grows with the FILE is the retention,
    * and that is capped by construction rather than by hope.
    */

@@ -626,7 +626,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             cwd, headers: csvForExport.headers, rows: rowsForExport,
             defaultsRoot: options.defaultsRoot ?? installRoot,
           });
-          const analysisForExport = analyseBottlenecks(csvForExport, schemaForExport);
+          const analysisForExport = await analyseBottlenecks(csvForExport, schemaForExport);
 
           const { toReactDashboard } = await import("./react-report.ts");
           const html = await toStandaloneExport(analysisForExport, target, schemaForExport?.roles ?? {}, thread);
@@ -735,7 +735,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             cwd, headers: csvForChat.headers, rows: rowsForChat,
             defaultsRoot: options.defaultsRoot ?? installRoot,
           });
-          const analysisForChat = analyseBottlenecks(csvForChat, schemaForChat);
+          const analysisForChat = await analyseBottlenecks(csvForChat, schemaForChat);
 
           // THE SESSION, TAKEN FROM THE RAW BODY THE BROWSER SENT.
           //

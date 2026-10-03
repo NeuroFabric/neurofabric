@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toBottleneckMarkdown } from "../conductor/bottleneck-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 
 /**
  * TASK 3 -- THE REPORT IS TOO LOUD.
@@ -43,10 +43,10 @@ const CSV = (() => {
   return `${lines.join("\n")}\n`;
 })();
 
-function analyse(): ReturnType<typeof analyseBottlenecks> {
+async function analyse(): Promise<BottleneckAnalysis> {
   const parsed = parseCsv(CSV);
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "operations.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -63,21 +63,21 @@ function analyse(): ReturnType<typeof analyseBottlenecks> {
  * of the string, and reading the string is both cheaper and more honest than
  * writing a file to read one back.
  */
-const md = toBottleneckMarkdown(analyse(), "Bottleneck report", "Summary.");
+const md = toBottleneckMarkdown(await analyse(), "Bottleneck report", "Summary.");
 
-test("precondition: the fixture really produces a report with readings", () => {
+test("precondition: the fixture really produces a report with readings", async () => {
   assert.ok(md.length > 0, "the fixture must render something");
   assert.ok(/columns|read/i.test(md), "and it must discuss how columns were read");
 });
 
-test("the provenance section is at the BOTTOM, and named as provenance", () => {
+test("the provenance section is at the BOTTOM, and named as provenance", async () => {
   const provenanceAt = md.search(/^##+ .*(provenance|how this report was read)/im);
   assert.ok(provenanceAt > 0, `a provenance section must exist. Report starts:\n${md.slice(0, 400)}`);
   assert.match(md.slice(provenanceAt), /^##+ .*provenance/im,
     "and be named for what it is, at the foot of the document");
 });
 
-test("PROVENANCE DOES NOT LEAD, and the report says something else first", () => {
+test("PROVENANCE DOES NOT LEAD, and the report says something else first", async () => {
   // THE ASSERTION THAT MATTERS. Moving the section is cosmetic; moving it behind
   // the FINDING is the fix. A reader who has already seen the problem will look
   // up how the file was read; a reader who meets a provenance disclaimer first
@@ -90,7 +90,7 @@ test("PROVENANCE DOES NOT LEAD, and the report says something else first", () =>
   assert.ok(provenanceAt > firstFindingAt, "it must come after at least one substantive section");
 });
 
-test("the provenance section is still COMPLETE after moving", () => {
+test("the provenance section is still COMPLETE after moving", async () => {
   // A move that quietly drops the mapping table is worse than no move: the
   // reader loses the ability to check WHICH columns were guesses, which is the
   // only reason the section exists.
@@ -120,14 +120,14 @@ function rankingRows(markdown: string): string[] {
   return rows;
 }
 
-test("the category ranking is capped at 5 rows by default", () => {
+test("the category ranking is capped at 5 rows by default", async () => {
   const rows = rankingRows(md);
   assert.ok(rows.length > 0, `expected a ranking table. Head:\n${md.slice(0, 400)}`);
   assert.ok(rows.length <= 5,
     `a ranking of ${rows.length} rows is a data dump, not a ranking; cap it at 5`);
 });
 
-test("a cap that is stated beats a cap that is silent", () => {
+test("a cap that is stated beats a cap that is silent", async () => {
   // Truncating a table without saying so is the failure this product refuses
   // elsewhere: a reader cannot tell "we ranked five" from "there were five".
   const rows = rankingRows(md);
@@ -137,11 +137,11 @@ test("a cap that is stated beats a cap that is silent", () => {
   }
 });
 
-test("nothing about the FULL ranking was removed from the data", () => {
+test("nothing about the FULL ranking was removed from the data", async () => {
   // The cap is a presentation decision. The analysis still knows every category,
   // and any consumer reading the object -- rather than the Markdown -- must see
   // them all. If this ever fails, the "cap" became a deletion.
-  const analysis = analyse();
+  const analysis = await analyse();
   assert.ok(analysis.categories.length > 5,
     `the fixture must have more than 5 categories for the cap to mean anything, got ${analysis.categories.length}`);
   assert.ok(analysis.byHour.length > 0, "and hours");

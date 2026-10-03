@@ -789,7 +789,7 @@ export async function renderBottleneckReport(input: {
   const schema = input.schema ?? (input.workspaceCwd === undefined ? undefined : await resolveSchemaMemory({
     cwd: input.workspaceCwd, headers: input.csv.headers, rows: input.csv.rows, defaultsRoot: input.defaultsRoot,
   }));
-  const analysis = analyseBottlenecks(input.csv, schema);
+  const analysis = await analyseBottlenecks(input.csv, schema);
   // An unnamed file gets a title derived from its OWN NAME and the purpose the
   // engine just derived, never the old hardcoded guess. See titleFor().
   const title = String(input.title ?? titleFor({

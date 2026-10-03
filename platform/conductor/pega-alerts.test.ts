@@ -48,7 +48,7 @@ const realShape = [
 
 test("G1 the obvious category column is degenerate and must not win", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
 
   assert.equal(analysis.categoryColumn, "alert_code",
     "ranking by alertType would put all 24 rows in one bucket and answer nothing");
@@ -59,7 +59,7 @@ test("G1 the obvious category column is degenerate and must not win", async () =
 
 test("G2 a degenerate dimension is reported, not silently used", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const degenerate = analysis.degenerateColumns.find((d) => d.column === "alertType");
   assert.ok(degenerate, "alertType was single-valued and that fact must be reported");
   assert.equal(degenerate.distinctValues, 1);
@@ -67,7 +67,7 @@ test("G2 a degenerate dimension is reported, not silently used", async () => {
 
 test("G3 ranking by frequency, as the owner's question asks", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.deepEqual(analysis.categories.map((c) => c.key), ["PEGA0001", "PEGA0028", "PEGA0005", "PEGA0011"]);
   assert.deepEqual(analysis.categories.map((c) => c.count), [13, 5, 4, 2]);
 });
@@ -78,7 +78,7 @@ test("G4 ranking by TOTAL ELAPSED, which is a DIFFERENT order", async () => {
   // frequency and SECOND by total elapsed. A frequency-only ranking buries the
   // category that actually cost the most, while still looking like an answer.
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
 
   const byFreq = analysis.categories.map((c) => c.key);
   const byElapsed = analysis.categoriesByElapsed.map((c) => c.key);
@@ -94,7 +94,7 @@ test("G4 ranking by TOTAL ELAPSED, which is a DIFFERENT order", async () => {
 
 test("G5 every category cites its evidence rows", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   for (const category of analysis.categories) {
     assert.equal(category.rows.length, category.count, `${category.key} cites the wrong number of rows`);
   }
@@ -103,7 +103,7 @@ test("G5 every category cites its evidence rows", async () => {
 
 test("G6 elapsed time sums, and the unit is now RULED rather than guessed", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const mapping = analysis.mappings.find((m) => m.role === "duration");
   assert.ok(mapping, "elapsed_time must be recognised as a duration");
   assert.equal(mapping.column, "elapsed_time");
@@ -116,7 +116,7 @@ test("G6 elapsed time sums, and the unit is now RULED rather than guessed", asyn
 
 test("G7 a threshold comparison is a breach count, flagged as inferred", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const pega1 = analysis.categories.find((c) => c.key === "PEGA0001");
   const pega5 = analysis.categories.find((c) => c.key === "PEGA0005");
   const pega11 = analysis.categories.find((c) => c.key === "PEGA0011");
@@ -144,7 +144,7 @@ test("G8 time buckets span the export, not one instant", async () => {
   ];
   await writeFixture(cwd, "tz.csv", `${header}\n${rows.join("\n")}\n`);
   const csv = await csvRead({ path: path.join(cwd, "tz.csv") });
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.byHour.length, 4, `expected four hourly buckets, got ${analysis.byHour.length}`);
   assert.equal(analysis.byHour[0].key, "2026-09-30T12");
   assert.equal(analysis.timestampsAreNaive, false, "a trailing Z makes them unambiguous");
@@ -162,7 +162,7 @@ test("G8b NAIVE timestamps are reported as ambiguous, not silently localised", a
   ];
   await writeFixture(cwd, "naive.csv", `${header}\n${rows.join("\n")}\n`);
   const csv = await csvRead({ path: path.join(cwd, "naive.csv") });
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.timestampsAreNaive, true,
     "timestamps without a zone are host-relative, and the page must say so");
   assert.ok(analysis.byHour.length >= 1, "they are still bucketed, just not claimed to be UTC");
@@ -173,14 +173,14 @@ test("G9 a missing field is named, not degraded silently", async () => {
   // are impossible. That has to be stated on the page rather than rendered as
   // an empty table that reads like "nothing recurred".
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.ok(analysis.missing.includes("message"),
     `expected 'message' to be reported missing, got: ${analysis.missing.join(", ")}`);
 });
 
 test("G10 a required field that IS present is never reported missing", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.missing.includes("time"), false);
   assert.equal(analysis.missing.includes("category"), false);
   assert.equal(analysis.missing.includes("duration"), false);
@@ -193,14 +193,14 @@ test("R10a the elapsed unit is milliseconds, not a guess", async () => {
   // anywhere in the export. The owner has now ruled it, so it is established
   // fact and the page may print "ms" rather than an uninterpretable number.
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.durationUnit, "ms");
   assert.equal(analysis.durationUnitIsRuled, true, "a ruling is not a hypothesis");
 });
 
 test("R11a timestamps are UTC, so the hourly table may say so", async () => {
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.timeZoneIsRuled, true);
 });
 
@@ -208,7 +208,7 @@ test("R13 a category carries its logger alias", async () => {
   // R13: the code alone is not readable. "PEGA0005" means nothing to the person
   // who has to act on it, so the label becomes "PEGA0005 (<logger>)".
   const csv = await pegaExport(realShape);
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.categories[0].label, "PEGA0001 (logger-PEGA0001)",
     "the alias is appended, not substituted");
   assert.equal(analysis.categories[0].key, "PEGA0001", "the key stays machine-readable");
@@ -225,7 +225,7 @@ test("R13b an alias is only appended when it is unambiguous", async () => {
     "2026-09-30T12:02:00Z,performance,PEGA0001,shared,1300,1000",
   ];
   await writeFixture(cwd, "ambiguous.csv", `${header}\n${rows.join("\n")}\n`);
-  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "ambiguous.csv") }));
+  const analysis = await analyseBottlenecks(await csvRead({ path: path.join(cwd, "ambiguous.csv") }));
   assert.equal(analysis.categories[0].label, "PEGA0001", "an ambiguous mapping must not be printed");
   assert.ok(analysis.ambiguousAliases.length > 0, "and the ambiguity is reported");
 });
@@ -243,7 +243,7 @@ test("D1 a divergence between the two rankings is measured, not just noticed", a
   for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:00:00Z,performance,PEGA_MEGA,logger-mega,1000000,1000`);
   await writeFixture(cwd, "diverge.csv", `${header}\n${rows.join("\n")}\n`);
 
-  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "diverge.csv") }));
+  const analysis = await analyseBottlenecks(await csvRead({ path: path.join(cwd, "diverge.csv") }));
   assert.ok(analysis.divergence !== null, "the orderings disagree, so divergence must be reported");
   assert.equal(analysis.divergence.byFrequency.key, "PEGA_NOISY");
   assert.equal(analysis.divergence.byElapsed.key, "PEGA_MEGA");
@@ -259,6 +259,6 @@ test("D2 no divergence is reported when both rankings agree", async () => {
   for (let i = 0; i < 6; i += 1) rows.push(`2026-09-30T12:0${i}:00Z,performance,PEGA0001,logger-a,1000,1000`);
   for (let i = 0; i < 2; i += 1) rows.push(`2026-09-30T13:0${i}:00Z,performance,PEGA0002,logger-b,900,1000`);
   await writeFixture(cwd, "agree.csv", `${header}\n${rows.join("\n")}\n`);
-  const analysis = analyseBottlenecks(await csvRead({ path: path.join(cwd, "agree.csv") }));
+  const analysis = await analyseBottlenecks(await csvRead({ path: path.join(cwd, "agree.csv") }));
   assert.equal(analysis.divergence, null, "one leader on both orderings is not news");
 });

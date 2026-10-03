@@ -617,7 +617,8 @@ function finish(input: {
         headers: csv.headers,
         rows: csv.rows,
       });
-      return { schema, bottlenecks: analyseBottlenecks(csv, schema), declined: schema === undefined };
+      const bottlenecks = await analyseBottlenecks(csv, schema);
+      return { schema, bottlenecks, declined: schema === undefined };
     },
   };
 }

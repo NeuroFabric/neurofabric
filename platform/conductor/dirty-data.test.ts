@@ -54,13 +54,13 @@ function grid(width: number, rowCount: number, extra?: Record<string, Record<num
 
 const columns = (width: number, extra?: Record<string, Record<number, string>>): string => grid(width, 10, extra);
 
-const stat = (text: string, column: string) =>
-  analyseBottlenecks(csvOf(text)).numerical.columns.find((c) => c.column === column)!;
+const stat = async (text: string, column: string) =>
+   (await analyseBottlenecks(csvOf(text))).numerical.columns.find((c) => c.column === column)!;
 
-test("a string in a numeric column is DIRTY, and an empty cell is EMPTY", () => {
+test("a string in a numeric column is DIRTY, and an empty cell is EMPTY", async () => {
   const text = columns(2, { c1: { 3: "oops_wrong_type" }, c2: { 4: "" } });
-  const c1 = stat(text, "c1");
-  const c2 = stat(text, "c2");
+  const c1 = await stat(text, "c1");
+  const c2 = await stat(text, "c2");
 
   assert.equal(c1.dirty, 1, "a string in a float column is a type mismatch");
   assert.equal(c1.empty, 0, "and it is not a blank");
@@ -68,10 +68,10 @@ test("a string in a numeric column is DIRTY, and an empty cell is EMPTY", () => 
   assert.equal(c2.dirty, 0, "and it is not a type mismatch");
 });
 
-test("missing remains the sum of the two, so the old sentence stays true", () => {
+test("missing remains the sum of the two, so the old sentence stays true", async () => {
   const text = columns(2, { c1: { 2: "oops" }, c2: { 5: "" } });
-  const c1 = stat(text, "c1");
-  const c2 = stat(text, "c2");
+  const c1 = await stat(text, "c1");
+  const c2 = await stat(text, "c2");
   assert.equal(c1.dirty, 1, "c1 holds a string");
   assert.equal(c1.empty, 0);
   assert.equal(c1.missing, 1);
@@ -82,49 +82,49 @@ test("missing remains the sum of the two, so the old sentence stays true", () =>
   assert.equal(c2.measured, 9);
 });
 
-test("neither count ever reaches the arithmetic", () => {
+test("neither count ever reaches the arithmetic", async () => {
   // c1's first row is a string and c2's second is blank. Each vanishes from its
   // OWN column's arithmetic, so c1 runs 1..9: min 1, mean 5.
   const text = columns(2, { c1: { 0: "oops" }, c2: { 1: "" } });
-  const c1 = stat(text, "c1");
+  const c1 = await stat(text, "c1");
   assert.equal(c1.min, 1, "not 0: the string never became a zero");
   assert.equal(c1.measured, 9);
   assert.equal(c1.mean, 5);
 });
 
-test("the offending value is shown, so a reader can act on it", () => {
+test("the offending value is shown, so a reader can act on it", async () => {
   // "1 type-mismatched cell" is a symptom. "the cell reads oops_wrong_type" is
   // a diagnosis the reader can take to whoever produces the file. The count
   // alone sends them back to the raw data to find it.
   const text = columns(2, { c1: { 4: "oops_wrong_type" } });
-  assert.deepEqual(stat(text, "c1").dirtyExamples, ["oops_wrong_type"]);
+  assert.deepEqual((await stat(text, "c1")).dirtyExamples, ["oops_wrong_type"]);
 });
 
-test("examples are deduplicated and capped, so a broken column cannot flood the report", () => {
+test("examples are deduplicated and capped, so a broken column cannot flood the report", async () => {
   // 20 rows, so 3 dirty in 20 is 0.85 and the column stays numeric. At ten rows
   // three dirty was enough to drop it under the profiler's 0.8 floor and the
   // whole column was reclassified as text -- a correct profiler decision that
   // made this test untestable.
   const text = grid(2, 20, { c1: { 2: "N/A", 7: "N/A", 11: "N/A" } });
-  const c1 = stat(text, "c1");
+  const c1 = await stat(text, "c1");
   assert.equal(c1.dirty, 3, "the count is the truth");
   assert.deepEqual(c1.dirtyExamples, ["N/A"], "but the same value is listed once");
   assert.equal(c1.measured, 17);
 });
 
-test("a fully clean column reports zeros, not nulls", () => {
-  const c1 = stat(columns(2), "c1");
+test("a fully clean column reports zeros, not nulls", async () => {
+  const c1 = await stat(columns(2), "c1");
   assert.equal(c1.dirty, 0);
   assert.equal(c1.empty, 0);
   assert.deepEqual(c1.dirtyExamples, []);
 });
 
-test("a column that is ENTIRELY dirty is not summarised as numeric at all", () => {
+test("a column that is ENTIRELY dirty is not summarised as numeric at all", async () => {
   // The profiler should never hand this through -- below the numeric floor it
   // is categorical -- but if the two ever disagree, the counts must still be
   // coherent rather than producing a mean over nothing.
   const text = `c1\nN/A\nN/A\nN/A\nnope\nnil\n-\n?\n--\n+\nx`;
-  const n = analyseBottlenecks(csvOf(text)).numerical;
+  const n = (await analyseBottlenecks(csvOf(text))).numerical;
   const c1 = n.columns.find((c) => c.column === "c1");
   if (c1 !== undefined) {
     assert.equal(c1.measured, 0);

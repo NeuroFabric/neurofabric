@@ -45,8 +45,8 @@ const CATEGORICAL = `_time,source_host,alert_code,elapsed_time,threshold
 2026-09-30 12:02:00.000,host-web,PEGA0001,1300,1000
 2026-09-30 12:03:00.000,host-api,PEGA0011,300,1000`;
 
-test("a file with no categorical column prints NO ranking headings", () => {
-  const analysis = analyseBottlenecks(csvOf(NUMERIC_ONLY));
+test("a file with no categorical column prints NO ranking headings", async () => {
+  const analysis = await analyseBottlenecks(csvOf(NUMERIC_ONLY));
   assert.equal(analysis.categoryColumn, null, "the fixture really has nothing to rank on");
   assert.equal(analysis.categories.length, 0);
   assert.equal(analysis.categoriesByElapsed.length, 0);
@@ -60,26 +60,26 @@ test("a file with no categorical column prints NO ranking headings", () => {
   // RANKING tables specifically, which is what it was always trying to say.
 });
 
-test("the one-line note says what was missing, in plain words", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
+test("the one-line note says what was missing, in plain words", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
   assert.match(md, /^> No categorical columns found; skipping categorical rankings\.$/m,
     "exactly the agreed sentence, as its own line");
 });
 
-test("the provenance table is omitted too when NO column could be read as a role", () => {
+test("the provenance table is omitted too when NO column could be read as a role", async () => {
   // Found by running the OWNER'S ACTUAL FILE rather than by reasoning about it.
   // A header with no body is the same defect as an empty ranking table, and it
   // was still there: twenty columns named col_1..col_20 match no role candidate
   // at all, so the report printed role/column/basis/note over zero readings.
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(NUMERIC_ONLY)), "Numerical file");
   assert.ok(!md.includes("| role | column | basis | note |"), "no empty provenance table");
   assert.match(md, /no readings to report/, "and it says what that means");
   // The gap statement is real information and must survive.
   assert.match(md, /cannot answer anything requiring/, "what could not be answered is still reported");
 });
 
-test("a categorical file still gets both tables", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(CATEGORICAL)), "Bottleneck report");
+test("a categorical file still gets both tables", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(CATEGORICAL)), "Bottleneck report");
   assert.match(md, /## Record categories by frequency/);
   assert.match(md, /## Record categories by total elapsed time/);
   assert.ok(!md.includes("skipping categorical rankings"), "and the note does not appear when there is something to say");
@@ -102,11 +102,11 @@ test("the html omits the tables too, rather than rendering empty ones", async ()
   assert.match(page, /<h2>How this page was read<\/h2>/, "and the provenance table is still there");
 });
 
-test("a table with an UNMEASURABLE column still renders -- absence of a row is not absence of data", () => {
+test("a table with an UNMEASURABLE column still renders -- absence of a row is not absence of data", async () => {
   // The distinction this whole change must not blur. The RANKING exists here;
   // one duration is unknown. Dropping the table would throw away a real answer
   // because one cell was empty, which is the opposite mistake.
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(`_time,source_host,alert_code
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(`_time,source_host,alert_code
 2026-09-30 12:00:00.000,host-web,PEGA0001
 2026-09-30 12:01:00.000,host-bg,PEGA0002`)), "Bottleneck report");
   assert.match(md, /## Record categories by frequency/, "the ranking is real and stays");

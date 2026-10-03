@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toReactDashboard, DASHBOARD_DATA_ID } from "./react-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 
 /**
  * THE FORECAST, RENDERED.
@@ -41,10 +41,10 @@ const SPARSE = `_time,query_snippet,total_elapsed_time_ms
 2026-09-30T10:00:00.000,SELECT b,110
 2026-09-30T11:00:00.000,SELECT c,120`;
 
-function analyseOf(csv: string) {
+async function analyseOf(csv: string): Promise<BottleneckAnalysis> {
   const parsed = parseCsv(csv);
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "query_perf.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -69,8 +69,8 @@ function appSourceOf(html: string): string {
 
 const LIVE = { live: { path: "query_perf.csv" } };
 
-test("the payload carries a FORECAST for a file with enough history", () => {
-  const data = payloadOf(toReactDashboard(analyseOf(RISING), LIVE));
+test("the payload carries a FORECAST for a file with enough history", async () => {
+  const data = payloadOf(toReactDashboard(await analyseOf(RISING), LIVE));
   const fc = data.forecast as { ok?: boolean; points?: unknown[]; method?: string } | null;
   assert.ok(fc !== null, "twenty continuous hours must produce a forecast");
   assert.equal(fc!.ok, true);
@@ -78,8 +78,8 @@ test("the payload carries a FORECAST for a file with enough history", () => {
   assert.match(String(fc!.method), /smoothing/i, "and it says what it did");
 });
 
-test("EVERY projected point carries its INTERVAL", () => {
-  const fc = payloadOf(toReactDashboard(analyseOf(RISING), LIVE)).forecast as {
+test("EVERY projected point carries its INTERVAL", async () => {
+  const fc = payloadOf(toReactDashboard(await analyseOf(RISING), LIVE)).forecast as {
     points: { lower: number; upper: number; count: number }[];
   };
   assert.equal(fc.points.length, 12);
@@ -89,8 +89,8 @@ test("EVERY projected point carries its INTERVAL", () => {
   }
 });
 
-test("a file with too little history carries NO forecast, and says why", () => {
-  const fc = payloadOf(toReactDashboard(analyseOf(SPARSE), LIVE)).forecast as
+test("a file with too little history carries NO forecast, and says why", async () => {
+  const fc = payloadOf(toReactDashboard(await analyseOf(SPARSE), LIVE)).forecast as
     { ok?: boolean; reason?: string } | null;
   assert.ok(fc !== null, "the payload must carry the REFUSAL, not omit the field");
   assert.equal(fc!.ok, false, "three hours cannot support a projection");
@@ -98,36 +98,36 @@ test("a file with too little history carries NO forecast, and says why", () => {
     `the reason must travel with the payload so the UI can say it: ${fc!.reason}`);
 });
 
-test("THE CHART CAN BE TOLD TO SHOW IT", () => {
-  const src = appSourceOf(toReactDashboard(analyseOf(RISING), LIVE));
+test("THE CHART CAN BE TOLD TO SHOW IT", async () => {
+  const src = appSourceOf(toReactDashboard(await analyseOf(RISING), LIVE));
   assert.match(src, /Show [Ff]orecast|forecast-toggle/,
     "there must be a control -- a forecast nobody can summon is not a feature");
   assert.match(src, /D\.forecast/,
     "and it must be driven by the payload, not computed in the page");
 });
 
-test("PROJECTED POINTS ARE DISTINGUISHABLE FROM OBSERVED ONES", () => {
+test("PROJECTED POINTS ARE DISTINGUISHABLE FROM OBSERVED ONES", async () => {
   // The lying-by-lookalike failure. Chart.js draws a dashed dataset and a solid
   // one differently; without that the projection is indistinguishable from data.
-  const src = appSourceOf(toReactDashboard(analyseOf(RISING), LIVE));
+  const src = appSourceOf(toReactDashboard(await analyseOf(RISING), LIVE));
   assert.match(src, /borderDash/,
     "the projected series must be DASHED, or it reads as measured");
   assert.match(src, /fill:\s*(true|"-1"|false)/,
     "and the band is drawn as a fill, which is what an interval looks like");
 });
 
-test("THE INTERVAL IS DRAWN, not just the line", () => {
+test("THE INTERVAL IS DRAWN, not just the line", async () => {
   // A dashed line without a band is a point estimate that happens to be dashed.
   // The band is the entire honest part.
-  const src = appSourceOf(toReactDashboard(analyseOf(RISING), LIVE));
+  const src = appSourceOf(toReactDashboard(await analyseOf(RISING), LIVE));
   assert.match(src, /lower|upper/,
     "the chart config must reference the interval bounds");
   assert.match(src, /band|interval|range/i,
     "and name it, so a reader of the code knows what the fill means");
 });
 
-test("THE BOUNDARY between observed and projected is published", () => {
-  const data = payloadOf(toReactDashboard(analyseOf(RISING), LIVE));
+test("THE BOUNDARY between observed and projected is published", async () => {
+  const data = payloadOf(toReactDashboard(await analyseOf(RISING), LIVE));
   const fc = data.forecast as { lastObservedHour?: string };
   assert.ok(fc.lastObservedHour !== undefined && fc.lastObservedHour !== null,
     "the chart needs to know where the engine stopped knowing");
@@ -135,24 +135,24 @@ test("THE BOUNDARY between observed and projected is published", () => {
     "as the hour key the timeline already uses");
 });
 
-test("IT CAN BE TURNED OFF", () => {
+test("IT CAN BE TURNED OFF", async () => {
   // The control most likely to be removed in a tidy-up, because a toggle is one
   // more thing. A reader who wants the past must not be forced to look at a
   // claim about the future.
-  const src = appSourceOf(toReactDashboard(analyseOf(RISING), LIVE));
+  const src = appSourceOf(toReactDashboard(await analyseOf(RISING), LIVE));
   assert.match(src, /useState/, "the toggle holds state");
   assert.match(src, /checked:/, "and it is a real, driven control");
 });
 
-test("a page with no forecast still renders, and offers nothing", () => {
+test("a page with no forecast still renders, and offers nothing", async () => {
   // The refusal must not become a broken chart or a dead control.
-  const src = appSourceOf(toReactDashboard(analyseOf(SPARSE), LIVE));
+  const src = appSourceOf(toReactDashboard(await analyseOf(SPARSE), LIVE));
   assert.match(src, /D\.forecast/, "the toggle is gated on the payload, not assumed");
   assert.match(src, /reason/, "and the reason is rendered when there is no forecast");
 });
 
-test("the forecast does not invent hours the engine never observed", () => {
-  const data = payloadOf(toReactDashboard(analyseOf(RISING), LIVE));
+test("the forecast does not invent hours the engine never observed", async () => {
+  const data = payloadOf(toReactDashboard(await analyseOf(RISING), LIVE));
   const timeline = (data.timeline as { hour: string }[]).map((p) => p.hour);
   const fc = data.forecast as { points: { hour: string }[]; lastObservedHour: string };
   const overlap = fc.points.filter((p) => timeline.includes(p.hour));

@@ -72,7 +72,7 @@ test("A FRESH CLONE, WITH NO .session-archive AT ALL, FALLS BACK TO THE SHIPPED 
 
   // And they must reach the ANALYSIS as established, not as guesses. A shipped
   // schema that is read but not applied is a config file that means nothing.
-  const analysis = analyseBottlenecks(csv, schema);
+  const analysis = await analyseBottlenecks(csv, schema);
   for (const role of ["category", "duration", "alias", "time", "source", "threshold"]) {
     assert.equal(analysis.mappings.find((m) => m.role === role)?.hypothesis, false, `${role} must be established from the shipped schema`);
   }

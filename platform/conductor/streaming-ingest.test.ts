@@ -149,7 +149,7 @@ test("THE RETAINED WINDOW IS CAPPED, and the statistics are not", async (t) => {
   const elapsed = csv.columns.find((column) => column.name === "elapsed_time");
   assert.ok(elapsed?.kind === "number", "elapsed_time is numeric");
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const stat = analysis.numerical.columns.find((column) => column.column === "elapsed_time");
   assert.ok(stat !== undefined, "the numeric column is described");
   assert.equal(stat!.measured, 60_000,
@@ -204,7 +204,7 @@ test("THE OUTLIER COUNT IS EXACT even when the fences were estimated", async (t)
   await rm(file, { force: true });
 });
 
-test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", () => {
+test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", async () => {
   // This test exists because the implementation got it WRONG first.
   //
   // The eviction created an entry carrying the victim's count, and then -- one
@@ -235,7 +235,7 @@ test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", 
     "collapse under eviction are not an approximation, they are a lie.");
 });
 
-test("a table that never overflows is EXACT, which is the case every fixture is", () => {
+test("a table that never overflows is EXACT, which is the case every fixture is", async () => {
   const aggregator = new KeyedAggregator({ capacity: 256 });
   for (let i = 0; i < 100; i += 1) aggregator.add("only", { row: i + 2, duration: i });
   const entries = aggregator.entries();
@@ -280,7 +280,7 @@ test("THE RANKINGS AND THE TIMELINE COVER EVERY ROW, not the retained window", a
   const csv = await csvRead({ path: file });
   assert.equal(csv.rows.length, 10_000, "the window stays capped -- the whole point of Phase 10");
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const categorySum = analysis.categories.reduce((sum, c) => sum + c.count, 0);
   const hourSum = analysis.hourly.hours.reduce((sum, h) => sum + h.count, 0);
   const sourceSum = analysis.bySource.reduce((sum, b) => sum + b.count, 0);
@@ -320,7 +320,7 @@ test("a DROPPED category key is announced rather than silently absent", async ()
   await new Promise<void>((resolve, reject) => out.end((error?: Error | null) => (error ? reject(error) : resolve())));
 
   const csv = await csvRead({ path: file });
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const scope = analysis.rankingScope;
   assert.ok(scope.categoryKeysTracked <= scope.categoryKeyBudget,
     `the key budget must hold; ${scope.categoryKeysTracked} keys tracked against a budget of ${scope.categoryKeyBudget}`);
@@ -360,4 +360,49 @@ test("the reservoir is BOUNDED, which is the whole claim", async () => {
   assert.equal(shot.sum, expectedSum, "the sum is exact, because it is accumulated and not sampled");
 
   await rm(file, { force: true });
+});
+test("THE EVENT LOOP STAYS FREE while a large file is analysed", async (t) => {
+  // The production defect Phase 13 exists to remove, asserted rather than argued.
+  //
+  // The full-file pass used to be a synchronous `readSync` loop. That is correct
+  // for a CLI and wrong for a server: the thread is held for the duration of the
+  // file, so one large export stalls every OTHER connection in the process. In a
+  // multi-tenant deployment that is not a slow request, it is a frozen service.
+  //
+  // THE ASSERTION IS TIMING, NOT CORRECTNESS. Every other test in this file checks
+  // the ANSWER, and the answer was equally right under the blocking reader -- which
+  // is exactly why nothing caught it. So this one counts timer ticks that fired
+  // DURING the analysis: if the reader yields to the event loop at all, the timer
+  // runs. Under the old driver this number was zero, every time.
+  const cwd = await makeTempWorkspace("nf-eventloop-");
+  const file = path.join(cwd, "large.csv");
+  const ROWS = 40_000;
+
+  const out = createWriteStream(file, { encoding: "utf8", highWaterMark: 1 << 20 });
+  out.write("_time,alertType,elapsed_ms\n");
+  for (let start = 0; start < ROWS; start += 5_000) {
+    let chunk = "";
+    for (let i = start; i < Math.min(start + 5_000, ROWS); i += 1) {
+      const hour = String(i % 24).padStart(2, "0");
+      chunk += `2026-09-30T${hour}:00:00Z,code-${i % 7},${100 + (i % 900)}\n`;
+    }
+    if (!out.write(chunk)) await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+  }
+  await new Promise<void>((resolve, reject) => {
+    out.end((error?: Error | null) => (error ? reject(error) : resolve()));
+  });
+
+  const csv = await csvRead({ path: file });
+
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  const analysis = await analyseBottlenecks(csv);
+  clearInterval(timer);
+
+  t.diagnostic(`${ROWS} rows analysed with ${ticks} timer tick(s) during the pass`);
+  assert.equal(analysis.totalRows, ROWS, "and the analysis still produced its answer");
+  assert.ok(ticks > 0,
+    `the event loop was never yielded to: the timer fired ${ticks} times during a ${ROWS}-row analysis. ` +
+    "A synchronous reader returns the right answer while starving every other request in the process, " +
+    "and no assertion about the ANSWER can ever catch that.");
 });

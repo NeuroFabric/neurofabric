@@ -1,9 +1,10 @@
 import type { CsvReadResult } from "./capabilities.ts";
+import { streamDocument } from "./capabilities.ts";
 import {
   fencesFromQuartiles,
   outliersFromSorted,
   percentileSorted,
-  streamCsvRecordsSync,
+  streamCsvRecords,
   HourlyCounter,
   KeyedAggregator,
   type FenceSummary,
@@ -332,7 +333,7 @@ const ERROR_STATUSES = new Set(["4", "5"]);
  * additionally checked for cardinality below.
  */
 const ROLE_CANDIDATES: Record<string, readonly string[]> = {
-  time: ["_time", "timestamp", "time"],
+  time: ["_time", "timestamp", "time", "ts", "@timestamp", "event_time", "eventtime"],
   source: ["source", "source_host", "sourcetype", "host", "host_name"],
   // Most specific first: a code discriminates better than a type.
   category: ["alert_code", "alertcode", "alert_type", "alertType", "category", "event_type", "type"],
@@ -1119,7 +1120,27 @@ function hourlyProfile(hours: HourlyCounter): HourlyProfile {
   };
 }
 
-export function analyseBottlenecks(
+/**
+ * THE ANALYSIS IS ASYNCHRONOUS, and that is a production requirement rather than
+ * a style choice.
+ *
+ * The full-file pass used to be a synchronous `readSync` loop, which is correct
+ * for a CLI and wrong for a server: it holds the thread for the duration of the
+ * file, so one large export stalls every OTHER connection in the process. A
+ * multi-tenant deployment cannot afford a request that freezes the event loop
+ * for the length of somebody else's file.
+ *
+ * So the pass is awaited rather than blocking, and everything downstream of it --
+ * the Conductor, the web server, the PDF connector, and every test that asserts
+ * on an analysis -- awaits in turn. The ARITHMETIC is unchanged: the same
+ * accumulators, the same fences, the same rankings. Only the I/O yields.
+ *
+ * A note on what this does NOT buy. The accumulators are still bounded and the
+ * retained window is still 10,000 rows, so memory is flat either way; what
+ * changes is that the CPU work between awaits now interleaves with other
+ * requests instead of monopolising the loop until the file is read.
+ */
+export async function analyseBottlenecks(
   csv: CsvReadResult,
   /**
    * A stored mapping for THIS file, when one resolved. Its roles are taken as
@@ -1127,7 +1148,7 @@ export function analyseBottlenecks(
    * is a property of the data and is re-checked below either way.
    */
   schema?: ResolvedSchema,
-): BottleneckAnalysis {
+): Promise<BottleneckAnalysis> {
   const { mappings, degenerate, chosen, verified } = resolveMappings(csv, schema);
 
   const timeCol = chosen.time;
@@ -1267,21 +1288,14 @@ export function analyseBottlenecks(
       takeRow((column) => String(row[column] ?? ""), index + 2);
     });
   } else {
-    // The column positions, resolved ONCE rather than per row: a Map lookup per
-    // column beats an indexOf scan per column, and this runs half a million times.
-    const position = new Map(csv.headers.map((header, index) => [header, index]));
-    let seenHeader = false;
-    streamCsvRecordsSync(csv.path, (cells, line) => {
-      if (!seenHeader) {
-        seenHeader = true;
-        return;
-      }
-      takeRow((column) => {
-        const index = position.get(column);
-        return index === undefined ? "" : cells[index] ?? "";
-      }, line);
+    // THE RE-READ IS FORMAT-AWARE. It used to assume a delimited file, so a log
+    // or a JSONL feed was parsed a second time by the CSV parser: no header row to
+    // map columns from, every ranking empty, and a timeline that rendered blank
+    // while reporting success. See `streamDocument`.
+    categorisedRows = await streamDocument(csv.path, (fields, rowNumber) => {
+      takeRow((column) => fields[column] ?? "", rowNumber);
     });
-    categorisedRows = csv.profile?.rowCount ?? csv.rows.length;
+    if (categorisedRows === 0 && csv.profile !== undefined) categorisedRows = csv.profile.rowCount;
   }
 
   // `rows`, NEVER `sample`. The sample is capped for charting; analysing it

@@ -66,8 +66,8 @@ const SPIKE = hourly([5, 4, 6, 5, 80, 5]);
 /** The same shape with the spike removed: nothing should be flagged. */
 const FLAT = hourly([5, 4, 6, 5, 7, 5]);
 
-test("the hourly profile computes a mean across the window and flags the spike", () => {
-  const a = analyseBottlenecks(csvOf(SPIKE));
+test("the hourly profile computes a mean across the window and flags the spike", async () => {
+  const a = await analyseBottlenecks(csvOf(SPIKE));
   const h = a.hourly;
   assert.equal(h.hours.length, 6, "six hour buckets");
   assert.equal(h.countedRows, 105, "every readable row is counted somewhere");
@@ -88,32 +88,32 @@ test("the hourly profile computes a mean across the window and flags the spike",
   }
 });
 
-test("hours are in chronological order and keep their share", () => {
-  const h = analyseBottlenecks(csvOf(SPIKE)).hourly;
+test("hours are in chronological order and keep their share", async () => {
+  const h = (await analyseBottlenecks(csvOf(SPIKE))).hourly;
   const keys = h.hours.map((x) => x.key);
   assert.deepEqual(keys, [...keys].sort(), "ISO hour keys sort chronologically, so the table reads forwards");
   const busiest = h.hours.reduce((a, b) => (b.count > a.count ? b : a));
   assert.ok(Math.abs(busiest.share - 80 / 105) < 0.001, "share is stated, so the spike is quantified in context");
 });
 
-test("a flat day is not flagged, and the report says so rather than inventing one", () => {
-  const h = analyseBottlenecks(csvOf(FLAT)).hourly;
+test("a flat day is not flagged, and the report says so rather than inventing one", async () => {
+  const h = (await analyseBottlenecks(csvOf(FLAT))).hourly;
   assert.equal(h.flagged, 0);
   assert.ok(h.hours.every((x) => !x.isSpike), "the busiest hour of a flat day is not a spike");
 });
 
-test("a window too short to judge is declared too short, not silently unflagged", () => {
+test("a window too short to judge is declared too short, not silently unflagged", async () => {
   // Two hours, 30 then 70. The 2x test would call 70 a spike against a mean of
   // 50, which is arithmetic, not evidence.
-  const h = analyseBottlenecks(csvOf(hourly([30, 70]))).hourly;
+  const h = (await analyseBottlenecks(csvOf(hourly([30, 70])))).hourly;
   assert.equal(h.buckets, 2);
   assert.ok(h.insufficient, "the report is told the window cannot support the judgement");
   assert.equal(h.flagged, 0, "and nothing is flagged");
   assert.equal(h.hours.every((x) => !x.isSpike), true, "including the 70");
 });
 
-test("sigma is computed and reported even though it is not the rule", () => {
-  const h = analyseBottlenecks(csvOf(SPIKE)).hourly;
+test("sigma is computed and reported even though it is not the rule", async () => {
+  const h = (await analyseBottlenecks(csvOf(SPIKE))).hourly;
   // Population sigma of 5,4,6,5,80,5 is 27.96. mean + 2sigma is 73.4, which is
   // BELOW the spike at 80 -- so a 2-sigma rule would have missed the one thing
   // this fixture exists to prove. That is the whole argument for using a ratio,
@@ -123,8 +123,8 @@ test("sigma is computed and reported even though it is not the rule", () => {
   assert.equal(h.spikeMultiple, 2, "and the rule that did fire is the ratio");
 });
 
-test("markdown marks the spike hour unmistakably", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(SPIKE)), "Bottleneck report");
+test("markdown marks the spike hour unmistakably", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(SPIKE)), "Bottleneck report");
   assert.match(md, /SPIKE/, "the word appears");
   assert.match(md, /80 rows/, "next to the count");
   const line = md.split("\n").find((l) => l.includes("SPIKE"))!;
@@ -132,8 +132,8 @@ test("markdown marks the spike hour unmistakably", () => {
   assert.match(md, /hourly average/, "with the baseline it is measured against");
 });
 
-test("a flat day prints no SPIKE marker and no spike callout", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(FLAT)), "Bottleneck report");
+test("a flat day prints no SPIKE marker and no spike callout", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(FLAT)), "Bottleneck report");
   assert.ok(!md.includes("SPIKE"), "no false alarm on ordinary data");
 });
 
@@ -147,8 +147,8 @@ test("html marks it too", async () => {
   assert.match(page, /class="spike"/, "and it is marked in the markup, so it can be styled and not just read");
 });
 
-test("byHour is untouched -- this is additive", () => {
-  const a = analyseBottlenecks(csvOf(SPIKE));
+test("byHour is untouched -- this is additive", async () => {
+  const a = await analyseBottlenecks(csvOf(SPIKE));
   assert.equal(a.byHour.length, 6, "the existing table still has its rows");
   assert.equal(a.byHour.reduce((s, b) => s + b.count, 0), 105, "and still sums to every readable row");
 });

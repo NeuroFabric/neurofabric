@@ -141,7 +141,7 @@ h("div", { className: "sticky bottom-0 z-20 px-4 pt-6 pb-4 bg-gradient-to-t from
         ref: pickerRef,
         type: "file",
         hidden: true,
-        accept: ".csv,text/csv,application/pdf,.json,application/json,.log,.txt",
+        accept: ".csv,.tsv,text/csv,.jsonl,.ndjson,application/x-ndjson,.log,text/plain,application/pdf,.json,application/json,.txt",
         onChange: function (e) {
           if (e.target.files && e.target.files[0]) loadFile(e.target.files[0].name);
           e.target.value = "";
