@@ -186,6 +186,9 @@ function forecastFollowup(ask: string): string {
   return `Ask me "${ask}" if you want the rest of the file.`;
 }
 
+import { evaluateLive, liveFindings } from "../live-anomaly.ts";
+import type { BrokerSnapshot } from "../stream-broker.ts";
+
 export const anomalyAgent: Subagent = {
   name: "anomaly",
   handles(prompt) {
@@ -199,5 +202,22 @@ export const anomalyAgent: Subagent = {
   },
   answer(ctx, prompt) {
     return asksAboutDiscordance(prompt) ? discordanceAnswer(ctx) : findingsAnswer(ctx);
+  },
+  /**
+   * ANSWER FROM A LIVE SNAPSHOT, and only ever from one.
+   *
+   * The contract takes the SNAPSHOT rather than a pre-evaluated verdict, so the
+   * fence arithmetic lives in one place and the file path and the live path cannot
+   * drift in what they consider anomalous. `evaluateLive` is pure and touches no
+   * stream state, so asking twice cannot disturb the broker.
+   */
+  answerLive(snapshot: BrokerSnapshot) {
+    const verdict = evaluateLive(snapshot);
+    return {
+      kind: "answer" as const,
+      text: liveFindings(verdict),
+      widgets: [],
+      suggestions: ["what is the busiest hour right now?", "which partition is busiest?"],
+    };
   },
 };
