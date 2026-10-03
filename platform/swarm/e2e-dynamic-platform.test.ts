@@ -370,7 +370,15 @@ test("AN UPGRADED SCHEMA IS REFLECTED IN THE PORTAL WITHOUT A STORED CONFIG", as
   registry.register({ ...FINANCIAL_SCHEMA, version: "2.0.0", capabilities: ["now also flags chargebacks"] }, { tenant: T });
 
   assert.equal(before, "1.0.0");
-  assert.equal(registry.get("financial-agent")?.version, "2.0.0");
+  // DERIVED FROM THE TENANT UNDER TEST, NOT WRITTEN OUT.
+  //
+  // This read `registry.get("financial-agent")` -- the pre-`d221f3d` single-
+  // argument signature -- and returned `undefined` against a two-argument one.
+  // The behaviour is not missing; the CALL was stale. Writing the bare id back
+  // would re-break on the next id-format change, which is the fourth coat of the
+  // same lesson: a literal in a test is a place the contract can move without
+  // the test noticing. See docs/DECISIONS.md D-042.2.
+  assert.equal(registry.get(T, "financial-agent")?.version, "2.0.0");
   // Six, not four. The two live routes -- `GET /live` and `POST /ingest` -- were
   // added when the live gateway was mounted, and this assertion was not moved with
   // them. A count that pins a stale number does not fail usefully: it fails the
