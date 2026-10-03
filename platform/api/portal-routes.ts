@@ -521,7 +521,9 @@ function refused(decision: EdgeDecision): UiResponse {
  * a frontend can show "customise me" rather than pretending a customer chose it.
  */
 function derivePortal(tenant: string, registry: DynamicAgentRegistry): PortalConfig {
-  const agents = registry.describeAll();
+  // ONLY this tenant's agents. `describeAll` here would put another customer's
+  // agent titles on this customer's screen, which is a disclosure in a widget.
+  const agents = registry.describeFor(tenant);
   return {
     tenant,
     title: `${tenant} diagnostics`,
@@ -610,7 +612,10 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
         return json(400, { error: "schema refused", issues: validation.issues });
       }
       try {
-        const { agent, replaced } = registry.register(validation.schema);
+        // The tenant comes from the proven credential, never from the body: a
+        // caller that could name its tenant could write into another customer's
+        // namespace by choosing a different one.
+        const { agent, replaced } = registry.register(validation.schema, { tenant });
         return json(200, {
           agent: agent.describe(),
           replacedVersion: replaced?.version ?? null,
@@ -686,9 +691,12 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
     }
 
     if (clean === AGENTS_PATH) {
-      const roster = registry.describeAll();
+      // Scoped to the caller. A cross-tenant roster here would list another
+      // customer's agent titles, which is a disclosure in a list widget.
+      const roster = registry.describeFor(tenant);
       return json(200, {
         at: new Date().toISOString(),
+        tenant,
         total: roster.length,
         agents: roster,
         // Published so a portal can tell a customer which of these are real. A
@@ -700,10 +708,11 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
     }
 
     // GET schema/<id>: the raw schema, which is what an editor renders and what an
-    // export writes. The id is tenant-independent -- schemas are platform objects,
-    // not customer data -- but the CALLER is still proven.
+    // export writes. Scoped to the caller, so a schema id another tenant happens
+    // to use is not readable here -- it is not merely hidden by the URL, it is not
+    // in this tenant's namespace at all.
     const id = decodeURIComponent(clean.slice(SCHEMA_PATH.length + 1));
-    const schema: AgentSchema | undefined = registry.schemaOf(id);
+    const schema: AgentSchema | undefined = registry.schemaOf(tenant, id);
     if (schema === undefined) return json(404, { error: "no agent with that id is registered" });
     return json(200, { schema });
   }

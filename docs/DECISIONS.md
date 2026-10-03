@@ -3987,3 +3987,116 @@ fluke.
 - `dynamic-registry.test.ts` — the nested-quantifier refusal, and the O(1) primitives.
 - `portal-routes.test.ts` — two-credential tenant isolation.
 - `e2e-dynamic-platform.test.ts` — the memory proof.
+
+
+## D-041 — A linear-time regex engine, and why the timeout was the wrong fix
+
+**Date:** 2026-10-28
+**Stage:** 9 (ReDoS remediation and demo)
+**Status:** Accepted
+**Affects:** `platform/swarm/safe-regex.ts`, `platform/swarm/dynamic-registry.ts`, `tsconfig.json`, `scripts/demo.ts`
+
+### Context
+
+D-040.2 recorded that schema regexes ran on V8 and could be hung by a
+nested-quantifier pattern, and mitigated it with a heuristic that refused the
+common shapes. This closes that limitation properly.
+
+### D-041.1 — THE REQUESTED 50ms ABORT IS NOT IMPLEMENTABLE, AND BUILDING IT WOULD BE DANGEROUS
+
+The directive asked for a strict evaluation timeout that aborts a pattern after
+50ms. A JavaScript regex call is **synchronous**: there is no interrupt, no
+`AbortSignal` that reaches it, and no way to move it to another thread without a
+structured-clone round trip per event. A timer around such a call can only be
+measured *after* it returns, which is after the event loop has already been
+blocked for as long as the pattern wanted.
+
+So a timeout wrapper would be the single most dangerous thing this platform could
+ship on this surface: it would make a wedged event loop *look* handled in a
+review, while remaining exactly as wedged in production.
+
+The fix is therefore structural rather than temporal. Schema patterns are compiled
+to a **Thompson NFA** and evaluated in one pass, O(subject x program), with no
+backtracking to be exponential with. The 50ms budget survives as a **tripwire**
+that disables a pattern and counts it — the alarm, not the door.
+
+### D-041.2 — The nested-quantifier heuristic is DELETED, not left in place
+
+`(a+)+` is now simply safe. Keeping the refusal would forbid customers patterns
+they are entitled to write, for a reason that no longer exists.
+
+A control whose justification has evaporated is worse than no control: it is a
+control nobody thinks to update, and the next engineer to read it concludes the
+platform is more fragile than it is. The reason for the deletion is recorded in
+the source where the refusal used to be, so the next reader finds the history
+instead of the absence.
+
+The pattern **length ceiling survives**, and its test name now says why: it is a
+cost bound, not a safety one. Quoting the two as the same thing is how a control
+ends up justified by a reason that has gone.
+
+### D-041.3 — The supported language is a SUBSET, and the refusals are specific
+
+Supported: literals, the dot, classes with ranges and negation, the digit, word
+and space shorthands and their negations, groups, alternation, counted
+repetitions, the three anchors, word boundaries, and the case-insensitive and
+multiline flags.
+
+Refused, each with its own reason: lookahead, lookbehind, backreferences, named
+groups, lazy and possessive quantifiers, non-ASCII literals, empty alternatives,
+repetition over 1000, program over 20,000 instructions.
+
+A bounded subset that cannot hang is worth more here than a complete one that can,
+because the author sees the refusal at authoring time and can write a different
+pattern. The global flag is refused too, and for a NEW reason: matching is
+stateless, so it is inert rather than meaningful.
+
+### D-041.4 — CORRECTNESS IS THE PRIMARY EVIDENCE, NOT A TIMING NUMBER
+
+A linear engine that is subtly **wrong** is worse than one that is merely slow: it
+produces confident wrong verdicts and there is no hang to notice. So the main
+evidence is differential — a written corpus of 60 patterns across 40
+boundary-chosen subjects, plus a **seeded generative sweep** of 1,200
+grammar-built patterns against V8.
+
+Seeded deliberately. A generative differential test that fails intermittently is
+worse than none, because it gets rerun until it passes.
+
+### D-041.5 — Five real bugs, all in exit wiring, all found by that sweep
+
+Every one of these produced confident wrong answers with no error and no hang:
+
+1. A character fragment exited at its trailing `match`, which `patch` cannot
+   repoint, so a three-count repetition compiled to a single character.
+2. A repetition's loop entry had its escape branch emitted as -1 and filled by a
+   patcher that only writes the FIRST branch, so a one-or-more repetition matched
+   one character.
+3. An open-ended counted repetition returned without consuming its closing brace,
+   so the brace was parsed as a literal and the pattern silently acquired a
+   required character.
+4. An alternation's outermost split was both entry and exit, so the caller's patch
+   found its first branch already set and no alternation could reach `match`.
+5. Alternation chained option **successes** into the next option instead of the
+   shared exit. In an NFA all branches run at once, so `a` or `ab` failed to match
+   the single character "a".
+
+The lesson worth keeping: in a Thompson construction, "every path out of a region
+reaches the same node, and that node is written by the CALLER" is the invariant,
+and violating it fails silently rather than loudly.
+
+### D-041.6 — The type gate never covered the scripts directory
+
+Adding the demo to `tsconfig` surfaced a real pre-existing type error in
+`generate-synthetic-data.ts`. The gate was widened to the demo file only, and the
+debt recorded in the `tsconfig` comment as the next increment that owns it —
+rather than fixed inside an epic whose scope is explicitly no new features.
+
+### Cross-references
+
+- D-040.2 — the limitation this closes, and the heuristic it retired.
+- D-018 — zero runtime dependencies, which is why the engine is hand-written
+  rather than imported and the demo runs on strip-only type erasure.
+- `safe-regex.test.ts` — the differential corpus and the seeded sweep.
+- `dynamic-registry.test.ts` — the two inverted heuristic tests.
+- `scripts/demo.ts` — the end-to-end proof, which throws rather than reporting its
+  own failure in passing prose.
