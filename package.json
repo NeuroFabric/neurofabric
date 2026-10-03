@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Neurofebric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018).",
   "scripts": {
+    "dev": "node --experimental-strip-types start-ui.mjs",
     "test": "npm run typecheck && npm run test:mjs && npm run test:ts",
     "test:mjs": "node --test platform/*.test.mjs",
     "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts",
