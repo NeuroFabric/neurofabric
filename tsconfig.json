@@ -14,7 +14,16 @@
     "    errors. They are tracked as the next increment. Excluding them is a",
     "    measured scope boundary, NOT a blanket suppression: the gate covers",
     "    every line of production code, which is where the security controls live.",
-    "    No @ts-ignore and no `any` is used to reach green anywhere."
+    "    No @ts-ignore and no `any` is used to reach green anywhere.",
+    "",
+    "    scripts/**/*.ts is in the include and that is a FIX, not a scope creep.",
+    "    scripts/ was outside the gate, so the synthetic generator carried two",
+    "    live --strict errors (a union whose function branch was unreachable) for",
+    "    as long as the file had existed and nothing reported them. A source file",
+    "    no gate can see is a file that rots silently, and this one demonstrably",
+    "    did. verification/ and tools/ remain outside; they are proof harnesses",
+    "    and scripts, not production sources, and widening the gate to cover them",
+    "    is its own measured decision rather than a side effect of this one."
   ],
   "compilerOptions": {
     "target": "ES2023",
@@ -35,6 +44,6 @@
 
     "types": ["node"]
   },
-  "include": ["platform/**/*.ts", ".pi/extensions/*.ts"],
+  "include": ["platform/**/*.ts", ".pi/extensions/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "platform/**/*.test.ts"]
 }

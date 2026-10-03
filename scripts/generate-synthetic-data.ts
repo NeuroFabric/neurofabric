@@ -76,6 +76,7 @@
  * trust this file.
  *
  * Run:  node --experimental-strip-types scripts/generate-synthetic-data.ts
+ *       node --experimental-strip-types scripts/generate-synthetic-data.ts --flood --token=...
  */
 
 import fs from "node:fs";
@@ -466,9 +467,25 @@ function continuityOf(text: string): { hours: number; contiguous: boolean; gap: 
   return { hours: indices.length, contiguous: true, gap: null };
 }
 
-type Check = string | { label: string; run: () => string | null };
+/**
+ * A check: a bare predicate, or a labelled one.
+ *
+ * The predicate is a FUNCTION, not a string. It was declared as `string | {...}`,
+ * which made the `typeof c === "function"` branch in `normalise` unreachable, so
+ * control always fell through to a value narrowed to `string` and `c.label` /
+ * `c.run` did not exist on it -- two compile errors under `--strict`.
+ *
+ * The type gate never reported them because `scripts/` was outside the root
+ * `tsconfig` include, so the file had been untyped for as long as it had existed.
+ * It is inside the include now, and the comment below is why that matters: a
+ * source file no gate can see is a file that rots silently.
+ */
+type Check = (() => string | null) | { label: string; run: () => string | null };
 
-/** Accepts a bare predicate or a labelled one, so callers stay terse. */
+/**
+ * Accepts a bare predicate or a labelled one, so callers stay terse. Both
+ * branches are now reachable, which is the entire point of the union above.
+ */
 function normalise(c: Check): { label: string; run: () => string | null } {
   return typeof c === "function"
     ? { label: "dataset invariant", run: c }
@@ -508,6 +525,279 @@ function verify(label: string, file: string, checks: Check[]): boolean {
   console.log(`  -> ${c.hours} contiguous hours, ${lines.length - 1} rows`);
   console.log(`  ${ok ? "VERIFIED" : "NOT VERIFIED"}`);
   return ok;
+}
+
+// ---------------------------------------------------------------------------
+// 4. THE FLOOD -- synthetic enterprise telemetry into the running wedge.
+// ---------------------------------------------------------------------------
+
+/**
+ * WHY THIS POSTS OVER HTTP INSTEAD OF BUILDING A GATEWAY IN THIS PROCESS.
+ *
+ * The first cut of this mode imported `OmniRouteGateway` and pushed straight
+ * into it. That produces beautiful terminal output about a gateway nothing else
+ * can see: the wedge server owns its own gateway instance, the UI polls THAT one,
+ * and a flood into a private object would move no number on any screen. A demo
+ * that proves throughput only to the process that generated it is not a demo.
+ *
+ * So the flood is an HTTP client against the running wedge's shared ingress. The
+ * events it produces land in the same gateway the UI reads, which is the only
+ * arrangement in which "watch the dashboard move" is true.
+ *
+ * === THE FIELDS ARE THE DEFAULT SCHEMA'S, NOT INVENTED ===
+ *
+ * `configs/default-schemas.json` ships one core verified schema,
+ * `pega-alert-export`, whose `match.allOf` names four columns:
+ *
+ *     alert_code, elapsed_time, threshold, pega_time
+ *
+ * So the flood emits exactly those, with those meanings. `elapsed_time` is how
+ * long the case took in milliseconds, `threshold` is the SLA it was measured
+ * against, and `pega_time` is the case instant. A flood that invented its own
+ * column names would be demoing a schema nobody has.
+ *
+ * === THE ANOMALY IS DERIVED, NOT TYPED ===
+ *
+ * One case in `--anomaly-every` gets an `elapsed_time` of `threshold` multiplied
+ * by a factor in the range below. That is a genuine breach of the case's own SLA
+ * rather than a magic number, and it is the shape the IQR fence in
+ * `live-anomaly.ts` is designed to catch -- so the alert center has something
+ * true to report.
+ *
+ * === THROUGHPUT IS MEASURED, NEVER CLAIMED ===
+ *
+ * The rate printed at the end is computed from wall-clock time around the
+ * dispatch loop: events actually accepted, divided by seconds actually elapsed.
+ * It is the only kind of throughput figure this repository will print, and the
+ * UI labels its own the same way. A rate asserted rather than measured is the
+ * exact failure this project was built to avoid, and a demo generator that
+ * printed a hardcoded 257k would have been the first place it appeared.
+ */
+
+/** The four columns `pega-alert-export` matches on, plus the routing columns. */
+const PEGA_CODES: readonly string[] = [
+  "PEGA0001", "PEGA0028", "PEGA0043", "PEGA0117",
+  "PEGA0233", "PEGA0391", "PEGA0442", "PEGA0518",
+];
+
+const PEGA_SERVICES: readonly string[] = [
+  "checkout", "payments", "onboarding", "claims", "dispatch", "returns",
+];
+
+interface FloodOptions {
+  readonly url: string;
+  readonly gatewayToken: string;
+  readonly provider: string;
+  readonly events: number;
+  readonly batch: number;
+  readonly concurrency: number;
+  readonly anomalyEvery: number;
+  readonly seconds: number;
+}
+
+interface SyntheticEvent {
+  readonly fields: Readonly<Record<string, string>>;
+  readonly at: number;
+}
+
+/** Parsed by hand and defensively, like every other argument reader here. */
+function parseFloodArgs(argv: readonly string[]): FloodOptions {
+  let url = "http://127.0.0.1:3000";
+  let gatewayToken = process.env.WEDGE_GATEWAY_TOKEN ?? "";
+  let provider = "pega";
+  let events = 20_000;
+  let batch = 250;
+  let concurrency = 4;
+  let anomalyEvery = 97;
+  let seconds = 0;
+
+  for (const raw of argv) {
+    const [key, ...rest] = raw.split("=");
+    const value = rest.join("=");
+    switch (key) {
+      case "--url": url = value; break;
+      case "--token": gatewayToken = value; break;
+      case "--provider": provider = value; break;
+      case "--events": events = num(value, events); break;
+      case "--batch": batch = num(value, batch); break;
+      case "--concurrency": concurrency = num(value, concurrency); break;
+      case "--anomaly-every": anomalyEvery = num(value, anomalyEvery); break;
+      case "--seconds": seconds = num(value, seconds); break;
+      default:
+        if (raw.startsWith("-")) throw new Error(`unknown option: ${raw}`);
+    }
+  }
+
+  // A cap rather than a floor. An uncapped batch is a single multi-megabyte body,
+  // and the server's own ceiling would refuse it -- which would look like a
+  // server fault rather than a client one.
+  batch = Math.min(1000, Math.max(1, Math.floor(batch)));
+  concurrency = Math.min(32, Math.max(1, Math.floor(concurrency)));
+  events = Math.max(1, Math.floor(events));
+  anomalyEvery = Math.max(0, Math.floor(anomalyEvery));
+
+  if (url.trim() === "") throw new Error("--url needs a base address");
+  if (provider.trim() === "") throw new Error("--provider needs a name");
+  if (gatewayToken.trim() === "") {
+    // Named here rather than discovered as a wall of 401s, and never defaulted:
+    // a default credential is a credential everybody shares.
+    throw new Error("--token (or $WEDGE_GATEWAY_TOKEN) is required: the ingress is credentialed");
+  }
+  return { url: url.replace(/\/+$/, ""), gatewayToken, provider, events, batch, concurrency, anomalyEvery, seconds };
+}
+
+function num(raw: string, fallback: number): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/** One batch of events, shaped to the columns the default schema matches on. */
+function batchOf(rand: () => number, size: number, provider: string, startIndex: number, anomalyEvery: number): SyntheticEvent[] {
+  const out: SyntheticEvent[] = [];
+  for (let i = 0; i < size; i++) {
+    const index = startIndex + i;
+    const anomalous = anomalyEvery > 0 && index % anomalyEvery === 0;
+    const threshold = 500 + Math.floor(rand() * 1500);
+    // Healthy cases sit under their own SLA. A breach is a multiple of THAT
+    // case's threshold, not a constant, so every breach is locally meaningful.
+    const elapsed = anomalous
+      ? Math.round(threshold * (8 + rand() * 32))
+      : Math.round(threshold * (0.2 + rand() * 0.7));
+
+    out.push({
+      fields: {
+        alert_code: PEGA_CODES[Math.floor(rand() * PEGA_CODES.length)]!,
+        elapsed_time: String(elapsed),
+        threshold: String(threshold),
+        pega_time: new Date().toISOString(),
+        service: PEGA_SERVICES[Math.floor(rand() * PEGA_SERVICES.length)]!,
+        provider,
+        breached: anomalous ? "true" : "false",
+      },
+      at: Date.now(),
+    });
+  }
+  return out;
+}
+
+interface DispatchResult {
+  readonly accepted: number;
+  readonly refused: number;
+  readonly failed: number;
+  readonly firstError: string | null;
+}
+
+/**
+ * Push one batch, and REPORT rather than retry.
+ *
+ * A retry here would be invisible to the throughput figure: if a refused batch
+ * were silently resent, the accepted count would still be honest but the elapsed
+ * time would include work the server never did. So a refusal is counted, named,
+ * and shown.
+ */
+async function pushBatch(options: FloodOptions, events: SyntheticEvent[]): Promise<DispatchResult> {
+  try {
+    const response = await fetch(`${options.url}/api/portal/ingest`, {
+      method: "POST",
+      headers: {
+        "x-gateway-token": options.gatewayToken,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ provider: options.provider, events }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      return {
+        accepted: 0,
+        refused: events.length,
+        failed: events.length,
+        firstError: `HTTP ${response.status}: ${body.slice(0, 200)}`,
+      };
+    }
+    const parsed = (await response.json()) as { accepted?: unknown; refused?: unknown };
+    return {
+      accepted: typeof parsed.accepted === "number" ? parsed.accepted : events.length,
+      refused: typeof parsed.refused === "number" ? parsed.refused : 0,
+      failed: 0,
+      firstError: null,
+    };
+  } catch (error) {
+    return {
+      accepted: 0,
+      refused: events.length,
+      failed: events.length,
+      firstError: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    };
+  }
+}
+
+async function flood(argv: readonly string[]): Promise<void> {
+  const options = parseFloodArgs(argv);
+  const rand = rng(0xf100d);
+  const total = options.events;
+
+  console.log(`provider    ${options.provider}`);
+  console.log(`target      ${options.url}/api/portal/ingest`);
+  console.log(`events      ${options.seconds > 0 ? `${options.seconds}s of traffic` : total}`);
+  console.log(`batch       ${options.batch} x ${options.concurrency} concurrent`);
+  console.log(`fields      alert_code, elapsed_time, threshold, pega_time`);
+  console.log(`anomaly     every ${options.anomalyEvery === 0 ? "(none)" : `${options.anomalyEvery}`} events, 8-40x its own SLA\n`);
+
+  const started = Date.now();
+  let sent = 0;
+  let accepted = 0;
+  let refused = 0;
+  let failed = 0;
+  let firstError: string | null = null;
+  let inFlight = 0;
+  let done = false;
+
+  const dispatch = async (): Promise<void> => {
+    for (;;) {
+      if (done) return;
+      if (options.seconds > 0) {
+        if ((Date.now() - started) / 1000 >= options.seconds) { done = true; return; }
+      } else if (sent >= total) {
+        done = true;
+        return;
+      }
+      const size = options.seconds > 0
+        ? options.batch
+        : Math.min(options.batch, total - sent);
+      const index = sent;
+      sent += size;
+      const result = await pushBatch(options, batchOf(rand, size, options.provider, index, options.anomalyEvery));
+      accepted += result.accepted;
+      refused += result.refused;
+      failed += result.failed;
+      if (firstError === null && result.firstError !== null) firstError = result.firstError;
+    }
+  };
+
+  const workers = Array.from({ length: options.concurrency }, dispatch);
+  const report = setInterval(() => {
+    const elapsed = (Date.now() - started) / 1000;
+    const rate = elapsed === 0 ? 0 : accepted / elapsed;
+    process.stdout.write(`\r  ${accepted.toLocaleString("en-GB")} accepted  ${rate.toFixed(0)} ev/s  ${elapsed.toFixed(1)}s`);
+  }, 250);
+  await Promise.all(workers);
+  clearInterval(report);
+  const elapsed = (Date.now() - started) / 1000;
+
+  console.log(`\n\nMEASURED (not claimed)`);
+  console.log(`  elapsed        ${elapsed.toFixed(2)}s`);
+  console.log(`  accepted       ${accepted.toLocaleString("en-GB")}`);
+  console.log(`  refused        ${refused.toLocaleString("en-GB")}`);
+  console.log(`  failed         ${failed.toLocaleString("en-GB")}`);
+  console.log(`  throughput     ${(elapsed === 0 ? 0 : accepted / elapsed).toFixed(0)} events/sec`);
+  console.log(`\nlive view       ${options.url}/api/portal/live`);
+
+  if (firstError !== null) {
+    console.log(`\nfirst refusal: ${firstError}`);
+    console.log("A refusal here is the edge doing its job. Check the gateway credential");
+    console.log("and that the wedge is running; the ingress refuses everything by default.");
+  }
+  if (accepted === 0) process.exitCode = 1;
 }
 
 function main(): void {
@@ -576,4 +866,19 @@ function main(): void {
   if (!allPass) process.exitCode = 1;
 }
 
-main();
+// `--flood` selects this mode and is consumed by the dispatch, not parsed as an
+// option -- so the "unknown option" guard below still catches a genuine typo.
+const ARGV = process.argv.slice(2);
+if (ARGV.includes("--flood")) {
+  try {
+    await flood(ARGV.filter((argument) => argument !== "--flood"));
+  } catch (error) {
+    // An argument mistake should read as a sentence, not a stack trace. This is
+    // a command a person types by hand during a demo, and a wall of frames is
+    // the least helpful thing to hand them when they mistype a flag.
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+} else {
+  main();
+}
