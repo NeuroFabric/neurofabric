@@ -98,7 +98,14 @@ interface ProviderHealth {
   readonly lastEventAt: string | null;
 }
 
-const JSON_HEADERS: Record<string, string> = {
+/**
+ * The headers every JSON response on this surface carries.
+ *
+ * Exported rather than duplicated, because a second copy in a sibling route file
+ * is how a dashboard response ends up without `nosniff` while its sibling has it.
+ * Security headers are one control plane, applied by one function.
+ */
+export const SECURE_JSON_HEADERS: Record<string, string> = {
   "content-type": "application/json; charset=utf-8",
   // The command center shows operational data, not a document: no sniffing, and
   // no framing, so a misconfigured proxy cannot turn a dashboard into a clickjack.
@@ -108,13 +115,13 @@ const JSON_HEADERS: Record<string, string> = {
 };
 
 function json(status: number, body: unknown): UiResponse {
-  return { status, body, headers: { ...JSON_HEADERS } };
+  return { status, body, headers: { ...SECURE_JSON_HEADERS } };
 }
 
 /** THE REFUSAL, rendered by the same adapter the ingress uses. */
 function refused(decision: EdgeDecision): UiResponse {
   const rendered = httpResponse(decision);
-  return { status: rendered.status, body: rendered.body, headers: { ...JSON_HEADERS, ...rendered.headers } };
+  return { status: rendered.status, body: rendered.body, headers: { ...SECURE_JSON_HEADERS, ...rendered.headers } };
 }
 
 export function createUiRoutes(options: UiRoutesOptions): UiRouter {
