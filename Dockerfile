@@ -104,4 +104,38 @@ EXPOSE 3000
 #   - the container's network namespace is the isolation;
 #   - a widened bind prints a warning at startup, so it is never silent.
 # The default in platform/web/server.ts is unchanged and is pinned by test.
-CMD ["node", "--experimental-strip-types", "start-ui.mjs", "--workspace", "/app/workspace", "--port", "3000", "--host", "0.0.0.0"]
+#
+# === THE GARBAGE COLLECTION FLAGS ===
+#
+# Appended, not substituted: the flags ahead of the script name tune V8, and the
+# script, its arguments and the widened bind are unchanged from the line above.
+#
+#   --max-old-space-size=256   The heap this process may keep. The engine is
+#     designed for FLAT-MEMORY STREAMING: `csvRead` retains a bounded window and
+#     the broker keeps per-partition reservoirs, so steady-state live memory is
+#     a function of the window, not of the file. Without a cap, "bounded" is a
+#     property of the code and a deployment with a large file finds out
+#     otherwise; with it, the ceiling is visible in the image config rather than
+#     discovered on a host that no longer exists.
+#   --max-semi-space-size=2    The young generation. Streaming is a high
+#     ALLOCATION-RATE workload with a tiny survivor set, which is the shape that
+#     scavenges constantly. Doubling the semi-space halves the scavenge count for
+#     2 MiB more of resident heap.
+#
+# WHY 256 AND NOT 512: the container limit is 512 MiB, and the heap is only part
+# of a process. Code space, the native allocator, socket buffers, and V8's own
+# metadata live outside the old generation, so a 512 MiB heap inside a 512 MiB
+# container is an OOM kill that arrives before the heap cap ever fires, and it
+# arrives as the kernel killing the process rather than as V8 saying anything.
+# Half the limit leaves room for the parts that are not heap. That relationship
+# is asserted in docker-compose.yml's comments, so changing one number without
+# the other is visible.
+#
+# WHAT IS *NOT* CLAIMED: these values are not benchmarked. Docker is unavailable
+# in the authoring environment and no load test was run against them, so this is
+# a documented default chosen for a known access pattern, not a measured optimum.
+# The failure direction is deliberate -- too small is an OOM kill that is loud,
+# too large is an OOM kill on the host that is quieter. If a deployment needs
+# more, `docker-compose.yml` exposes the same command so it can be raised without
+# a rebuild.
+CMD ["node", "--max-old-space-size=256", "--max-semi-space-size=2", "--experimental-strip-types", "start-ui.mjs", "--workspace", "/app/workspace", "--port", "3000", "--host", "0.0.0.0"]

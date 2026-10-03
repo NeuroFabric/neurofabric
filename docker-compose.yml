@@ -35,6 +35,38 @@ services:
       - wedge-data:/app/workspace
     working_dir: /app
 
+    # THE STARTUP COMMAND, REPEATED HERE DELIBERATELY.
+    #
+    # It overrides the image's CMD so that the garbage collection limits can be
+    # raised for one deployment without rebuilding the image. The duplication is
+    # the point rather than a mistake: an operator tuning heap for a large export
+    # should edit a value they can see in the file they are already running,
+    # rather than rebuild an image to change one number.
+    #
+    # It MUST stay identical to the Dockerfile's CMD otherwise. The flags are the
+    # same two -- a capped old generation and a wider young generation -- and
+    # `--experimental-strip-types` is not optional: the boot script and the
+    # TypeScript suites will not start without it.
+    #
+    # The relationship to `mem_limit` below is the one that bites. The heap is
+    # only part of the process; code space, the native allocator, socket buffers
+    # and V8 metadata sit outside the old generation. So the heap cap must stay
+    # WELL BELOW the container limit, or the kernel kills the process before V8's
+    # own cap ever fires, and the operator gets an OOM with no explanation from
+    # the runtime. 256 against 512 leaves that room.
+    command:
+      - node
+      - --max-old-space-size=256
+      - --max-semi-space-size=2
+      - --experimental-strip-types
+      - start-ui.mjs
+      - --workspace
+      - /app/workspace
+      - --port
+      - "3000"
+      - --host
+      - 0.0.0.0
+
     environment:
       # The workspace, stated twice: once as the boundary the Dockerfile sets and
       # once as the argument the process is started with. Redundant on purpose.
@@ -67,6 +99,10 @@ services:
     # to the deployment rather than to whatever the largest CSV happens to be.
     # The 512m is generous for a process that holds one file in memory and will
     # OOM visibly rather than take the host with it.
+    #
+    # It must also stay comfortably ABOVE --max-old-space-size in the command
+    # above. Those are two different ceilings and the kernel's is the one that
+    # actually kills the process; a heap cap set at or above it buys nothing.
     mem_limit: 512m
     pids_limit: 128
 
