@@ -132,19 +132,43 @@ test("AN INVALID PATTERN IS A VALIDATION ISSUE, NOT A 500 ON THE FIRST EVENT", (
 /* THE REGEX PROBLEM, WHICH IS THE ONLY ONE NOT SOLVED                */
 /* ------------------------------------------------------------------ */
 
-test("A NESTED-QUANTIFIER PATTERN IS REFUSED, BECAUSE IT BACKTRACKS EXPONENTIALLY", () => {
-  // This is the whole reason a schema-driven platform needs a validation step at
-  // all. `(a+)+` on a subject string of thirty non-matching a's takes longer than
-  // the age of the universe, and the subject strings here come off a network.
+test("A NESTED-QUANTIFIER PATTERN IS NOW ACCEPTED, BECAUSE IT CANNOT BACKTRACK", () => {
+  // THE INVERSION OF D-040.2.2, and it is the point of the whole engine.
+  //
+  // These four patterns were refused by a heuristic, because the engine underneath
+  // was V8's and V8 runs `(a+)+` in time exponential in the subject length. They
+  // are now run by a Thompson NFA, which has no backtracking to be slow with, so
+  // the reason for the refusal no longer exists and the refusal goes with it.
+  //
+  // Keeping a control whose justification has evaporated would be worse than the
+  // bug it prevents: it forbids customers patterns they are entitled to write, and
+  // the next engineer to read it believes the platform is more fragile than it is.
   for (const pattern of ["(a+)+", "(a*)*", "([a-z]+)+", "(x{1,3})?y"]) {
     const result = validateSchema(schema({
-      rules: [{ id: "evil", kind: "regex", severity: "info", message: "m", pattern }],
+      rules: [{ id: "nested", kind: "regex", severity: "info", message: "m", pattern }],
     }));
-    assert.equal(result.ok, false, `accepted a catastrophic pattern: ${pattern}`);
+    assert.equal(result.ok, true, `still refusing a pattern that is now safe: ${pattern}`);
   }
 });
 
-test("AN ORDINARY PATTERN IS ACCEPTED, SO THE HEURISTIC IS NOT A BLANKET BAN", () => {
+test("A NESTED-QUANTIFIER RULE FIRES CORRECTLY, WHICH IS WHAT MAKING IT SAFE WORTHWHILE", () => {
+  const registry = new DynamicAgentRegistry();
+  const { agent } = registry.register(schema({
+    rules: [{ id: "nested", kind: "regex", severity: "warning", message: "run of letters", pattern: "(a+)+b" }],
+  }), { tenant: T });
+
+  return agent.diagnose({
+    prompt: "",
+    stream: (async function* () {
+      yield { partition: "orders", fields: { note: "aaaab" } };
+      yield { partition: "orders", fields: { note: "aaaa" } };
+    })(),
+  }).then((result) => {
+    assert.equal(result.findings.length, 1, "and it still discriminates");
+  });
+});
+
+test("AN ORDINARY PATTERN IS ACCEPTED", () => {
   const result = validateSchema(schema({
     rules: [{ id: "ok", kind: "regex", severity: "warning", message: "m", pattern: "^(slow|timeout) [0-9]+$" }],
   }));
@@ -152,9 +176,16 @@ test("AN ORDINARY PATTERN IS ACCEPTED, SO THE HEURISTIC IS NOT A BLANKET BAN", (
   assert.equal(result.ok, true);
 });
 
-test("AN OVER-LONG PATTERN IS REFUSED", () => {
+test("AN OVER-LONG PATTERN IS REFUSED, WHICH IS A COST BOUND AND NOT A SAFETY ONE", () => {
   // A long LITERAL, not a long repetition: `a{522,}` is eight characters long
   // however big the number inside it is.
+  //
+  // This ceiling survives the engine change on purpose, and the distinction is
+  // worth keeping in the test name. It is not there because a long pattern is
+  // DANGEROUS -- nothing is, any more -- it is there because a long pattern is
+  // EXPENSIVE, and a customer-facing API needs a bound on what one request can
+  // cost the platform. That is a quota, not a guard rail, and quoting the two as
+  // the same thing is how a control ends up justified by a reason that has gone.
   const result = validateSchema(schema({
     rules: [{ id: "long", kind: "regex", severity: "info", message: "m", pattern: "a".repeat(SCHEMA_LIMITS.maxPatternLength + 10) }],
   }));

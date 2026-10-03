@@ -1,3 +1,4 @@
+import { SafePattern } from "./safe-regex.ts";
 import {
   FindingSink,
   RateWindow,
@@ -67,15 +68,23 @@ export const SCHEMA_LIMITS = {
 } as const;
 
 /**
- * THE NESTED-QUANTIFIER HEURISTIC.
+ * === THE NESTED-QUANTIFIER HEURISTIC IS GONE, AND DELIBERATELY SO ===
  *
- * Looks for a group whose body contains a quantifier and which is itself
- * quantified. It catches `(a+)+`, `(a*)*`, `(a{1,3})?` and the common variants.
- * It does NOT catch nesting two groups deep, and it does not catch every
- * polynomial-backtracking shape. Stated here rather than as a guarantee, because a
- * heuristic described as a guarantee is the one that gets relied upon.
+ * This file used to refuse `(a+)+` with a regex heuristic, because the patterns
+ * were run by V8 and V8 runs that shape in time exponential in the subject length.
+ * Schema patterns are now run by a Thompson NFA (`safe-regex.ts`), which has no
+ * backtracking to be slow with, so the shape is simply SAFE.
+ *
+ * Keeping the heuristic would be a small, self-consistent-looking piece of code
+ * that forbids customers the patterns they are entitled to write, for a reason
+ * that no longer exists. A control whose justification has evaporated is worse
+ * than no control: it is a control nobody will think to update, and the next
+ * engineer to read it will believe the platform is more fragile than it is.
+ *
+ * So the rejection is removed, and the reason it is removed is written here where
+ * the rejection used to be, so that the next reader finds the history instead of
+ * the absence.
  */
-const NESTED_QUANTIFIER = /\([^()]*[+*{][^()]*\)\s*[+*?{]/;
 
 export type NumericOperator = ">" | ">=" | "<" | "<=" | "==" | "!=";
 export type RuleKind = "regex" | "threshold" | "rate" | "missing-field";
@@ -272,13 +281,14 @@ function validateRule(
       if (rule.pattern.length > SCHEMA_LIMITS.maxPatternLength) {
         push(`${path}.pattern`, `pattern is longer than ${SCHEMA_LIMITS.maxPatternLength} characters`);
       }
-      if (NESTED_QUANTIFIER.test(rule.pattern)) {
-        push(`${path}.pattern`, "pattern looks like a nested quantifier, which can backtrack exponentially");
-      }
       try {
         // Compiled here so an invalid pattern is a validation issue rather than a
         // 500 on the first event that reaches it. The flags value is narrowed to a
         // string first: `rule` is an untrusted record, so it is `unknown`.
+        //
+        // Compiled ONCE, at validation, and the compiled form is carried through to
+        // evaluation. That matters twice over: a bad pattern never reaches the hot
+        // path to fail there, and no event pays a compilation it does not need to.
         compilePattern(rule.pattern, typeof rule.flags === "string" ? rule.flags : undefined);
       } catch (error) {
         // The engine's own message is KEPT and wrapped rather than replaced: an
@@ -332,25 +342,26 @@ function validateRule(
 }
 
 /**
- * COMPILE A PATTERN, WITH THE FLAG SET RESTRICTED.
+ * COMPILE A CUSTOMER PATTERN, ONCE, TO A LINEAR-TIME MACHINE.
  *
- * Only `i` and `m` are allowed. The reason is not pedantry: `g` makes `exec`
- * stateful across calls, so a schema with a `g` pattern would find every second
- * event differently depending on what came before it, and a detector whose
- * results depend on call order rather than on data is not a detector.
+ * The header's "why this is not a timeout" applies here too, and it is why the
+ * signature is unchanged while the body is a different engine: callers outside
+ * this file -- the authoring API, the portal -- validate patterns the same way
+ * whether the thing underneath is V8 or not, and changing only the inside means
+ * nothing outside has to be revisited.
+ *
+ * The flag restriction also survives, with a different reason. `g` is refused
+ * because matching is now STATELESS: there is no lastIndex to carry, so `g` has
+ * no meaning rather than the meaning it has in V8. Refusing an inert flag is
+ * better than accepting one and pretending it does something.
  */
-function compilePattern(pattern: string, flags?: string): RegExp {
-  if (flags !== undefined) {
-    for (const flag of flags) {
-      if (flag !== "i" && flag !== "m") throw new Error(`flag "${flag}" is not permitted; use i or m`);
-    }
-  }
-  return new RegExp(pattern, flags ?? "");
+function compilePattern(pattern: string, flags?: string): SafePattern {
+  return SafePattern.compile(pattern, { ...(flags === undefined ? {} : { flags }) });
 }
 
 interface CompiledRule {
   readonly spec: RuleSpec;
-  readonly pattern?: RegExp;
+  readonly pattern?: SafePattern;
   /** Only for rate rules: one fixed ring per rule, allocated once. */
   readonly window?: RateWindow;
 }
