@@ -1,0 +1,6 @@
+# The root .gitignore already covers node_modules/ at any depth. Named here so
+# the intent is readable without tracing the pattern upward.
+node_modules/
+dist/
+coverage/
+*.local

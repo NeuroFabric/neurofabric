@@ -1,0 +1,51 @@
+/*
+ * THE ONLY STYLESHEET IN THE WORKSPACE, AND IT IS ALMOST EMPTY ON PURPOSE.
+ *
+ * "No heavy charting libraries yet" was the directive, and the equivalent for
+ * layout is: no CSS framework yet. A utility framework would arrive as several
+ * hundred kilobytes of class names, define a visual language before anyone has
+ * seen a single screen, and be load-bearing by the time the design exists. The
+ * grid is a design decision that needs the design first.
+ *
+ * What is here is a reset and the two colours. Nothing here decides how the
+ * command center should look; it only stops the browser's defaults from making
+ * an unstyled page look accidentally broken.
+ */
+
+:root {
+  /* The one decision made so far: a near-black ground with a light ink. */
+  --ground: #0f1115;
+  --ink: #e6e8eb;
+  --muted: #8b929c;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  padding: 2rem;
+}
+
+h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+p {
+  color: var(--muted);
+  margin: 0;
+}
