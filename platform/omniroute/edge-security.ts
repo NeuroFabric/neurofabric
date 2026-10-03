@@ -83,6 +83,76 @@ export interface EdgeDecision {
 
 const UNAUTHENTICATED = (reason: string): EdgeDecision => ({ ok: false, status: 401, reason });
 const FORBIDDEN = (reason: string): EdgeDecision => ({ ok: false, status: 403, reason });
+const THROTTLED = (reason: string, retryAfterSeconds: number): EdgeDecision =>
+  ({ ok: false, status: 429, reason, retryAfterSeconds });
+
+/**
+ * A TOKEN BUCKET, per provider.
+ *
+ * Why a bucket and not a fixed window: a fixed window lets a caller spend its
+ * whole allowance at the end of one window and its whole allowance again at the
+ * start of the next -- twice the intended rate, delivered in a burst that is
+ * precisely what the limit exists to prevent. A bucket refills continuously, so a
+ * burst is bounded by what the caller has actually earned.
+ *
+ * Why it counts EVENTS and not requests: a caller allowed "a thousand requests a
+ * second" can put a million events in one of them. The unit that costs the engine
+ * is the event, so the unit that is limited is the event.
+ *
+ * === THE LIMIT IS PER REPLICA, AND THAT IS NOT A FOOTNOTE ===
+ *
+ * This state is in-process. A fleet of N replicas admits N times the configured
+ * rate, and a caller balanced across all of them is never throttled. It is stated
+ * here rather than left for an operator to discover, because a limit whose scope
+ * is unknown is worse than no limit at all: it looks like a control and is not
+ * one.
+ *
+ * A shared store was rejected deliberately. It puts a network round trip on the
+ * hot path to defend a process that is already single-threaded, and its failure
+ * mode is a dependency outage becoming an outage. When a genuinely global limit is
+ * wanted, the honest shape is a shared store PLUS this local floor, so a store
+ * outage degrades to per-replica limiting rather than to no limiting.
+ *
+ * The clock is injectable so the refill arithmetic is testable without waiting.
+ */
+export class TokenBucket {
+  private readonly buckets = new Map<string, { tokens: number; updatedAt: number }>();
+  private readonly capacity: number;
+  private readonly refillPerSecond: number;
+  private readonly now: () => number;
+
+  constructor(capacity: number, refillPerSecond: number, now: () => number = Date.now) {
+    this.capacity = capacity;
+    this.refillPerSecond = refillPerSecond;
+    this.now = now;
+  }
+
+  /** Take `events` tokens for a provider. False means throttled. */
+  take(provider: string, events: number): boolean {
+    const stamp = this.now();
+    const existing = this.buckets.get(provider) ?? { tokens: this.capacity, updatedAt: stamp };
+    const elapsed = Math.max(0, (stamp - existing.updatedAt) / 1000);
+    const refilled = Math.min(this.capacity, existing.tokens + elapsed * this.refillPerSecond);
+    if (refilled < events) {
+      // The remaining capacity is KEPT, not discarded. A throttled caller can
+      // still send a small batch it has earned; zeroing the bucket would punish it
+      // twice for one burst.
+      this.buckets.set(provider, { tokens: refilled, updatedAt: stamp });
+      return false;
+    }
+    this.buckets.set(provider, { tokens: refilled - events, updatedAt: stamp });
+    return true;
+  }
+
+  /** How long until this provider could send `events` again. */
+  retryAfterSeconds(provider: string, events: number): number {
+    const existing = this.buckets.get(provider);
+    if (existing === undefined) return 0;
+    const deficit = events - existing.tokens;
+    if (deficit <= 0) return 0;
+    return Math.ceil(deficit / this.refillPerSecond);
+  }
+}
 
 /**
  * A constant-time comparison.
@@ -153,15 +223,33 @@ export function authenticate(request: EdgeRequest, tokens: readonly GatewayToken
 }
 
 /**
- * THE WHOLE EDGE, in one call.
+ * THE WHOLE EDGE, in one call: prove the caller, then throttle it.
  *
- * One function rather than a chain callers must remember to order correctly. The
- * ordering that matters lives inside `authenticate`: every provisioned token is
- * compared before scope is considered, so a caller cannot learn which providers
- * exist by timing a value it does not hold.
+ * The order is load-bearing. Proving first means an unauthenticated flood never
+ * reaches the bucket's bookkeeping, so an attacker cannot exhaust a legitimate
+ * caller's allowance by sending rubbish under their name -- and throttling a
+ * request nobody has paid for is work we would be doing on their behalf.
+ *
+ * The bucket is per PROVIDER, so one noisy partner cannot spend another's
+ * allowance. That fairness is a direct consequence of authenticating first: the
+ * provider name is only trustworthy because the credential was proven against it.
  */
-export function guard(request: EdgeRequest, tokens: readonly GatewayToken[]): EdgeDecision {
-  return authenticate(request, tokens);
+export function guard(
+  request: EdgeRequest,
+  tokens: readonly GatewayToken[],
+  limiter?: TokenBucket,
+): EdgeDecision {
+  const identity = authenticate(request, tokens);
+  if (!identity.ok) return identity;
+  if (limiter === undefined) return identity;
+  const events = request.events === undefined ? 1 : Math.max(1, Math.floor(request.events));
+  if (!limiter.take(request.provider, events)) {
+    return THROTTLED(
+      `provider ${request.provider} is above its rate limit; slow down`,
+      limiter.retryAfterSeconds(request.provider, events),
+    );
+  }
+  return identity;
 }
 
 /** Issue a credential. The value is returned ONCE, because it is never recoverable. */

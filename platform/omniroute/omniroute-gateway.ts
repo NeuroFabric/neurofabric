@@ -1,6 +1,6 @@
 import { StreamBroker, type BrokerSnapshot, type BrokerRecord } from "../conductor/stream-broker.ts";
 import { evaluateLive, liveFindings, type LiveVerdict } from "../conductor/live-anomaly.ts";
-import { guard, type EdgeDecision, type EdgeRequest, type GatewayToken } from "./edge-security.ts";
+import { guard, TokenBucket, type EdgeDecision, type EdgeRequest, type GatewayToken } from "./edge-security.ts";
 
 /**
  * OMNIROUTE: the universal ingress for live events, and the single door every
@@ -88,6 +88,17 @@ export interface GatewayOptions {
    */
   readonly tokens?: readonly GatewayToken[];
   /**
+   * THE RATE LIMITER. Optional, and absent means NO LIMIT rather than a default
+   * one.
+   *
+   * A default would be a guess about what is affordable, made once and baked into
+   * every deployment. A gateway that is not configured for throttling says so by
+   * having none, which is visible; one that silently applies an arbitrary ceiling
+   * is discovered by a customer. See `TokenBucket` for why the limit is
+   * per-replica.
+   */
+  readonly limiter?: TokenBucket;
+  /**
    * Called on every alert. Optional because a gateway with no subscribers is a
    * perfectly ordinary thing -- a service that pushes events and reads snapshots
    * on demand rather than being told what to look at.
@@ -172,7 +183,7 @@ export class OmniRouteGateway {
    * edge: the maths is the expensive part, and it must not run for strangers.
    */
   pushAdmitted(request: EdgeRequest, event: OmniRouteEvent): EdgeDecision {
-    const decision = guard(request, this.options.tokens ?? []);
+    const decision = guard(request, this.options.tokens ?? [], this.options.limiter);
     if (!decision.ok) return decision;
     this.push(request.provider, event);
     return decision;
@@ -180,7 +191,7 @@ export class OmniRouteGateway {
 
   /** Just the decision, for a caller that wants to check before it builds a payload. */
   admit(request: EdgeRequest): EdgeDecision {
-    return guard(request, this.options.tokens ?? []);
+    return guard(request, this.options.tokens ?? [], this.options.limiter);
   }
 
   /**
