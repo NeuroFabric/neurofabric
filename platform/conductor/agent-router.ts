@@ -47,6 +47,7 @@ import { profilerAgent } from "./subagents/profiler-agent.ts";
 import type { AgentContext, Subagent } from "./subagents/types.ts";
 
 export type { AgentContext, Subagent } from "./subagents/types.ts";
+import type { BrokerSnapshot } from "./stream-broker.ts";
 
 /**
  * THE ROSTER, IN PRECEDENCE ORDER. See the note above before reordering it.
@@ -58,7 +59,27 @@ export interface RouteResult {
   readonly agent: Subagent["name"] | null;
   /** Its answer, or undefined when no agent could. The caller declines. */
   readonly reply?: Reply;
+  /**
+   * True when the answer came from a LIVE stream rather than from a file.
+   *
+   * Published because it changes what the answer MEANS and a caller cannot see it
+   * otherwise: "nothing is past its fence" over a closed export is a finding, and
+   * the same sentence over a stream that is still running is a statement about
+   * the past tense. A UI that renders both identically is lying to somebody.
+   */
+  readonly live?: boolean;
 }
+
+/**
+ * LIVE INTENT: the questions that are about a stream, not about a file.
+ *
+ * Checked BEFORE the file agents, and that ordering is the whole point. An open
+ * stream handed to a file-shaped agent finds no rows, and the agent answers
+ * "nothing is wrong" -- which on a dashboard is indistinguishable from a clean
+ * stream. So a question that clearly means "right now" must never reach an agent
+ * that would read it from a finite file.
+ */
+const LIVE_INTENT = /\b(live|right now|currently|now|streaming|real[\s-]?time|incoming|tail)\b/i;
 
 /**
  * ROUTE A PROMPT TO THE AGENT THAT OWNS IT.
@@ -73,9 +94,57 @@ export interface RouteResult {
  * then tries the next, which is why an agent's vocabulary must not be a net
  * cast wider than the answers it can actually give.
  */
-export function route(prompt: string, ctx: AgentContext): RouteResult {
+/**
+ * ROUTE WITH AN OPTIONAL LIVE STREAM.
+ *
+ * Kept separate from `route` rather than an extra nullable argument, because "no
+ * stream" and "a stream" produce genuinely different answers, and lumping them
+ * behind a parameter invites a call site that forgets which one it is asking.
+ * With no snapshot the file path is preserved exactly.
+ */
+export function routeWith(
+  prompt: string,
+  ctx: AgentContext,
+  live: BrokerSnapshot | undefined,
+): RouteResult {
   const text = String(prompt ?? "").trim();
   if (text === "") return { agent: null };
+
+  // THE INTENT GATE COMES FIRST, and it is the whole fix for a bug this routing
+  // shipped with: `answerLive` exists on the anomaly agent, and its `handles`
+  // matches "wrong", "anomaly" and "problem" -- which is also how a FILE is
+  // described. So with any stream attached, "what is wrong with this FILE?" was
+  // answered from the stream, which is not a live question being answered
+  // correctly, it is a static question being answered by the wrong owner.
+  if (live !== undefined && LIVE_INTENT.test(text)) {
+    for (const agent of AGENTS) {
+      if (agent.answerLive === undefined || !agent.handles(text)) continue;
+      try {
+        const reply = agent.answerLive(live);
+        if (reply !== null && reply !== undefined) return { agent: agent.name, reply, live: true };
+      } catch {
+        // Fall through to the file agents rather than failing the question: a
+        // live answer is better, not required. The risk of the fallback is
+        // bounded because a file-shaped answer over a stream is still phrased
+        // about what has been read.
+      }
+    }
+    // A live question the live agents did not claim still falls through, so a
+    // static question asked while a stream runs is answered from the file.
+    if (LIVE_INTENT.test(text)) {
+      return {
+        agent: "anomaly",
+        reply: {
+          kind: "answer",
+          text: "That question is about something happening now, and no live agent could answer it from the "
+            + "stream attached. Ask what is past its fence, which the stream can answer.",
+          widgets: [],
+          suggestions: ["what is past its fence?"],
+        },
+        live: true,
+      };
+    }
+  }
 
   for (const agent of AGENTS) {
     let owns: boolean;
@@ -101,6 +170,18 @@ export function route(prompt: string, ctx: AgentContext): RouteResult {
 }
 
 /**
+ * ROUTE A PROMPT, WITH NO STREAM ATTACHED.
+ *
+ * The thin wrapper exists so the file path keeps its exact name and signature:
+ * every existing caller, and every existing test, asks questions of files. What
+ * that file path MUST NOT do is quietly change -- the integration test asserts
+ * `route` and `routeWith(..., undefined)` agree exactly.
+ */
+export function route(prompt: string, ctx: AgentContext): RouteResult {
+  return routeWith(prompt, ctx, undefined);
+}
+
+/**
  * The Conductor, as a namespace rather than a class.
  *
  * A class here would be a container with no state and no lifecycle, and a
@@ -108,4 +189,4 @@ export function route(prompt: string, ctx: AgentContext): RouteResult {
  * architecturally is that routing is SEPARATE from answering, and that reads
  * better as a function than as an object you instantiate and never configure.
  */
-export const Conductor = { route, AGENTS } as const;
+export const Conductor = { route, routeWith, AGENTS } as const;
