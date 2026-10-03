@@ -6,7 +6,7 @@ import { toReactDashboard, dashboardCsp, DASHBOARD_DATA_ID } from "./react-repor
 import { startWedgeServer, type RunningWedge } from "./server.ts";
 import { makeTempWorkspace, writeFixture } from "../test-support/temp-workspace.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 
 /**
  * TASK 1 -- THE CHARTS MUST ACTUALLY RENDER.
@@ -31,10 +31,10 @@ const CSV = `_time,source_host,alertType,elapsed_time
 2026-09-30 09:01:00.000,host-bg,checkout,80
 2026-09-30 10:00:00.000,host-db,search,43`;
 
-function analysis() {
+async function analysis(): Promise<BottleneckAnalysis> {
   const parsed = parseCsv(CSV);
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "operations.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -50,11 +50,11 @@ function appSourceOf(html: string): string {
   return html.slice(from, html.indexOf("</script>", from));
 }
 
-test("THE CDN FILENAME IS THE ONE THAT ACTUALLY EXISTS", () => {
+test("THE CDN FILENAME IS THE ONE THAT ACTUALLY EXISTS", async () => {
   // The single defect that cost the Owner a release. Verified against the live
   // CDN by hand, and pinned here because no test in this repository makes a
   // network call and none of them should.
-  const html = toReactDashboard(analysis(), {});
+  const html = toReactDashboard(await analysis(), {});
   const src = /<script[^>]+src="([^"]*chart\.js[^"]*)"/.exec(html);
   assert.ok(src !== null, "the charting library must be referenced at all");
   const url = src[1]!;
@@ -66,11 +66,11 @@ test("THE CDN FILENAME IS THE ONE THAT ACTUALLY EXISTS", () => {
     "v4 ships one already-minified UMD bundle; there is no .min.js variant");
 });
 
-test("every script the page loads is named in the policy, explicitly", () => {
+test("every script the page loads is named in the policy, explicitly", async () => {
   // The tag needs an origin the policy permits. A mismatch here is the CSP
   // failure the Owner suspected -- and which was NOT this release's cause, but
   // will be the next one if an origin is added and forgotten.
-  const html = toReactDashboard(analysis(), {});
+  const html = toReactDashboard(await analysis(), {});
   const policy = /content="([^"]*default-src[^"]*)"/.exec(html)?.[1] ?? "";
   assert.ok(policy.length > 0, "the document must carry a policy");
 
@@ -86,7 +86,7 @@ test("every script the page loads is named in the policy, explicitly", () => {
   assert.deepEqual([...origins].sort(), ["https://cdn.tailwindcss.com", "https://unpkg.com"]);
 });
 
-test("the policy is now a single definition, not two that drifted", () => {
+test("the policy is now a single definition, not two that drifted", async () => {
   // The meta tag had accumulated `style-src` TWICE -- widened in one release and
   // widened again in another that added Tailwind without looking at what was
   // already there. Per the CSP spec duplicate directives are discarded, so which
@@ -97,7 +97,7 @@ test("the policy is now a single definition, not two that drifted", () => {
     assert.equal(new Set(names).size, names.length,
       `duplicate directive in the policy for live=${live}: ${policy}`);
     // And the meta tag must be that exact string, not a hand-written copy.
-    const html = toReactDashboard(analysis(), live ? { live: { path: "x.csv" } } : {});
+    const html = toReactDashboard(await analysis(), live ? { live: { path: "x.csv" } } : {});
     const meta = /content="([^"]*default-src[^"]*)"/.exec(html)?.[1];
     assert.equal(meta, policy, `the meta tag must BE the function's output (live=${live})`);
   }
@@ -127,18 +127,18 @@ test("the SERVER sends the policy as a header, not only as a meta tag", async ()
   }
 });
 
-test("the fallback names BOTH causes, because from inside they look identical", () => {
+test("the fallback names BOTH causes, because from inside they look identical", async () => {
   // The Owner diagnosed this as a CSP block and was wrong. That is not a silly
   // mistake -- a missing global is a missing global -- and the only defence is a
   // message that says so and tells a reader where to look.
-  const src = appSourceOf(toReactDashboard(analysis(), {}));
+  const src = appSourceOf(toReactDashboard(await analysis(), {}));
   assert.match(src, /Content-Security-Policy/, "the blocked case");
   assert.match(src, /404|error/i, "and the case where the CDN answered with an error");
   assert.match(src, /console/i, "and where to look for the evidence");
 });
 
-test("a missing library still costs two pictures, never the report", () => {
-  const src = appSourceOf(toReactDashboard(analysis(), {}));
+test("a missing library still costs two pictures, never the report", async () => {
+  const src = appSourceOf(toReactDashboard(await analysis(), {}));
   assert.match(src, /typeof Chart/, "feature-detected before use");
   // The numbers must remain reachable as text, or "charts unavailable" is a lie.
   // After the chat-first pivot this is the COLUMNS WIDGET and the provenance

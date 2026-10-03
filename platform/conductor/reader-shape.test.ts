@@ -30,7 +30,7 @@ import { makeTempWorkspace, pathExists, writeFixture } from "../test-support/tem
  *    page, not that the INPUT is truncated.
  */
 
-test("R1 a trailing newline does not create a row", () => {
+test("R1 a trailing newline does not create a row", async () => {
   const withoutNewline = parseCsv("a,b\n1,2");
   const withNewline = parseCsv("a,b\n1,2\n");
   assert.equal(withoutNewline.rows.length, withNewline.rows.length,
@@ -39,7 +39,7 @@ test("R1 a trailing newline does not create a row", () => {
     `a trailing newline must not report raggedness: ${withNewline.problems.join("; ")}`);
 });
 
-test("R2 blank lines are skipped wherever they appear", () => {
+test("R2 blank lines are skipped wherever they appear", async () => {
   const parsed = parseCsv("a,b\n1,2\n\n3,4\n");
   assert.equal(parsed.rows.length, 2, "blank lines are not records");
   assert.deepEqual(parsed.problems, [], parsed.problems.join("; "));
@@ -66,7 +66,7 @@ test("R4 the analysis sees every row, not the charting sample", async () => {
   assert.equal(csv.rowCount, 400, "the reader counted every row");
   assert.ok(csv.sample.length <= 50, "the charting sample stays small by design");
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.totalRows, 400,
     `the analyser only saw ${analysis.totalRows} rows; a silently truncated analysis is worse than a slow one`);
   assert.equal(analysis.errorRows, 400, "every row is an error here");
@@ -83,7 +83,7 @@ test("R5 a ranking that omitted most rows would now be visible", async () => {
   }
   await writeFixture(cwd, "sixty.csv", `${lines.join("\n")}\n`);
   const csv = await csvRead({ path: path.join(cwd, "sixty.csv") });
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.totalRows, 60, "60 rows in, 60 rows analysed");
   assert.equal(analysis.bySource.length, 60, "the tail beyond the sample cap is not dropped");
 });
@@ -104,7 +104,7 @@ test("R6 the real-export shape is still analysable end to end", async () => {
   assert.deepEqual(csv.problems, [],
     `the real export's trailing newline must not read as ragged: ${csv.problems.join("; ")}`);
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   assert.equal(analysis.totalRows, 5);
   assert.equal(analysis.errorRows, 0, "no status column means no errors are claimed");
   assert.deepEqual(analysis.recurring, [], "and no message column means no invented signatures");

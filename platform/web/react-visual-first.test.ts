@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toReactDashboard, DASHBOARD_DATA_ID } from "./react-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { replyTo } from "../conductor/conversation.ts";
 
 /**
@@ -38,10 +38,10 @@ const DB_LOG = `_time,query_snippet,total_elapsed_time_ms,execution_plan_id,logi
 2026-09-30 10:00:00.000,SELECT COUNT(*) FROM audit,9800,plan-3c7,91000
 2026-09-30 11:00:00.000,SELECT * FROM orders,2400,plan-9f2,8800`;
 
-const analysis = (() => {
+const analysis = await (async () => {
   const parsed = parseCsv(DB_LOG);
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "query_perf.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -67,7 +67,7 @@ function payloadOf(html: string): Record<string, unknown> {
 
 const LIVE = { live: { path: "query_perf.csv" } };
 
-test("the charts are REAL CHART CONFIGURATIONS, not bars made of divs", () => {
+test("the charts are REAL CHART CONFIGURATIONS, not bars made of divs", async () => {
   const src = appSourceOf(toReactDashboard(analysis, LIVE));
   assert.match(src, /type:\s*"bar"/, "a bar chart for the categorical ranking");
   assert.match(src, /type:\s*"line"/, "a line chart for the shape of the day");
@@ -76,7 +76,7 @@ test("the charts are REAL CHART CONFIGURATIONS, not bars made of divs", () => {
   assert.match(src, /["(]canvas["),]/, "drawn into a canvas by the pinned library");
 });
 
-test("the charts are INSIDE ANSWERS, not on the page", () => {
+test("the charts are INSIDE ANSWERS, not on the page", async () => {
   // This is the load-bearing change. `renderWidget` is reached from the message
   // renderer, so a chart appears because somebody asked a question.
   const src = appSourceOf(toReactDashboard(analysis, LIVE));
@@ -85,7 +85,7 @@ test("the charts are INSIDE ANSWERS, not on the page", () => {
   assert.match(src, /role === "agent"/, "inside an agent message, which is where widgets live");
 });
 
-test("the numbers are ALSO TEXT, because a chart nobody can check is a claim", () => {
+test("the numbers are ALSO TEXT, because a chart nobody can check is a claim", async () => {
   // True before the pivot and MORE true now: the charts arrive as answers, so a
   // reader is being asked to believe them rather than to browse them.
   const src = appSourceOf(toReactDashboard(analysis, LIVE));
@@ -93,7 +93,7 @@ test("the numbers are ALSO TEXT, because a chart nobody can check is a claim", (
   assert.match(src, /Data provenance/, "and the file's provenance is stated, not buried");
 });
 
-test("the library is pinned, and its absence costs two pictures", () => {
+test("the library is pinned, and its absence costs two pictures", async () => {
   const html = toReactDashboard(analysis, LIVE);
   const script = /<script[^>]+src="([^"]*chart\.js[^"]*)"/.exec(html);
   assert.ok(script !== null, "the charting library must be referenced");
@@ -105,7 +105,7 @@ test("the library is pinned, and its absence costs two pictures", () => {
   assert.match(src, /Charts unavailable/, "and its absence is reported rather than silent");
 });
 
-test("the page carries the styling it needs, and only that", () => {
+test("the page carries the styling it needs, and only that", async () => {
   const html = toReactDashboard(analysis, LIVE);
   const src = appSourceOf(html);
 
@@ -119,7 +119,7 @@ test("the page carries the styling it needs, and only that", () => {
   }
 });
 
-test("the TOP-N rule survived the move into the conversation", () => {
+test("the TOP-N rule survived the move into the conversation", async () => {
   // It used to be a slice in the page. It is now in the router, which is where
   // it belongs -- and the assertion follows it, because a ranking nobody can
   // scroll to is still a data dump, only now it is 400 pixels tall instead of
@@ -144,7 +144,7 @@ test("the TOP-N rule survived the move into the conversation", () => {
     `a chart of ${points.length} bars is a data dump; the depth cap must apply`);
 });
 
-test("the engine's own spike verdict reaches the chart, unre-derived", () => {
+test("the engine's own spike verdict reaches the chart, unre-derived", async () => {
   // The page must not decide what a spike is. If it did, the chart and the
   // report could disagree, and a reader comparing them would be right to wonder
   // which one the tool believes.
@@ -159,7 +159,7 @@ test("the engine's own spike verdict reaches the chart, unre-derived", () => {
   assert.equal(timeline[0]?.spike, engine[0]?.isSpike, "flagged exactly where the engine flagged it");
 });
 
-test("the CSP still permits the CDN, names it explicitly, and grants no eval", () => {
+test("the CSP still permits the CDN, names it explicitly, and grants no eval", async () => {
   // The chart dependency is third. The rule that bounds all three is in D-035
   // and D-036, and this is the test that keeps it from being widened.
   const html = toReactDashboard(analysis, LIVE);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toReactDashboard, DASHBOARD_DATA_ID, DASHBOARD_MOUNT_ID } from "./react-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { buildAnalysis } from "./react-report.test-support.ts";
 
 /**
@@ -65,9 +65,9 @@ function stringsIn(value: unknown, out: string[] = []): string[] {
  * which is exactly how the first version of the XSS test ended up asserting on
  * an empty payload and calling it a pass.
  */
-function profile(text: string): ReturnType<typeof analyseBottlenecks> {
+async function profile(text: string): Promise<BottleneckAnalysis> {
   const parsed = parseCsv(text);
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "hostile.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -78,7 +78,7 @@ function profile(text: string): ReturnType<typeof analyseBottlenecks> {
   });
 }
 
-test("the generated page is a complete standalone document with a React mount point", () => {
+test("the generated page is a complete standalone document with a React mount point", async () => {
   const html = toReactDashboard(analysis, { title: "Operations review" });
   assert.match(html, /^<!doctype html>/i, "a standalone document, not a fragment");
   assert.match(html, /<html[^>]*lang=/i);
@@ -87,7 +87,7 @@ test("the generated page is a complete standalone document with a React mount po
   assert.match(html, /<\/html>\s*$/, "and it is closed");
 });
 
-test("React is loaded from a CDN, at a PINNED version, and the pin is asserted", () => {
+test("React is loaded from a CDN, at a PINNED version, and the pin is asserted", async () => {
   const html = toReactDashboard(analysis, {});
   const react = /<script[^>]+src="([^"]*react[^"]*)"/i.exec(html);
   assert.ok(react !== null, "React must be loaded for the app to run at all");
@@ -100,7 +100,7 @@ test("React is loaded from a CDN, at a PINNED version, and the pin is asserted",
   assert.match(dom[1], /react-dom@[\d.]+(-[a-z0-9.]+)?\//i, `react-dom must be pinned, got ${dom[1]}`);
 });
 
-test("the analysis is embedded as inert JSON, so a hostile file cannot become script", () => {
+test("the analysis is embedded as inert JSON, so a hostile file cannot become script", async () => {
   // The payload is the whole point of the danger: it holds column names and
   // values from a file this product was handed.
   //
@@ -112,7 +112,7 @@ test("the analysis is embedded as inert JSON, so a hostile file cannot become sc
   // believed in.
   const hostileName = "</script><script>alert(1)</script>";
   const rows = Array.from({ length: 12 }, (_, i) => `${i + 1},${i * 3}`);
-  const html = toReactDashboard(profile(`${hostileName},other\n${rows.join("\n")}\n`), {});
+  const html = toReactDashboard(await profile(`${hostileName},other\n${rows.join("\n")}\n`), {});
   const payload = payloadOf(html);
 
   assert.ok(!/<\/script/i.test(payload), "no script-closing sequence may survive inside the data block");
@@ -125,7 +125,7 @@ test("the analysis is embedded as inert JSON, so a hostile file cannot become sc
     "the hostile name must reach the payload AND round-trip through the escaping intact, or this test is vacuous");
 });
 
-test("the surface is interactive: the conversation changes what is rendered", () => {
+test("the surface is interactive: the conversation changes what is rendered", async () => {
   // ASSERTED AT SOURCE LEVEL, and the limitation is worth stating plainly. React
   // builds these elements at runtime, so they are not in the static HTML and no
   // test in this repository can assert on a rendered DOM -- there is no browser
@@ -164,7 +164,7 @@ test("the surface is interactive: the conversation changes what is rendered", ()
   assert.match(src, /onSubmit: function \(e\)/, "driven by the composer, not by a hidden control");
 });
 
-test("the app renders the findings the engine produced, not a placeholder", () => {
+test("the app renders the findings the engine produced, not a placeholder", async () => {
   const html = toReactDashboard(analysis, {});
   const parsed = JSON.parse(payloadOf(html)) as {
     title: string; totalRows: number; columns: unknown[];
@@ -180,15 +180,15 @@ test("the app renders the findings the engine produced, not a placeholder", () =
   }
 });
 
-test("a clean file produces an app that says so, rather than an empty dashboard", () => {
-  const clean = profile("a,b\n1,2\n3,4\n5,6\n7,8\n9,10\n11,12\n13,14\n15,16\n17,18\n");
+test("a clean file produces an app that says so, rather than an empty dashboard", async () => {
+  const clean = await profile("a,b\n1,2\n3,4\n5,6\n7,8\n9,10\n11,12\n13,14\n15,16\n17,18\n");
   const html = toReactDashboard(clean, {});
   const parsed = JSON.parse(payloadOf(html)) as { anomalies: unknown[]; headline: string };
   assert.equal(parsed.anomalies.length, 0, "a clean file has nothing to filter");
   assert.ok(parsed.headline.length > 0, "and the dashboard must still say something true about it");
 });
 
-test("the document declares its own policy, and it is not the kernel's strict one", () => {
+test("the document declares its own policy, and it is not the kernel's strict one", async () => {
   const html = toReactDashboard(analysis, {});
   const csp = /content-security-policy" content="([^"]+)"/i.exec(html);
   assert.ok(csp !== null, "a page that loads remote script must say what it permits");

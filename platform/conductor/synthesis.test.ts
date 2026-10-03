@@ -79,7 +79,7 @@ const HEALTHY: SynthesisInput = {
 
 // === THE CASE IN THE BRIEF, VERBATIM =====================================
 
-test("the brief's own example: a 9,999,999.99 outlier against a 50,000 fence is a factor of 200", () => {
+test("the brief's own example: a 9,999,999.99 outlier against a 50,000 fence is a factor of 200", async () => {
   // 9,999,999.99 / 50,000 = 200.0. This is the sentence the Owner asked for,
   // and the fixture is the arithmetic behind it rather than a number chosen to
   // make a test pass.
@@ -90,7 +90,7 @@ test("the brief's own example: a 9,999,999.99 outlier against a 50,000 fence is 
   assert.match(summary.paragraph, /50,000/, "and the fence it cleared, so the claim can be checked");
 });
 
-test("and it says the data is compromised, because it is", () => {
+test("and it says the data is compromised, because it is", async () => {
   const summary = synthesize(extremeFixture({ fence: 50_000, worst: 9_999_999.99 }));
   assert.match(summary.paragraph, /compromised/i);
   assert.equal(summary.verdict, "compromised");
@@ -101,7 +101,7 @@ test("and it says the data is compromised, because it is", () => {
 
 // === THE HONESTY TEST: THE OPENING MUST TRACK THE DATA ===================
 
-test("a broadly broken file must NOT be described as generally stable", () => {
+test("a broadly broken file must NOT be described as generally stable", async () => {
   // 900 of 1000 cells hold text in a numeric column. Every template ever
   // written would open this with "generally stable", and a reader who skims
   // the first clause is told the file is fine.
@@ -116,7 +116,7 @@ test("a broadly broken file must NOT be described as generally stable", () => {
   assert.equal(summary.verdict, "unusable");
 });
 
-test("a type mismatch is named as a producer defect, with its offending value", () => {
+test("a type mismatch is named as a producer defect, with its offending value", async () => {
   // "N/A" in a float column is not variation. It is a broken producer, a
   // sentinel, or a locale change, and the reader's next action is completely
   // different from the one for a big number.
@@ -143,7 +143,7 @@ test("a type mismatch is named as a producer defect, with its offending value", 
 // buried them. All three tests below were written after seeing that output and
 // all three failed against it.
 
-test("the most serious finding leads, whatever order the columns appear in", () => {
+test("the most serious finding leads, whatever order the columns appear in", async () => {
   // col_a is an ordinary marginal wobble; col_z is the 9,999,999.99. Findings
   // are collected in column order, so a first-wins selection leads with col_a
   // and the file's one real problem becomes a footnote.
@@ -169,7 +169,7 @@ test("the most serious finding leads, whatever order the columns appear in", () 
     `the lead finding must be the extreme one, not an ordinary wobble: ${summary.paragraph}`);
 });
 
-test("an extreme anomaly is described even when its factor is enormous", () => {
+test("an extreme anomaly is described even when its factor is enormous", async () => {
   // A "do not repeat it if the factor is big" rule sounds reasonable and is
   // catastrophic: the Owner's file has a factor near 1.9 million, so the rule
   // suppressed the single most important sentence in the report. Repetition is
@@ -180,7 +180,7 @@ test("an extreme anomaly is described even when its factor is enormous", () => {
   assert.match(summary.paragraph, /col_15/);
 });
 
-test("ordinary variation is not counted as a problem in the opening clause", () => {
+test("ordinary variation is not counted as a problem in the opening clause", async () => {
   // The first version opened "severely compromised by 14 problems" and then
   // explained that ten of them were "not a defect". A sentence that contradicts
   // itself in the same breath is worse than either sentence alone: a reader who
@@ -199,7 +199,7 @@ test("ordinary variation is not counted as a problem in the opening clause", () 
   assert.equal(summary.verdict, "minor");
 });
 
-test("repeated variation across many columns is summarised, not narrated ten times", () => {
+test("repeated variation across many columns is summarised, not narrated ten times", async () => {
   // One clause per column is how a summary becomes a wall. Ten identical
   // sentences is not more informative than one, and it buries the real finding.
   const summary = synthesize({
@@ -217,7 +217,7 @@ test("repeated variation across many columns is summarised, not narrated ten tim
 
 // === NEVER FABRICATE ======================================================
 
-test("a clean file is reported clean, with no anomaly, no factor and no warning", () => {
+test("a clean file is reported clean, with no anomaly, no factor and no warning", async () => {
   const summary = synthesize(HEALTHY);
   assert.equal(summary.verdict, "clean");
   assert.match(summary.paragraph, /clean|stable|no /i);
@@ -228,7 +228,7 @@ test("a clean file is reported clean, with no anomaly, no factor and no warning"
   assert.equal(summary.findings.length, 0);
 });
 
-test("a value with no computed fence yields no factor, rather than a division by zero", () => {
+test("a value with no computed fence yields no factor, rather than a division by zero", async () => {
   // A column too short to support a fence has `fence: null`. Dividing by it
   // gives Infinity or NaN, and "a factor of Infinity" in a report is a joke
   // that a reader will forward.
@@ -245,7 +245,7 @@ test("a value with no computed fence yields no factor, rather than a division by
 
 // === THE INSIGHT THAT MAKES IT A DATA SCIENTIST AND NOT A TEMPLATE =======
 
-test("when one value dominates the mean, the summary says the mean cannot be trusted", () => {
+test("when one value dominates the mean, the summary says the mean cannot be trusted", async () => {
   // 199 values near zero and one at 9,999,999.99 give a mean around 50,000 --
   // a number that describes no row in the file. This is the single most
   // misleading thing about a column with an extreme outlier, and it is not
@@ -257,7 +257,7 @@ test("when one value dominates the mean, the summary says the mean cannot be tru
     `the mean is contaminated and the summary must say so: ${summary.paragraph}`);
 });
 
-test("a mean that is NOT dominated is left alone", () => {
+test("a mean that is NOT dominated is left alone", async () => {
   // One outlier in 200 barely moves a mean, so claiming contamination here
   // would be the same class of error in the other direction: a warning that
   // fires on ordinary variation is not a warning.
@@ -274,7 +274,7 @@ test("the summary is injected at the TOP of the markdown, above the row count", 
   const { toBottleneckMarkdown } = await import("./bottleneck-report.ts");
   const rows = Array.from({ length: 40 }, (_, i) => `${i % 5},${i === 20 ? "9999999.99" : (i * 1.5).toFixed(3)}`);
   const parsed = parseCsv(`host,amount\n${rows.join("\n")}\n`);
-  const analysis = analyseBottlenecks({
+  const analysis = await analyseBottlenecks({
     path: "ops.csv", headers: parsed.headers, rowCount: parsed.rows.length,
     columns: [], sample: [], problems: parsed.problems,
     rows: parsed.rows.map((c) => Object.fromEntries(parsed.headers.map((h, i) => [h, c[i] ?? ""]))),
@@ -295,7 +295,7 @@ test("the markdown and the dashboard cannot disagree, because both come from one
   const { toReactDashboard, DASHBOARD_DATA_ID } = await import("../web/react-report.ts");
   const rows = Array.from({ length: 40 }, (_, i) => `${i % 5},${i === 20 ? "9999999.99" : (i * 1.5).toFixed(3)}`);
   const parsed = parseCsv(`host,amount\n${rows.join("\n")}\n`);
-  const analysis = analyseBottlenecks({
+  const analysis = await analyseBottlenecks({
     path: "ops.csv", headers: parsed.headers, rowCount: parsed.rows.length,
     columns: [], sample: [], problems: parsed.problems,
     rows: parsed.rows.map((c) => Object.fromEntries(parsed.headers.map((h, i) => [h, c[i] ?? ""]))),
@@ -316,12 +316,12 @@ test("the markdown and the dashboard cannot disagree, because both come from one
   assert.match(toBottleneckMarkdown(analysis, "Ops", summary.paragraph), /9,999,999\.99/);
 });
 
-test("it reads what the profiler actually produces, not a convenient shape", () => {
+test("it reads what the profiler actually produces, not a convenient shape", async () => {
   // The integration risk is drift: a hand-built input like the fixtures above
   // can be satisfied while the real object has a field this module never reads.
   const rows = Array.from({ length: 40 }, (_, i) => `${(i % 7)},${i === 20 ? "9999999.99" : (i * 1.5).toFixed(3)}`);
   const parsed = parseCsv(`name,amount\n${rows.join("\n")}\n`);
-  const analysis = analyseBottlenecks({
+  const analysis = await analyseBottlenecks({
     path: "real.csv", headers: parsed.headers, rowCount: parsed.rows.length,
     columns: [], sample: [], problems: parsed.problems,
     rows: parsed.rows.map((c) => Object.fromEntries(parsed.headers.map((h, i) => [h, c[i] ?? ""]))),

@@ -76,8 +76,8 @@ const DIRTY = dirtyNumeric(5, true);
 /** Wide enough to trip the ten-column cap. */
 const DIRTY_WIDE = dirtyNumeric(12, true);
 
-test("descriptive statistics are computed for the numeric columns", () => {
-  const n = analyseBottlenecks(csvOf(SMALL)).numerical;
+test("descriptive statistics are computed for the numeric columns", async () => {
+  const n = (await analyseBottlenecks(csvOf(SMALL))).numerical;
   const col = (name: string) => n.columns.find((c) => c.column === name)!;
   assert.equal(n.numericColumns, 5, "all five columns are numeric");
   assert.equal(n.rows, 4);
@@ -96,15 +96,15 @@ test("descriptive statistics are computed for the numeric columns", () => {
   assert.equal(c5.mean, 187.5, "750 over 4");
 });
 
-test("columns are ordered by spread, so the informative ones survive the cap", () => {
-  const n = analyseBottlenecks(csvOf(SMALL)).numerical;
+test("columns are ordered by spread, so the informative ones survive the cap", async () => {
+  const n = (await analyseBottlenecks(csvOf(SMALL))).numerical;
   // col_5 spans 150, col_1 spans 6.25, col_3 5, col_2 4.5, col_4 3.5.
   assert.deepEqual(n.columns.map((c) => c.column), ["col_5", "col_1", "col_3", "col_2", "col_4"],
     "widest spread first, and the name breaks ties so the order is stable across runs");
 });
 
-test("blank and wrongly-typed cells are counted as missing, never as zero", () => {
-  const n = analyseBottlenecks(csvOf(DIRTY)).numerical;
+test("blank and wrongly-typed cells are counted as missing, never as zero", async () => {
+  const n = (await analyseBottlenecks(csvOf(DIRTY))).numerical;
   assert.equal(n.numericColumns, 5, "one bad cell in ten is still a numeric column");
   const c3 = n.columns.find((c) => c.column === "c3")!;
   assert.equal(c3.measured, 9, "the blank cell is not a measurement");
@@ -119,7 +119,7 @@ test("blank and wrongly-typed cells are counted as missing, never as zero", () =
   assert.equal(c1.missing, 1);
 });
 
-test("a column that is MOSTLY text is not summarised as a number at all", () => {
+test("a column that is MOSTLY text is not summarised as a number at all", async () => {
   // The other side of the same floor, and worth pinning because the fix for the
   // test above could have been "stop trusting the profiler". Two of three rows
   // parsing is 0.67, below 0.8, and a column that fails to parse two thirds of
@@ -130,33 +130,33 @@ test("a column that is MOSTLY text is not summarised as a number at all", () => 
 x,30
 y,40
 z,50`;
-  const n = analyseBottlenecks(csvOf(mostlyText)).numerical;
+  const n = (await analyseBottlenecks(csvOf(mostlyText))).numerical;
   assert.ok(!n.columns.some((c) => c.column === "a"), "a is text with numbers in it");
   assert.deepEqual(n.columns.map((c) => c.column), ["b"]);
   assert.equal(n.columns[0].measured, 5, "and b, which really is numeric, keeps all five of its values");
   assert.equal(n.columns[0].mean, 30);
 });
 
-test("a text column is not summarised as if it were a number", () => {
-  const n = analyseBottlenecks(csvOf(DIRTY_WIDE)).numerical;
+test("a text column is not summarised as if it were a number", async () => {
+  const n = (await analyseBottlenecks(csvOf(DIRTY_WIDE))).numerical;
   assert.ok(!n.columns.some((c) => c.column === "label_col"), "alpha/beta/gamma are not statistics");
   assert.equal(n.numericColumns, 12, "and they are not counted among the numeric columns either");
 });
 
-test("more than ten numeric columns are capped, and the cap is announced", () => {
-  const n = analyseBottlenecks(csvOf(DIRTY_WIDE)).numerical;
+test("more than ten numeric columns are capped, and the cap is announced", async () => {
+  const n = (await analyseBottlenecks(csvOf(DIRTY_WIDE))).numerical;
   assert.equal(n.numericColumns, 12, "the file really does have twelve");
   assert.equal(n.columns.length, 10, "ten are shown");
   assert.equal(n.truncated, true, "and the report is told it hid two");
   assert.ok(!n.columns.some((c) => c.column === "c1"),
     "and the hidden ones are the narrowest, which is the point of ordering by spread");
 
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(DIRTY_WIDE)), "Wide file");
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(DIRTY_WIDE)), "Wide file");
   assert.match(md, /2 further numeric column\(s\) are not shown/, "the markdown says so too");
 });
 
-test("markdown renders a Numerical Data Summary with mean, min, max and count", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(SMALL)), "Numerical file");
+test("markdown renders a Numerical Data Summary with mean, min, max and count", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(SMALL)), "Numerical file");
   assert.match(md, /^## Numerical data summary$/m, "the section exists and is named");
   const header = md.split("\n").find((l) => l.startsWith("| # | column"))!;
   for (const h of ["measured", "empty", "dirty", "min", "max", "mean", "spread"]) {
@@ -167,19 +167,19 @@ test("markdown renders a Numerical Data Summary with mean, min, max and count", 
     `the widest-spread column carries its min, max and mean: ${row}`);
 });
 
-test("the summary appears where the ranking tables would have been", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(SMALL)), "Numerical file");
+test("the summary appears where the ranking tables would have been", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(SMALL)), "Numerical file");
   assert.match(md, /No categorical columns found/, "and the reader is told what was skipped");
   assert.match(md, /## Numerical data summary/, "and given the analysis that IS available");
   // The empty ranking headings must not reappear alongside it.
   assert.ok(!md.includes("categories by frequency"));
 });
 
-test("a file WITH categories is not given a numerical summary", () => {
+test("a file WITH categories is not given a numerical summary", async () => {
   // The fallback is a fallback. A Pega export has 24 rows of alert codes and a
   // threshold, and a min/mean/max table of four elapsed figures would displace
   // the answer that actually matters.
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(`_time,source_host,alert_code,elapsed_time,threshold
 2026-09-30 12:00:00.000,host-web,PEGA0001,1200,1000
 2026-09-30 12:01:00.000,host-bg,PEGA0002,800,1000`)), "Bottleneck report");
   assert.ok(!md.includes("Numerical data summary"), "no fallback on a file with a ranking");

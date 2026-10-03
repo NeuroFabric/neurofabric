@@ -59,7 +59,7 @@ test("a file matching no known schema is profiled rather than rejected", async (
   assert.equal(schema.source, "GENERIC", "and says plainly that it was inferred, not verified");
 });
 
-test("the profiler classifies columns as temporal, numeric or categorical from their VALUES", () => {
+test("the profiler classifies columns as temporal, numeric or categorical from their VALUES", async () => {
   const csv = csvOf(ACCESS_LOG);
   const columns = profileGenericColumns(csv.headers, csv.rows);
   const kindOf = (name: string): string => columns.find((c) => c.column === name)?.kind ?? "absent";
@@ -76,7 +76,7 @@ test("the profiler classifies columns as temporal, numeric or categorical from t
   assert.equal(ip.numericRatio, 0, "an address that LOOKS partly numeric is not a number");
 });
 
-test("the profiler infers roles for a file it has never seen", () => {
+test("the profiler infers roles for a file it has never seen", async () => {
   const csv = csvOf(ACCESS_LOG);
   const roles = inferGenericRoles(profileGenericColumns(csv.headers, csv.rows));
   assert.equal(roles.time, "timestamp", "the temporal column becomes the time role");
@@ -89,7 +89,7 @@ test("the profiler infers roles for a file it has never seen", () => {
 test("EVERY generic role is a HYPOTHESIS, never established", async () => {
   const csv = csvOf(ACCESS_LOG);
   const schema = await resolveSchemaMemory({ cwd: ".", headers: csv.headers, rows: csv.rows });
-  const analysis = analyseBottlenecks(csv, schema);
+  const analysis = await analyseBottlenecks(csv, schema);
   assert.equal(analysis.schemaSource, "GENERIC");
   assert.deepEqual(analysis.verifiedRoles ?? [], [], "nothing is verified, because nothing was checked by a person");
 
@@ -111,7 +111,7 @@ test("a generic file produces a real statistical profile, not an empty report", 
   // candidates ("alert_code", "alertType", "event_type"...) is "status" or
   // "path" -- which is precisely the gap the profiler exists to close.
   const schema = await resolveSchemaMemory({ cwd: ".", headers: csv.headers, rows: csv.rows });
-  const a = analyseBottlenecks(csv, schema);
+  const a = await analyseBottlenecks(csv, schema);
   assert.notEqual(a.categoryColumn, null, "a category was found, so this file is not rejected");
   assert.ok(a.categories.length > 0, "and it is ranked");
   // The headline capability: durations are measured on a file the product has
@@ -134,7 +134,7 @@ test("sales data profiles too -- and is not mistaken for a log", async () => {
   assert.equal(schema?.source, "GENERIC");
   // There is no duration column here, so the report must decline rather than
   // invent one. revenue is a NUMBER but it is not a TIME.
-  const analysis = analyseBottlenecks(csv, schema);
+  const analysis = await analyseBottlenecks(csv, schema);
   assert.equal(analysis.categories[0]?.totalElapsed, null, "money is not milliseconds");
 });
 

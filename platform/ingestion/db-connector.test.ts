@@ -7,7 +7,7 @@ import path from "node:path";
 import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { buildPolicy } from "../pi/project-config.ts";
 import { parsePolicyConfig, type PolicyConfig } from "../core/policy-config.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { toBottleneckMarkdown } from "../conductor/bottleneck-report.ts";
 import { resolveSchemaMemory } from "../conductor/schema-memory.ts";
 import { querySqlite, assertReadOnly, SqlRefused, queryPostgres, type PostgresDriver } from "./db-connector.ts";
@@ -184,7 +184,7 @@ test("and it flows straight into the existing engine, with no new code downstrea
   // profile, it is no profile, and the engine declines it on purpose.
   const schema = await resolveSchemaMemory({ cwd: "configs/..", headers: result.csv.headers, rows: result.csv.rows });
   assert.equal(schema?.source, "GENERIC", "a table of orders is not a Pega export, so it profiles generically");
-  const analysis = analyseBottlenecks(result.csv, schema);
+  const analysis = await analyseBottlenecks(result.csv, schema);
   assert.equal(analysis.categoryColumn, "region", "the region column was found");
   assert.ok(analysis.categories.length > 0, "and ranked");
   const md = toBottleneckMarkdown(analysis, "Orders");

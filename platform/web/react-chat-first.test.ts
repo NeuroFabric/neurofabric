@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { toReactDashboard, DASHBOARD_DATA_ID } from "./react-report.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
-import { analyseBottlenecks } from "../conductor/bottlenecks.ts";
+import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { greet } from "../conductor/conversation.ts";
 import { replyTo } from "../conductor/conversation.ts";
 
@@ -36,10 +36,10 @@ const DB_LOG = `_time,query_snippet,total_elapsed_time_ms,execution_plan_id,logi
 2026-09-30 11:00:00.000,SELECT COUNT(*) FROM audit,9800,plan-3c7,91000
 2026-09-30 11:30:00.000,SELECT * FROM orders,2400,plan-9f2,8800`;
 
-function analysis() {
+async function analysis(): Promise<BottleneckAnalysis> {
   const parsed = parseCsv(DB_LOG);
   const rows = parsed.rows.map((cells) => Object.fromEntries(parsed.headers.map((h, i) => [h, cells[i] ?? ""])));
-  return analyseBottlenecks({
+  return await analyseBottlenecks({
     path: "query_perf.csv",
     headers: parsed.headers,
     rowCount: parsed.rows.length,
@@ -64,14 +64,14 @@ function appSourceOf(html: string): string {
 
 const LIVE = { live: { path: "query_perf.csv" } };
 
-test("precondition: the fixture really is a database performance log", () => {
-  const a = analysis();
+test("precondition: the fixture really is a database performance log", async () => {
+  const a = await analysis();
   assert.equal(a.purpose.kind, "database-performance",
     `the fixture must exercise the semantic path: ${a.purpose.kind}`);
 });
 
-test("the payload carries the SEMANTIC PURPOSE, for the greeting to open with", () => {
-  const data = payloadOf(toReactDashboard(analysis(), LIVE));
+test("the payload carries the SEMANTIC PURPOSE, for the greeting to open with", async () => {
+  const data = payloadOf(toReactDashboard(await analysis(), LIVE));
   const purpose = data.purpose as { kind?: string; statement?: string; confidence?: string } | undefined;
   assert.ok(purpose !== undefined, "the page must be told what the file is");
   assert.equal(purpose.kind, "database-performance");
@@ -79,13 +79,13 @@ test("the payload carries the SEMANTIC PURPOSE, for the greeting to open with", 
   assert.ok(purpose.confidence !== undefined, "and how sure the engine is, so the greeting can hedge");
 });
 
-test("the GREETING is computed server-side and embedded, not guessed in the browser", () => {
+test("the GREETING is computed server-side and embedded, not guessed in the browser", async () => {
   // Computed here, at generation time, from the same `greet` the tests exercise.
   // A greeting assembled in the page would be a second implementation of a
   // sentence about somebody's data, and this repository has been bitten by that
   // twice: a parser that was one function in two places, and a title that was
   // one string in four.
-  const data = payloadOf(toReactDashboard(analysis(), LIVE));
+  const data = payloadOf(toReactDashboard(await analysis(), LIVE));
   const greeting = data.greeting as { text?: string; widgets?: unknown[] } | undefined;
   assert.ok(greeting !== undefined, "the opening message must travel with the page");
   assert.match(String(greeting.text), /database performance log/i,
@@ -93,8 +93,8 @@ test("the GREETING is computed server-side and embedded, not guessed in the brow
   assert.match(String(greeting.text), /4 rows|What would you like/i, "and read like a sentence to a person");
 });
 
-test("the CHAT IS THE PRIMARY SURFACE: one column, composer at the bottom", () => {
-  const src = appSourceOf(toReactDashboard(analysis(), LIVE));
+test("the CHAT IS THE PRIMARY SURFACE: one column, composer at the bottom", async () => {
+  const src = appSourceOf(toReactDashboard(await analysis(), LIVE));
   // A single centred reading column, which is what a conversation IS. The old
   // layout was a wide dashboard with a sticky rail beside it, and the rail was
   // the complaint.
@@ -105,8 +105,8 @@ test("the CHAT IS THE PRIMARY SURFACE: one column, composer at the bottom", () =
     "the sidebar rail the Owner rejected must not survive anywhere");
 });
 
-test("WIDGETS RENDER INSIDE THE MESSAGE FLOW, not as sections of a page", () => {
-  const src = appSourceOf(toReactDashboard(analysis(), LIVE));
+test("WIDGETS RENDER INSIDE THE MESSAGE FLOW, not as sections of a page", async () => {
+  const src = appSourceOf(toReactDashboard(await analysis(), LIVE));
   // A widget renderer, invoked from the message renderer. If the charts were
   // still page sections this function would not exist.
   assert.match(src, /function renderWidget|function Widget\(/,
@@ -120,25 +120,25 @@ test("WIDGETS RENDER INSIDE THE MESSAGE FLOW, not as sections of a page", () => 
   }
 });
 
-test("the user CAN ask for different views, corrections and explanations", () => {
-  const src = appSourceOf(toReactDashboard(analysis(), LIVE));
+test("the user CAN ask for different views, corrections and explanations", async () => {
+  const src = appSourceOf(toReactDashboard(await analysis(), LIVE));
   assert.match(src, /\/api\/chat/, "a sentence is answered by the server, where the router lives");
   assert.match(src, /onSubmit/, "and the composer submits it");
   assert.match(src, /suggestion/i, "with clickable follow-ups the user can take instead of typing");
 });
 
-test("the agent's own CAPABILITIES are offered up front, from the router's list", () => {
-  const data = payloadOf(toReactDashboard(analysis(), LIVE));
+test("the agent's own CAPABILITIES are offered up front, from the router's list", async () => {
+  const data = payloadOf(toReactDashboard(await analysis(), LIVE));
   const greeting = data.greeting as { suggestions?: string[] } | undefined;
   assert.ok(Array.isArray(greeting.suggestions) && greeting.suggestions.length > 0,
     "the opening must offer somewhere to go, or the user is staring at a text box");
 });
 
-test("NO WIDGET, NO CHART: the charts may not appear before the conversation does", () => {
+test("NO WIDGET, NO CHART: the charts may not appear before the conversation does", async () => {
   // The strongest statement of the pivot. A chat-first page that renders its
   // charts above the greeting is a dashboard with a chat underneath, which is
   // what we shipped last time.
-  const src = appSourceOf(toReactDashboard(analysis(), LIVE));
+  const src = appSourceOf(toReactDashboard(await analysis(), LIVE));
   const greetingAt = src.indexOf('role === "agent"');
   const chartOutsideFlow = /<h2[^>]*>Record categories/.test(src) ||
     /<h2[^>]*>Rows by hour/.test(src);
@@ -147,11 +147,11 @@ test("NO WIDGET, NO CHART: the charts may not appear before the conversation doe
   assert.ok(greetingAt > -1, "and the transcript must render messages by role");
 });
 
-test("a STATIC report is still available, because some questions need a table", () => {
+test("a STATIC report is still available, because some questions need a table", async () => {
   // Chat-first does not mean table-hostile. Somebody asking for the full column
   // statistics wants a table, and taking that away to make a point about
   // conversation would be its own kind of rigidity.
-  const src = appSourceOf(toReactDashboard(analysis(), LIVE));
+  const src = appSourceOf(toReactDashboard(await analysis(), LIVE));
   assert.match(src, /View raw data|columns/,
     "column data must still be reachable inside the conversation");
 });

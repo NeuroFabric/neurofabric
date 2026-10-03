@@ -149,7 +149,7 @@ test("THE RETAINED WINDOW IS CAPPED, and the statistics are not", async (t) => {
   const elapsed = csv.columns.find((column) => column.name === "elapsed_time");
   assert.ok(elapsed?.kind === "number", "elapsed_time is numeric");
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const stat = analysis.numerical.columns.find((column) => column.column === "elapsed_time");
   assert.ok(stat !== undefined, "the numeric column is described");
   assert.equal(stat!.measured, 60_000,
@@ -204,7 +204,7 @@ test("THE OUTLIER COUNT IS EXACT even when the fences were estimated", async (t)
   await rm(file, { force: true });
 });
 
-test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", () => {
+test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", async () => {
   // This test exists because the implementation got it WRONG first.
   //
   // The eviction created an entry carrying the victim's count, and then -- one
@@ -235,7 +235,7 @@ test("SPACE-SAVING INHERITS the evicted counter, so the total never collapses", 
     "collapse under eviction are not an approximation, they are a lie.");
 });
 
-test("a table that never overflows is EXACT, which is the case every fixture is", () => {
+test("a table that never overflows is EXACT, which is the case every fixture is", async () => {
   const aggregator = new KeyedAggregator({ capacity: 256 });
   for (let i = 0; i < 100; i += 1) aggregator.add("only", { row: i + 2, duration: i });
   const entries = aggregator.entries();
@@ -280,7 +280,7 @@ test("THE RANKINGS AND THE TIMELINE COVER EVERY ROW, not the retained window", a
   const csv = await csvRead({ path: file });
   assert.equal(csv.rows.length, 10_000, "the window stays capped -- the whole point of Phase 10");
 
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const categorySum = analysis.categories.reduce((sum, c) => sum + c.count, 0);
   const hourSum = analysis.hourly.hours.reduce((sum, h) => sum + h.count, 0);
   const sourceSum = analysis.bySource.reduce((sum, b) => sum + b.count, 0);
@@ -320,7 +320,7 @@ test("a DROPPED category key is announced rather than silently absent", async ()
   await new Promise<void>((resolve, reject) => out.end((error?: Error | null) => (error ? reject(error) : resolve())));
 
   const csv = await csvRead({ path: file });
-  const analysis = analyseBottlenecks(csv);
+  const analysis = await analyseBottlenecks(csv);
   const scope = analysis.rankingScope;
   assert.ok(scope.categoryKeysTracked <= scope.categoryKeyBudget,
     `the key budget must hold; ${scope.categoryKeysTracked} keys tracked against a budget of ${scope.categoryKeyBudget}`);

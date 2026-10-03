@@ -55,21 +55,21 @@ function twoColumn(a: readonly number[], b: readonly number[]): string {
   return `c1,c2\n${a.map((x, i) => `${x},${b[i]}`).join("\n")}`;
 }
 
-const stat = (text: string, column: string) =>
-  analyseBottlenecks(csvOf(text)).numerical.columns.find((c) => c.column === column)!;
+const stat = async (text: string, column: string) =>
+   (await analyseBottlenecks(csvOf(text))).numerical.columns.find((c) => c.column === column)!;
 
-test("a value far outside the fences is flagged as an OUTLIER, not merely sorted first", () => {
+test("a value far outside the fences is flagged as an OUTLIER, not merely sorted first", async () => {
   const base = noise(19, 7);
   const dirty = [...base, 9999999.99];
-  const c1 = stat(twoColumn(dirty, noise(20, 11)), "c1");
+  const c1 = await stat(twoColumn(dirty, noise(20, 11)), "c1");
   assert.equal(c1.outliers, 1, "the one absurd value is named");
   assert.equal(c1.outlierMax, 9999999.99, "and its magnitude is given");
   assert.equal(c1.method, "IQR", "using a method that survives the outlier");
   assert.ok(c1.fenceUpper !== null && c1.fenceUpper < 100, `the upper fence is ${c1.fenceUpper}, far below the value`);
 });
 
-test("the fences are published so the judgement can be checked", () => {
-  const c1 = stat(twoColumn([...noise(19, 7), 9999999.99], noise(20, 11)), "c1");
+test("the fences are published so the judgement can be checked", async () => {
+  const c1 = await stat(twoColumn([...noise(19, 7), 9999999.99], noise(20, 11)), "c1");
   // 19 values inside roughly [-2, 2]: Q1 about -0.9, Q3 about 0.9, IQR about
   // 1.8, upper fence about 3.6. Asserted loosely because the point is that a
   // NUMBER is exposed, not that this generator's noise lands on a particular one.
@@ -78,44 +78,44 @@ test("the fences are published so the judgement can be checked", () => {
   assert.ok(c1.fenceUpper! > c1.fenceLower!, "and the fences bracket the data");
 });
 
-test("a clean column is not flagged", () => {
-  const c1 = stat(twoColumn(noise(20, 3), noise(20, 5)), "c1");
+test("a clean column is not flagged", async () => {
+  const c1 = await stat(twoColumn(noise(20, 3), noise(20, 5)), "c1");
   assert.equal(c1.outliers, 0, "uniform-ish noise has no outliers, and saying so is a real answer");
   assert.equal(c1.outlierMax, null);
 });
 
-test("a column that is CONSTANT produces no outliers and does not divide by zero", () => {
+test("a column that is CONSTANT produces no outliers and does not divide by zero", async () => {
   // IQR is 0, so both fences sit on the single value. Every value equals them,
   // so nothing is beyond. The degenerate case is the one most likely to produce
   // Infinity or a spurious flag, so it is pinned rather than assumed.
-  const c1 = stat(twoColumn(Array.from({ length: 20 }, () => 7), noise(20, 5)), "c1");
+  const c1 = await stat(twoColumn(Array.from({ length: 20 }, () => 7), noise(20, 5)), "c1");
   assert.equal(c1.outliers, 0);
   assert.equal(c1.fenceUpper, 7);
   assert.equal(c1.fenceLower, 7);
 });
 
-test("a lone extreme value among identical values IS caught", () => {
-  const c1 = stat(twoColumn([...Array.from({ length: 19 }, () => 0), 100], noise(20, 5)), "c1");
+test("a lone extreme value among identical values IS caught", async () => {
+  const c1 = await stat(twoColumn([...Array.from({ length: 19 }, () => 0), 100], noise(20, 5)), "c1");
   assert.equal(c1.outliers, 1, "one non-zero among nineteen zeroes is exactly the case IQR is good at");
 });
 
-test("too few values means the engine says it did not look", () => {
-  const c1 = stat(twoColumn([1, 2, 3, 4, 1000], [1, 2, 3, 4, 5]), "c1");
+test("too few values means the engine says it did not look", async () => {
+  const c1 = await stat(twoColumn([1, 2, 3, 4, 1000], [1, 2, 3, 4, 5]), "c1");
   assert.equal(c1.measured, 5);
   assert.equal(c1.method, null, "no method was applied, and that is stated rather than implied");
   assert.equal(c1.outliers, 0);
   assert.equal(c1.fenceUpper, null, "and no fence is invented");
 });
 
-test("the markdown flags the outlier in the table", () => {
+test("the markdown flags the outlier in the table", async () => {
   const text = twoColumn([...noise(19, 7), 9999999.99], noise(20, 11));
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(text)), "Noisy file");
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(text)), "Noisy file");
   assert.match(md, /ANOMALY: OUTLIER/, "the flag appears in the report, not only in the analysis");
   const row = md.split("\n").find((l) => l.includes("ANOMALY: OUTLIER"))!;
   assert.match(row, /^\| \d+ \| c1 \|/, `the flag is on the offending column: ${row}`);
 });
 
-test("a clean file prints no outlier flag", () => {
-  const md = toBottleneckMarkdown(analyseBottlenecks(csvOf(twoColumn(noise(20, 3), noise(20, 5)))), "Clean file");
+test("a clean file prints no outlier flag", async () => {
+  const md = toBottleneckMarkdown(await analyseBottlenecks(csvOf(twoColumn(noise(20, 3), noise(20, 5)))), "Clean file");
   assert.ok(!md.includes("ANOMALY: OUTLIER"), "no false alarm on ordinary data");
 });

@@ -3,7 +3,7 @@ import {
   fencesFromQuartiles,
   outliersFromSorted,
   percentileSorted,
-  streamCsvRecordsSync,
+  streamCsvRecords,
   HourlyCounter,
   KeyedAggregator,
   type FenceSummary,
@@ -1119,7 +1119,27 @@ function hourlyProfile(hours: HourlyCounter): HourlyProfile {
   };
 }
 
-export function analyseBottlenecks(
+/**
+ * THE ANALYSIS IS ASYNCHRONOUS, and that is a production requirement rather than
+ * a style choice.
+ *
+ * The full-file pass used to be a synchronous `readSync` loop, which is correct
+ * for a CLI and wrong for a server: it holds the thread for the duration of the
+ * file, so one large export stalls every OTHER connection in the process. A
+ * multi-tenant deployment cannot afford a request that freezes the event loop
+ * for the length of somebody else's file.
+ *
+ * So the pass is awaited rather than blocking, and everything downstream of it --
+ * the Conductor, the web server, the PDF connector, and every test that asserts
+ * on an analysis -- awaits in turn. The ARITHMETIC is unchanged: the same
+ * accumulators, the same fences, the same rankings. Only the I/O yields.
+ *
+ * A note on what this does NOT buy. The accumulators are still bounded and the
+ * retained window is still 10,000 rows, so memory is flat either way; what
+ * changes is that the CPU work between awaits now interleaves with other
+ * requests instead of monopolising the loop until the file is read.
+ */
+export async function analyseBottlenecks(
   csv: CsvReadResult,
   /**
    * A stored mapping for THIS file, when one resolved. Its roles are taken as
@@ -1127,7 +1147,7 @@ export function analyseBottlenecks(
    * is a property of the data and is re-checked below either way.
    */
   schema?: ResolvedSchema,
-): BottleneckAnalysis {
+): Promise<BottleneckAnalysis> {
   const { mappings, degenerate, chosen, verified } = resolveMappings(csv, schema);
 
   const timeCol = chosen.time;
@@ -1271,7 +1291,10 @@ export function analyseBottlenecks(
     // column beats an indexOf scan per column, and this runs half a million times.
     const position = new Map(csv.headers.map((header, index) => [header, index]));
     let seenHeader = false;
-    streamCsvRecordsSync(csv.path, (cells, line) => {
+    // THE ASYNC READER. This is the line that keeps the event loop free: the
+    // stream is consumed across event-loop turns, so a second request arriving
+    // mid-file is served while this one is still reading.
+    await streamCsvRecords(csv.path, (cells, line) => {
       if (!seenHeader) {
         seenHeader = true;
         return;
