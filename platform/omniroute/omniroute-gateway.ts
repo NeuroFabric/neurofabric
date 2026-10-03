@@ -171,6 +171,19 @@ export class OmniRouteGateway {
   }
 
   /**
+   * THE CONNECTED PROVIDER NAMES, in the order they were attached.
+   *
+   * Added because a reader that needs to know WHICH providers exist had no way to
+   * ask. The tempting shortcut -- recovering the name from a partition's label,
+   * which looks like `push:payments` -- was rejected: it is a string-prefix
+   * dependency on an internal detail, and it silently returns the wrong name the
+   * day a second prefix is added. A snapshot is per-partition; a provider is not.
+   */
+  providerNames(): readonly string[] {
+    return [...this.providers.keys()];
+  }
+
+  /**
    * THE EDGE CALL. Prove the caller, then push its event.
    *
    * The decision is RETURNED rather than thrown. A refused push is an ordinary
