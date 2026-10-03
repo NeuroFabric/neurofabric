@@ -42,9 +42,13 @@ function text(html: string): string {
 describe("LiveStreamView", () => {
   it("states an explicit absence rather than spinning forever", () => {
     const html = render(<LiveStreamView verdict={null} />);
-    expect(html).toContain("No snapshot yet");
+    expect(html).toContain("No verdict yet");
     // A spinner that never resolves is indistinguishable from a working pipeline.
     expect(html).not.toContain("Loading");
+  });
+
+  it("says it is connecting while the first poll is outstanding", () => {
+    expect(render(<LiveStreamView verdict={null} loading />)).toContain("Connecting to the live gateway");
   });
 
   it("renders a transport error rather than an empty panel", () => {
@@ -57,24 +61,52 @@ describe("LiveStreamView", () => {
     expect(html).toContain("a count, not a rate");
   });
 
-  it("never renders a per-second throughput figure", () => {
-    // The single most important assertion in this file. There is no endpoint
-    // that reports a rate, so any "/sec" or "events per second" text here would
-    // be a number this component invented.
-    //
-    // Asserted against TEXT, not markup: searching raw HTML for "/sec" finds
-    // the closing `</section>` tag and fails for a reason that has nothing to
-    // do with the claim.
-    const html = render(<LiveStreamView verdict={simulateVerdict(7, 257_000)} />);
-    const body = text(html);
-    expect(body).not.toContain("/sec");
-    expect(body).not.toContain("per second");
-    expect(body).not.toContain("events/s");
-    expect(body).not.toContain("throughput");
-    // The count it was fed is displayed, and is a count.
-    expect(body).toContain("257,000");
-    expect(body).toContain("a count, not a rate");
-  });
+  it("renders a MEASURED rate, and always with the window it was measured over", () => {
+  // This test INVERTS an earlier one. The previous version asserted that no
+  // per-second figure could appear, and it was right at the time: no endpoint
+  // reported a rate, so any number would have been invented. One now does, and
+  // the number is measured server-side by `ThroughputMeter`.
+  //
+  // What did NOT change is the discipline. A rate without its window is not a
+  // measurement, so the window is asserted here rather than assumed -- and a
+  // verdict with no reading still says so instead of showing a zero.
+  const html = text(render(<LiveStreamView verdict={simulateVerdict(7, 257_000)} />));
+  // The sample IS synthetic, so the banner must be present. The label is
+  // conditional, not deleted: it is what makes the number trustworthy when it is
+  // the other way round.
+  expect(html).toContain("SIMULATED SAMPLE");
+
+  const real = { ...simulateVerdict(7, 554_000), synthetic: false };
+  const live = text(
+    render(
+      <LiveStreamView
+        verdict={real}
+        throughput={{ records: 554_000, delta: 79_000, windowMs: 1_420, eventsPerSecond: 56_690 }}
+      />,
+    ),
+  );
+  expect(live).toContain("56,690");
+  expect(live).toContain("events/sec");
+  // The window, and the delta it was computed from. Without both, the rate is a
+  // vibe rather than a measurement.
+  expect(live).toContain("1,420ms");
+  expect(live).toContain("79,000");
+  expect(live).not.toContain("SIMULATED SAMPLE");
+});
+
+it("says 'no reading yet' rather than a zero rate when no window exists", () => {
+  // One observation cannot produce a rate, and zero would read as a dead stream.
+  const html = text(render(<LiveStreamView verdict={{ ...simulateVerdict(1, 10), synthetic: false }} />));
+  expect(html).toContain("no reading yet");
+  expect(html).not.toContain("events/sec");
+});
+
+it("reports connected but idle, which is healthy rather than broken", () => {
+  const idle = { ...simulateVerdict(1, 0), synthetic: false, records: 0, columns: [] };
+  const html = text(render(<LiveStreamView verdict={idle} />));
+  expect(html).toContain("Connected but idle");
+  expect(html).toContain("pega");
+});
 
   it("banners a simulated sample so it cannot be read as measured", () => {
     const html = render(<LiveStreamView verdict={simulateVerdict(7, 1000)} />);

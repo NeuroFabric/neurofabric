@@ -32,8 +32,13 @@ export default defineConfig({
       // The portal routes are served under /api/portal/*. Proxying keeps the
       // browser same-origin, so the credential header never has to survive a
       // cross-origin preflight in development.
+      //
+      // Port 8080, not 3000: Omniroute is a separate product that already binds
+      // 3000 on this machine, and two services fighting over a port is a
+      // confusing failure for whoever hits it. Start the wedge with
+      // `npm run dev -- --port 8080`.
       "/api": {
-        target: "http://127.0.0.1:3000",
+        target: "http://127.0.0.1:8080",
         changeOrigin: false,
       },
     },

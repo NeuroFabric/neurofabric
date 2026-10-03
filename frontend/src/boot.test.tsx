@@ -169,13 +169,13 @@ describe("Root renders a prompt instead of crashing", () => {
   it("renders the app when the environment supplies a credential", () => {
     const html = text(render(<Root storage={memoryTokenStorage(null)} environmentToken="gw-env" />));
     expect(html).toContain("Command Center");
-    expect(html).toContain("gateway configured");
+    expect(html).toContain("schema-driven · live ·");
     expect(html).not.toContain("No gateway credential is configured");
   });
 
   it("renders the app when only storage supplies one", () => {
     const html = text(render(<Root storage={memoryTokenStorage("gw-stored")} environmentToken={undefined} />));
-    expect(html).toContain("gateway configured");
+    expect(html).toContain("schema-driven · live ·");
   });
 
   it("renders the prompt when the environment variable is present but empty", () => {
@@ -230,6 +230,15 @@ describe("CredentialPrompt", () => {
     const html = render(<CredentialPrompt onSubmit={() => {}} />);
     expect(html).toContain('value=""');
     expect(html).not.toContain("gw-");
+  });
+
+  it("masks the characters in CSS while staying a plain text element", () => {
+    // The mask is presentational and that is the honest limit: `type="text"`
+    // keeps the DOM honest about the value being plain text, and
+    // `-webkit-text-security` hides the characters from a shoulder-surfer.
+    const html = render(<CredentialPrompt onSubmit={() => {}} />);
+    expect(html).toContain('type="text"');
+    expect(html).toContain("-webkit-text-security:disc");
   });
 
   it("shows a supplied error", () => {

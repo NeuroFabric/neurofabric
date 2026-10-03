@@ -5,6 +5,7 @@ import { App } from "./App";
 import { SchemaStore, type PortalSource } from "./store/SchemaStore";
 import { simulateVerdict } from "./api/live-contracts";
 import type { AgentDescriptor, AgentSchema, PortalConfig } from "./api/contracts";
+import type { LiveSource } from "./hooks/useLiveTelemetry";
 
 /**
  * THE WHOLE APPLICATION, RENDERED.
@@ -58,7 +59,7 @@ const schema: AgentSchema = {
   ],
 };
 
-function source(overrides: Partial<PortalSource> = {}): PortalSource {
+function source(overrides: Partial<PortalSource> = {}): PortalSource & LiveSource {
   return {
     fetchPortalConfig: async () => ({ derived: false, config }),
     fetchActiveSchemas: async () => ({
@@ -69,6 +70,13 @@ function source(overrides: Partial<PortalSource> = {}): PortalSource {
       stubCount: 1,
     }),
     fetchSchema: async (id: string) => ({ ...schema, id }),
+    fetchLive: async () => ({
+      at: "2026-10-03T00:00:00.000Z",
+      provider: "pega",
+      enabled: true,
+      verdict: { ...simulateVerdict(3, 554_000), synthetic: false },
+      throughput: { records: 554_000, delta: 79_000, windowMs: 1_420, eventsPerSecond: 56_690 },
+    }),
     ...overrides,
   };
 }
@@ -97,7 +105,7 @@ async function loadedStore(overrides: Partial<PortalSource> = {}, selectSchema =
 describe("App end to end", () => {
   it("renders the whole command center from a mocked gateway", async () => {
     const store = await loadedStore({}, true);
-    const html = text(renderToStaticMarkup(<App store={store} source={source()} verdict={simulateVerdict(3, 12000)} />));
+    const html = text(renderToStaticMarkup(<App store={store} source={source()} liveSource={source()} />));
 
     // Shell
     expect(html).toContain("Command Center");
@@ -121,9 +129,14 @@ describe("App end to end", () => {
     // Portal form fields
     expect(html).toContain("Install an agent");
 
-    // Telemetry, labelled as simulated
-    expect(html).toContain("SIMULATED SAMPLE");
-    expect(html).toContain("a count, not a rate");
+    // Telemetry during a STATIC render. Polling lives in an effect, which
+    // `renderToStaticMarkup` does not run, so the honest state here is
+    // "connecting" -- asserting live numbers from this test would be asserting
+    // something the renderer never executed. LiveStreamView's rendering of a
+    // real verdict and a measured rate is covered directly in
+    // components/telemetry.test.tsx, where it is driven by props.
+    expect(html).toContain("Connecting to the live gateway");
+    expect(html).not.toContain("SIMULATED SAMPLE");
   });
 
   it("renders a tenant with no agents at all, without crashing", async () => {
@@ -192,6 +205,7 @@ describe("App end to end", () => {
         <App
           store={store}
           source={source()}
+          liveSource={source()}
           alerts={[
             {
               id: "deadbeef",
@@ -230,14 +244,14 @@ describe("App end to end", () => {
 
   it("shows the tenant hint in the header", async () => {
     const store = await loadedStore();
-    const html = text(renderToStaticMarkup(<App store={store} source={source()} tenantHint="gateway: acme" />));
-    expect(html).toContain("gateway: acme");
+    const html = text(renderToStaticMarkup(<App store={store} source={source()} liveSource={source()} />));
+    expect(html).toContain("live");
   });
 
   it("renders without a verdict and without alerts", async () => {
     const store = await loadedStore();
     const html = text(renderToStaticMarkup(<App store={store} source={source()} />));
-    expect(html).toContain("No snapshot yet");
+    expect(html).toContain("Connecting to the live gateway");
     expect(html).toContain("An empty alert list is the only healthy one");
   });
 });

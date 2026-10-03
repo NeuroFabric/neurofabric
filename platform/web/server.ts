@@ -8,6 +8,7 @@ import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { createPortalRoutes, InMemoryPortalStore, type PortalRouter } from "../api/portal-routes.ts";
 import { environmentVault, type VaultProvider } from "../omniroute/edge-security.ts";
+import { OmniRouteGateway } from "../omniroute/omniroute-gateway.ts";
 import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
@@ -96,7 +97,8 @@ export interface WedgeOptions {
    * unsafe one.
    */
   host?: string;
-  /** The install root, for finding the shipped schemas. */
+  /**
+   * The install root, for finding the shipped schemas. */
   installRoot?: string;
   /**
    * WHERE THE PORTAL API READS ITS CREDENTIALS FROM.
@@ -112,6 +114,16 @@ export interface WedgeOptions {
    * frontend shows a sign-in fault rather than an empty dashboard.
    */
   portalVault?: VaultProvider;
+  /**
+   * PROVIDERS THE LIVE GATEWAY ACCEPTS, and the one the portal reports on.
+   *
+   * Default `["pega", "webhook"]`. The names are door labels, not configuration
+   * a caller chooses freely: the ingest route refuses an unknown provider, so
+   * this list is the whole ingress surface and it is fixed at boot rather than
+   * being taken from a request. A provider named by a caller must be a provider
+   * this process connected first, or the boundary is the caller's to choose.
+   */
+  liveProviders?: readonly string[];
 }
 
 export interface RunningWedge {
@@ -384,10 +396,39 @@ export function createWedgeServer(options: WedgeOptions): Server {
    * same `resolveWithinRoot` boundary as every other path that reads a file.
    */
   const registry = new DynamicAgentRegistry();
+
+  /**
+   * THE LIVE GATEWAY. ONE PER SERVER PROCESS, AND IT HAS TO BE.
+   *
+   * The gateway is the store of in-flight telemetry AND of the counters the
+   * dashboard reads. Built per request, a push would land in a broker discarded
+   * when the response was written, and every read would report "no data" forever
+   * -- the same failure `DynamicAgentRegistry` had when the routes were first
+   * mounted, and the reason the singleton shape is repeated here on purpose.
+   *
+   * It is created even when no credential is provisioned. Empty tokens means the
+   * gateway admits nothing, which is the safe direction: an ingress that admits
+   * by default is an ingress nobody notices is open until someone reads a log.
+   */
+  const gateway = new OmniRouteGateway();
+  const liveProviders = options.liveProviders ?? ["pega", "webhook"];
+  const bindings = new Map<string, boolean>();
+  for (const name of liveProviders) {
+    gateway.connect({ name, keyColumn: "service", timeColumn: "pega_time" });
+    bindings.set(name, true);
+  }
+  const liveProvider = liveProviders[0] ?? "pega";
+
   const portalRoutes: PortalRouter = createPortalRoutes({
     registry,
     store: new InMemoryPortalStore(),
     vault: options.portalVault ?? environmentVault(),
+    live: {
+      verdict: (provider) => gateway.verdict(provider),
+      push: (provider, event) => gateway.push(provider, event),
+      connected: (provider) => bindings.has(provider),
+    },
+    liveProvider,
   });
 
   return createServer((request, response) => {

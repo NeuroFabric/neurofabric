@@ -213,3 +213,166 @@ test("portal responses carry the hardened JSON headers", async () => {
     await server.close();
   }
 });
+
+/* -------------------------------------------------------------------------- */
+/* THE LIVE SURFACE                                                           */
+/* -------------------------------------------------------------------------- */
+
+const INGEST = "/api/portal/ingest";
+const LIVE = "/api/portal/live";
+
+const EVENT = {
+  fields: { alert_code: "PEGA0001", elapsed_time: "1200", threshold: "1000", pega_time: "2026-10-03T00:00:00.000Z" },
+  at: 1_760_000_000_000,
+};
+
+test("the live route refuses without a credential, like every portal route", async () => {
+  const server = await harness();
+  try {
+    const response = await fetch(`${server.url}${LIVE}`);
+    assert.equal(response.status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+test("ingest refuses without a credential", async () => {
+  const server = await harness();
+  try {
+    const response = await fetch(`${server.url}${INGEST}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "pega", events: [EVENT] }),
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await server.close();
+  }
+});
+
+test("ingest refuses a provider the process never connected", async () => {
+  // The provider name is the ingress surface, fixed at boot. A caller must not be
+  // able to name a door the process did not open.
+  const server = await harness();
+  try {
+    const response = await call(server, INGEST, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "not-connected", events: [EVENT] }),
+    });
+    assert.equal(response.status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+test("ingest refuses a malformed body with field-named issues", async () => {
+  const server = await harness();
+  try {
+    const cases: readonly [unknown, string][] = [
+      [{ provider: "pega" }, "$.events"],
+      [{ provider: "", events: [EVENT] }, "$.provider"],
+      [{ provider: "pega", events: [] }, "$.events"],
+      [{ provider: "pega", events: [{ fields: { a: {} } }] }, "$.events[0].fields.a"],
+      [{ provider: "pega", events: [{ fields: { a: "x" }, at: "soon" }] }, "$.events[0].at"],
+    ];
+    for (const [body, path] of cases) {
+      const response = await call(server, INGEST, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+      const parsed = (await response.json()) as { issues: { path: string }[] };
+      assert.ok(parsed.issues.some((issue) => issue.path === path), `expected an issue at ${path}`);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+test("ingest accepts a well-formed batch and reports what it took", async () => {
+  const server = await harness();
+  try {
+    const response = await call(server, INGEST, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "pega", events: [EVENT, EVENT, EVENT] }),
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { accepted: number; refused: number };
+    assert.equal(body.accepted, 3);
+    assert.equal(body.refused, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("the live route reports a real verdict once traffic has arrived", async () => {
+  // The claim that matters: `synthetic: false` on a body the server produced from
+  // events it actually received. Until this passed, every throughput figure in
+  // the UI was generated locally.
+  const server = await harness();
+  try {
+    const events = Array.from({ length: 400 }, () => EVENT);
+    await call(server, INGEST, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "pega", events }),
+    });
+
+    // The broker consumes asynchronously, so poll rather than assume.
+    let snapshot: LiveBody | null = null;
+    for (let attempt = 0; attempt < 25 && snapshot === null; attempt++) {
+      const response = await call(server, LIVE);
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as LiveBody;
+      if (body.verdict !== null && body.verdict.records > 0) snapshot = body;
+      else await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    assert.ok(snapshot !== null, "the verdict never reported any records");
+    assert.equal(snapshot.verdict.synthetic, false);
+    assert.equal(snapshot.enabled, true);
+    assert.equal(snapshot.provider, "pega");
+    assert.ok(snapshot.verdict.records > 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("the live route reports throughput only once two observations exist", async () => {
+  // One observation cannot produce a rate, and returning zero would be
+  // indistinguishable from a stream that has stopped.
+  const server = await harness();
+  try {
+    await call(server, INGEST, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "pega", events: Array.from({ length: 200 }, () => EVENT) }),
+    });
+    let sawNullFirst = false;
+    let sawRate = false;
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const body = (await (await call(server, LIVE)).json()) as LiveBody;
+      if (body.throughput === null) sawNullFirst = true;
+      else {
+        assert.ok(body.throughput.windowMs > 0, "a rate without its window is not a measurement");
+        sawRate = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    assert.ok(sawNullFirst, "the first reading should report no rate at all");
+    assert.ok(sawRate, "a rate never appeared");
+  } finally {
+    await server.close();
+  }
+});
+
+interface LiveBody {
+  readonly provider: string;
+  readonly enabled: boolean;
+  readonly verdict: { records: number; synthetic: boolean; breachedColumns: number } | null;
+  readonly throughput: { records: number; delta: number; windowMs: number; eventsPerSecond: number } | null;
+}

@@ -10,6 +10,7 @@ import {
   type SchemaInstall,
   type ShapeIssue,
 } from "./contracts";
+import { validateLiveSnapshot, type LiveSnapshot } from "./live-contracts";
 
 /**
  * THE GATEWAY CLIENT.
@@ -62,6 +63,7 @@ export const PORTAL_PATHS = {
   config: "/api/portal/config",
   agents: "/api/portal/agents",
   schema: "/api/portal/schema",
+  live: "/api/portal/live",
 } as const;
 
 export type GatewayFailure =
@@ -228,6 +230,25 @@ export class GatewayClient {
     const body = await this.#request("GET", PORTAL_PATHS.agents);
     const verdict = validateAgentRoster(body);
     if (!verdict.ok) throw this.#malformed("the agent roster", verdict.issues);
+    return verdict.value;
+  }
+
+  /**
+   * `GET /api/portal/live` -- the live verdict and the MEASURED rate.
+   *
+   * The route returns an ENVELOPE: `{ at, provider, enabled, verdict,
+   * throughput }`. Validating the envelope as though it were the verdict would
+   * refuse every real response, which is the exact bug `fetchSchema` shipped with
+   * in the first version of this client.
+   *
+   * Polled by `useLiveTelemetry`. The throughput half is null until the server
+   * holds two observations, which is not an error -- it is the honest answer to
+   * "how fast", given one point in time.
+   */
+  async fetchLive(): Promise<LiveSnapshot> {
+    const body = await this.#request("GET", PORTAL_PATHS.live);
+    const verdict = validateLiveSnapshot(body);
+    if (!verdict.ok) throw this.#malformed("the live snapshot", verdict.issues);
     return verdict.value;
   }
 
