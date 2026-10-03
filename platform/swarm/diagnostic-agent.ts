@@ -73,6 +73,49 @@ export interface DiagnosticInput {
   readonly context?: AgentContext;
   /** A live stream, when the diagnosis is about something still running. */
   readonly snapshot?: BrokerSnapshot;
+  /**
+   * THE TELEMETRY TO READ, AS A STREAM.
+   *
+   * `AsyncIterable` and nothing else is deliberate, and it is the whole memory
+   * story of this platform. There is no array form, no "events" property and no
+   * convenience that takes a buffer, because every one of those would let a
+   * caller hand an agent 50,000 events at once and call the agent O(1) because
+   * the agent did not itself copy them. An agent that accepts a buffer cannot be
+   * held to a memory bound that its own caller did not respect.
+   *
+   * The stream may be consumed exactly once. `diagnose` is therefore not
+   * idempotent for a stream input, and a caller wanting a second reading must
+   * supply a second stream -- which is the honest shape, because re-reading a
+   * live stream should not silently replay from the beginning.
+   */
+  readonly stream?: AsyncIterable<TelemetryEvent>;
+}
+
+/**
+ * WHAT A SWARM AGENT CONSUMES.
+ *
+ * Declared here rather than imported from the gateway so the swarm is not
+ * coupled to one ingress: any provider adapter -- webhook, Kafka, file tail --
+ * produces this and nothing else. It is structurally the gateway's own event, so
+ * an adapter from `OmniRouteEvent` is a widening and not a translation.
+ *
+ * Every value is a STRING because it arrived from a wire. Nothing in this file
+ * coerces, and every agent parses: a number that has silently become a string is
+ * a schema question, and answering it here would answer it once for everybody
+ * including the agents that need it to stay a string.
+ */
+export interface TelemetryEvent {
+  readonly fields: Readonly<Record<string, string>>;
+  /** Event instant, when the provider carried one. */
+  readonly at?: number;
+  /**
+   * Which partition of the stream this came from.
+   *
+   * Optional because an adapter may not know, and required to be REPORTED rather
+   * than invented: a verdict that claims "across 1 partition" when the caller
+   * never said is a claim the agent cannot support.
+   */
+  readonly partition?: string;
 }
 
 export type FindingSeverity = "info" | "warning" | "critical";
@@ -106,6 +149,15 @@ export interface DiagnosticResult {
   readonly summary: string;
   readonly findings: readonly DiagnosticFinding[];
   readonly at: string;
+  /**
+   * BOUNDED COUNTERS, published so a caller can see the shape of what was read.
+   *
+   * Optional because an agent with nothing to count has nothing to say, and
+   * required to be FLAT NUMBERS: a nested object here is an invitation to hang a
+   * growing histogram off it, which is exactly the unbounded structure the stream
+   * input exists to prevent.
+   */
+  readonly stats?: Readonly<Record<string, number>>;
 }
 
 /** What the registry publishes about an agent. Carries no credentials and no data. */
