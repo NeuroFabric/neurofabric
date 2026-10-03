@@ -379,6 +379,22 @@ const NO_EVENTS: AsyncIterable<TelemetryEvent> = {
   },
 };
 
+/** How an agent is constructed. The tenant is required, not defaulted. */
+export interface DynamicAgentOptions {
+  /**
+   * WHO OWNS THIS AGENT.
+   *
+   * Required, and with no default value, which is the point. A default tenant is
+   * a global bucket, and the failure mode of forgetting to pass one is two
+   * customers silently sharing a namespace. Making it a required option means the
+   * compiler refuses every call site that forgot, rather than a runtime check
+   * catching it after somebody's data has already crossed over.
+   */
+  readonly tenant: string;
+  readonly sinkCap?: number;
+  readonly clock?: () => number;
+}
+
 /**
  * AN AGENT GENERATED FROM A SCHEMA.
  *
@@ -388,6 +404,19 @@ const NO_EVENTS: AsyncIterable<TelemetryEvent> = {
  * kind of agent, it is the same kind with a different source of rules.
  */
 export class DynamicAgent implements DiagnosticAgent {
+  /** The tenant that owns this agent. Everything about it is scoped to them. */
+  readonly tenant: string;
+  /**
+   * The COMPOSITE id, `tenant/schemaId`.
+   *
+   * Composite rather than bare, and that is a security property rather than a
+   * naming preference. With a bare id two tenants may each have an agent called
+   * `orders`, and every surface keyed by id -- the roster, a portal widget, a
+   * routing table -- then has two entries that cannot be told apart. A portal that
+   * resolves the wrong one shows a customer the other customer's findings. A
+   * composite id makes that collision unrepresentable rather than merely unlikely,
+   * and it is legible in a log line without a lookup.
+   */
   readonly id: string;
   readonly title: string;
   readonly domain: DiagnosticDomain;
@@ -401,7 +430,7 @@ export class DynamicAgent implements DiagnosticAgent {
   /** Evaluations completed. Published so an idle agent is distinguishable from a broken one. */
   evaluations = 0;
 
-  constructor(schema: AgentSchema, options: { sinkCap?: number; clock?: () => number } = {}) {
+  constructor(schema: AgentSchema, options: DynamicAgentOptions) {
     const validation = validateSchema(schema);
     if (!validation.ok) {
       // Throwing here is correct: the registry validates first, so reaching this
@@ -409,8 +438,15 @@ export class DynamicAgent implements DiagnosticAgent {
       // was never valid would silently never fire.
       throw new Error(`cannot build an agent from an invalid schema: ${validation.issues.map((i) => `${i.path} ${i.reason}`).join("; ")}`);
     }
+    const tenant = options.tenant;
+    if (typeof tenant !== "string" || tenant.trim() === "") {
+      // Required, with no default. A default tenant is a global bucket, and every
+      // caller who forgot to pass one would quietly share it.
+      throw new Error("an agent needs a tenant: there is no default, because a default is a shared bucket");
+    }
     this.compiled = compileSchema(validation.schema);
-    this.id = validation.schema.id;
+    this.tenant = tenant;
+    this.id = `${tenant}/${validation.schema.id}`;
     this.title = validation.schema.title;
     this.domain = validation.schema.domain;
     this.version = validation.schema.version;
@@ -532,7 +568,7 @@ export class DynamicAgent implements DiagnosticAgent {
     return {
       agentId: this.id,
       status: "ok",
-      summary: summarise(this.compiled.schema, stats, [...hitsByRule.entries()]),
+      summary: summarise(this.compiled.schema, this.id, stats, [...hitsByRule.entries()]),
       findings: sink.findings,
       stats,
       at: new Date().toISOString(),
@@ -609,7 +645,7 @@ export class DynamicAgent implements DiagnosticAgent {
   }
 
   describe(): AgentDescriptor {
-    return descriptorOf(this);
+    return { ...descriptorOf(this), tenant: this.tenant };
   }
 }
 
@@ -640,10 +676,13 @@ function compare(actual: number, operator: NumericOperator, expected: number): b
  */
 function summarise(
   schema: AgentSchema,
+  agentId: string,
   stats: Record<string, number>,
   hits: readonly (readonly [string, number])[],
 ): string {
-  const head = `schema ${schema.id}@${schema.version} read ${stats.eventsRead} events`
+  // The COMPOSITE id, so a verdict in a log says whose findings these are without
+  // the reader having to look the agent up first.
+  const head = `agent ${agentId}@${schema.version} read ${stats.eventsRead} events`
     + ` (${stats.distinctStreams} stream${stats.distinctStreams === 1 ? "" : "s"})`;
   if (hits.length === 0) {
     return `${head}; none of its ${stats.rulesEvaluated} rule${stats.rulesEvaluated === 1 ? "" : "s"} fired.`;
@@ -682,23 +721,29 @@ export interface RegistryStats {
 }
 
 /**
- * REGISTER, STORE, RETRIEVE.
+ * REGISTER, STORE, RETRIEVE -- ALL SCOPED TO A TENANT.
  *
  * Deliberately in-memory and deliberately bounded, and both facts are load-bearing
  * for a factory rather than a convenience: a customer's schema has to be somewhere
  * it can be fetched by an id an API can hold, and it has to be somewhere that
  * cannot grow until the process dies.
  *
- * REPLACEMENT, NOT SHADOWING: registering a new VERSION of an existing id swaps
- * the active agent and returns the previous one, so a portal can pin the version
- * it was rendered against and a caller can undo. Registering an identical id AND
- * version is a no-op returning the existing agent -- an idempotent deploy is a
- * property worth having, and one that recompiled would be a way to burn CPU on a
- * retry loop.
+ * EVERY METHOD TAKES THE TENANT, and that is the change multi-tenancy forced. Keyed
+ * on a bare id, this registry would let `acme/orders` and `globex/orders` collide,
+ * and the second registration would REPLACE the first -- silently handing one
+ * customer's portal a link to another customer's agent. A per-tenant method
+ * signature makes that unrepresentable at the type level rather than merely
+ * checked at runtime.
+ *
+ * REPLACEMENT, NOT SHADOWING: registering a new VERSION of an existing id within a
+ * tenant swaps the active agent and returns the previous one, so a portal can pin
+ * the version it was rendered against and a caller can undo. Registering an
+ * identical id AND version is a no-op returning the existing agent -- an idempotent
+ * deploy is a property worth having, and one that recompiled would be a way to burn
+ * CPU on a retry loop.
  */
 export class DynamicAgentRegistry {
   private readonly agents = new Map<string, DynamicAgent>();
-  private readonly schemas = new Map<string, AgentSchema>();
   private readonly capacity: number;
   private evaluations = 0;
   private rejections = 0;
@@ -713,10 +758,10 @@ export class DynamicAgentRegistry {
     return this.agents.size;
   }
 
-  /** Register a schema document. Returns the agent and any agent it replaced. */
+  /** Register a schema document for a tenant. Returns the agent and any it replaced. */
   register(
     document: unknown,
-    options: { sinkCap?: number; clock?: () => number } = {},
+    options: DynamicAgentOptions,
   ): { agent: DynamicAgent; replaced?: DynamicAgent } {
     const validation = validateSchema(document);
     if (!validation.ok) {
@@ -724,7 +769,14 @@ export class DynamicAgentRegistry {
       throw new SchemaRejected(validation.issues);
     }
     const schema = validation.schema;
-    const existing = this.agents.get(schema.id);
+    const tenant = options.tenant;
+    if (typeof tenant !== "string" || tenant.trim() === "") {
+      this.rejections += 1;
+      throw new SchemaRejected([{ path: "$.tenant", reason: "a tenant is required; there is no default bucket" }]);
+    }
+    const key = `${tenant}/${schema.id}`;
+
+    const existing = this.agents.get(key);
     if (existing !== undefined && existing.version === schema.version && existing.ruleCount === schema.rules.length) {
       return { agent: existing };
     }
@@ -736,32 +788,48 @@ export class DynamicAgentRegistry {
       }]);
     }
     const agent = new DynamicAgent(schema, options);
-    this.agents.set(schema.id, agent);
-    this.schemas.set(schema.id, schema);
+    this.agents.set(key, agent);
     return { agent, ...(existing === undefined ? {} : { replaced: existing }) };
   }
 
-  get(id: string): DynamicAgent | undefined {
-    return this.agents.get(id);
+  get(tenant: string, id: string): DynamicAgent | undefined {
+    return this.agents.get(`${tenant}/${id}`);
+  }
+
+  /**
+   * Fetch by the COMPOSITE id, for a caller holding only the `agentId` a portal
+   * stored. The composite form is what makes the lookup unambiguous.
+   */
+  getByCompositeId(compositeId: string): DynamicAgent | undefined {
+    return this.agents.get(compositeId);
   }
 
   /** The raw schema, which is what a portal renders and what an export writes. */
-  schemaOf(id: string): AgentSchema | undefined {
-    return this.schemas.get(id);
+  schemaOf(tenant: string, id: string): AgentSchema | undefined {
+    return this.get(tenant, id)?.schema;
   }
 
-  /** The raw schemas. Bounded by `capacity`. */
-  schemas_(): readonly AgentSchema[] {
-    return [...this.schemas.values()];
+  /** Every schema belonging to ONE tenant. Never another tenant's. */
+  schemasFor(tenant: string): readonly AgentSchema[] {
+    return [...this.agents.values()]
+      .filter((agent) => agent.tenant === tenant)
+      .map((agent) => agent.schema);
   }
 
-  ids(): readonly string[] {
-    return [...this.agents.keys()];
+  /** The composite ids a tenant owns. Omit the tenant for every id in the registry. */
+  ids(tenant?: string): readonly string[] {
+    const all = [...this.agents.keys()];
+    return tenant === undefined ? all : all.filter((key) => key.startsWith(`${tenant}/`));
   }
 
-  remove(id: string): boolean {
-    this.schemas.delete(id);
-    return this.agents.delete(id);
+  /** The tenants with at least one schema. */
+  tenants(): readonly string[] {
+    return [...new Set([...this.agents.values()].map((agent) => agent.tenant))];
+  }
+
+  /** Remove within a tenant. Another tenant's identically-named agent is untouched. */
+  remove(tenant: string, id: string): boolean {
+    return this.agents.delete(`${tenant}/${id}`);
   }
 
   /** Record an evaluation, so the service can report whether anything is being used. */
@@ -780,6 +848,13 @@ export class DynamicAgentRegistry {
 
   describeAll(): readonly AgentDescriptor[] {
     return [...this.agents.values()].map((agent) => agent.describe());
+  }
+
+  /** The roster for ONE tenant. What a portal listing shows. */
+  describeFor(tenant: string): readonly AgentDescriptor[] {
+    return [...this.agents.values()]
+      .filter((agent) => agent.tenant === tenant)
+      .map((agent) => agent.describe());
   }
 }
 

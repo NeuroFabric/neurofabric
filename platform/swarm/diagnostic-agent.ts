@@ -168,6 +168,15 @@ export interface AgentDescriptor {
   readonly maturity: AgentMaturity;
   readonly version: string;
   readonly capabilities: readonly string[];
+  /**
+   * The owning tenant, when the agent has one.
+   *
+   * Optional so a hand-written agent -- which belongs to the platform rather than
+   * to a customer -- need not invent one, and published because a roster that
+   * spans tenants and does not say who owns what is a roster nobody can safely
+   * render.
+   */
+  readonly tenant?: string;
 }
 
 export interface DiagnosticAgent {

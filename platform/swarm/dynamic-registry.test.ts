@@ -20,6 +20,9 @@ import {
 } from "./agents/stream-harness.ts";
 import { parseSarifLine, severityFromRiskCode, ZapXmlScanner } from "./agents/sast-dast-parsers.ts";
 
+/** The owning tenant for the registry in these tests. There is no default bucket. */
+const T = "acme";
+
 /**
  * THE FACTORY, AND THE SUBSTRATE UNDER IT.
  *
@@ -177,7 +180,7 @@ test("A `g` FLAG IS REFUSED, BECAUSE A STATEFUL MATCH DEPENDS ON CALL ORDER", ()
 
 test("A THRESHOLD RULE FIRES, AND ITS EVIDENCE CARRIES THE OBSERVED VALUE", async () => {
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema());
+  const { agent } = registry.register(schema(), { tenant: T });
 
   const result = await agent.diagnose({ prompt: "", stream: stream([at({ amount: "5000" }), at({ amount: "10" })]) });
 
@@ -195,7 +198,7 @@ test("A NON-NUMERIC VALUE IS SKIPPED, NOT JUDGED AS ZERO", async () => {
   const registry = new DynamicAgentRegistry();
   const { agent } = registry.register(schema({
     rules: [{ id: "low", kind: "threshold", severity: "critical", message: "m", field: "amount", operator: "<", value: 10 }],
-  }));
+  }), { tenant: T });
 
   const result = await agent.diagnose({ prompt: "", stream: stream([at({ amount: "not-a-number" })]) });
 
@@ -207,7 +210,7 @@ test("A REGEX RULE SCANS EVERY FIELD, SO A SCHEMA NEEDS NO KNOWLEDGE OF THE STRE
   const registry = new DynamicAgentRegistry();
   const { agent } = registry.register(schema({
     rules: [{ id: "probe", kind: "regex", severity: "warning", message: "internal host in a public field", pattern: "10\\.0\\.0\\.\\d+" }],
-  }));
+  }), { tenant: T });
 
   const result = await agent.diagnose({ prompt: "", stream: stream([at({ note: "routed via 10.0.0.7" })]) });
 
@@ -219,7 +222,7 @@ test("A MISSING-FIELD RULE FIRES ON ABSENCE, WHICH IS ITS WHOLE PURPOSE", async 
   const registry = new DynamicAgentRegistry();
   const { agent } = registry.register(schema({
     rules: [{ id: "need-trace", kind: "missing-field", severity: "warning", message: "no trace id", field: "trace_id" }],
-  }));
+  }), { tenant: T });
 
   const result = await agent.diagnose({ prompt: "", stream: stream([at({ amount: "1" }), at({ amount: "2", trace_id: "t" })]) });
 
@@ -234,7 +237,7 @@ test("A SCHEMA THAT DECLARED ITS STREAMS IGNORES EVERYTHING ELSE, AND SAYS HOW M
   // generator, and silently evaluating the wrong stream is worse than not
   // evaluating at all.
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema({ streams: ["orders"] }));
+  const { agent } = registry.register(schema({ streams: ["orders"] }), { tenant: T });
 
   const result = await agent.diagnose({
     prompt: "",
@@ -256,7 +259,7 @@ test("A RATE RULE FIRES ON THE WINDOW, NOT ON ANY SINGLE EVENT", async () => {
   const registry = new DynamicAgentRegistry();
   const { agent } = registry.register(schema({
     rules: [{ id: "burst", kind: "rate", severity: "critical", message: "burst", field: "amount", windowMs: 10_000, rateAbove: 3 }],
-  }), { clock: () => now });
+  }), { tenant: T, clock: () => now });
 
   const events = Array.from({ length: 5 }, () => at({ amount: "1", at: String(now) }));
   now += 1;
@@ -297,7 +300,7 @@ test("A RATE WINDOW FORGETS ONCE A FULL WINDOW HAS PASSED", () => {
 
 test("THE FINDING LIST IS CAPPED, AND THE OMISSION IS COUNTED AND PUBLISHED", async () => {
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema(), { sinkCap: 5 });
+  const { agent } = registry.register(schema(), { tenant: T, sinkCap: 5 });
 
   const events = Array.from({ length: 50 }, () => at({ amount: "99999" }));
   const result = await agent.diagnose({ prompt: "", stream: stream(events) });
@@ -337,7 +340,7 @@ test("A CRITICAL FINDING DISPLACES A RETAINED INFO ONE", async () => {
 test("AN INVALID SCHEMA IS REFUSED WITH ITS ISSUES, NOT A STRING", async () => {
   const registry = new DynamicAgentRegistry();
 
-  assert.throws(() => registry.register({ id: "x" }), (error: unknown) => {
+  assert.throws(() => registry.register({ id: "x" }, { tenant: T }), (error: unknown) => {
     assert.ok(error instanceof SchemaRejected);
     assert.ok(error.issues.length > 0);
     return true;
@@ -348,18 +351,19 @@ test("AN INVALID SCHEMA IS REFUSED WITH ITS ISSUES, NOT A STRING", async () => {
 
 test("A SCHEMA IS STORED AND RETRIEVABLE BY ID, IN BOTH FORMS", () => {
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema());
+  const { agent } = registry.register(schema(), { tenant: T });
 
-  assert.equal(registry.get("orders")?.id, "orders");
-  assert.equal(registry.schemaOf("orders")?.title, "Order anomaly detector");
-  assert.deepEqual(registry.ids(), ["orders"]);
+  assert.equal(registry.get(T, "orders")?.id, "acme/orders", "the id is COMPOSITE: tenant/schemaId");
+  assert.equal(registry.schemaOf(T, "orders")?.title, "Order anomaly detector");
+  assert.deepEqual(registry.ids(T), ["acme/orders"]);
+  assert.deepEqual(registry.ids(), ["acme/orders"]);
   assert.equal(registry.describeAll()[0]?.maturity, "ready");
 });
 
 test("RE-REGISTERING AN IDENTICAL SCHEMA IS A NO-OP, SO A RETRY BURNS NO CPU", () => {
   const registry = new DynamicAgentRegistry();
-  const first = registry.register(schema()).agent;
-  const second = registry.register(schema());
+  const first = registry.register(schema(), { tenant: T }).agent;
+  const second = registry.register(schema(), { tenant: T });
 
   assert.equal(second.agent, first, "the same compiled agent is returned");
   assert.equal(second.replaced, undefined);
@@ -370,38 +374,38 @@ test("A NEW VERSION REPLACES, AND RETURNS WHAT IT REPLACED", () => {
   // A portal may be rendered against one version while another is deployed, so the
   // previous agent must be recoverable rather than merely overwritten.
   const registry = new DynamicAgentRegistry();
-  const first = registry.register(schema()).agent;
-  const second = registry.register(schema({ version: "2.0.0" }));
+  const first = registry.register(schema(), { tenant: T }).agent;
+  const second = registry.register(schema({ version: "2.0.0" }), { tenant: T });
 
   assert.equal(second.replaced, first);
-  assert.equal(registry.get("orders")?.version, "2.0.0");
+  assert.equal(registry.get(T, "orders")?.version, "2.0.0");
   assert.equal(registry.size, 1);
 });
 
 test("THE REGISTRY IS BOUNDED, BECAUSE A FACTORY THAT ACCEPTS UNLIMITED TENANTS IS A LEAK", () => {
   const registry = new DynamicAgentRegistry(2);
-  registry.register(schema({ id: "a" }));
-  registry.register(schema({ id: "b" }));
+  registry.register(schema({ id: "a" }), { tenant: T });
+  registry.register(schema({ id: "b" }), { tenant: T });
 
-  assert.throws(() => registry.register(schema({ id: "c" })), /would be one more/);
+  assert.throws(() => registry.register(schema({ id: "c" }), { tenant: T }), /would be one more/);
   assert.equal(registry.size, 2);
 });
 
 test("A REMOVED SCHEMA IS GONE FROM BOTH STORES", () => {
   const registry = new DynamicAgentRegistry();
-  registry.register(schema());
+  registry.register(schema(), { tenant: T });
 
-  assert.equal(registry.remove("orders"), true);
-  assert.equal(registry.get("orders"), undefined);
-  assert.equal(registry.schemaOf("orders"), undefined);
-  assert.equal(registry.remove("orders"), false);
+  assert.equal(registry.remove(T, "orders"), true);
+  assert.equal(registry.get(T, "orders"), undefined);
+  assert.equal(registry.schemaOf(T, "orders"), undefined);
+  assert.equal(registry.remove(T, "orders"), false);
 });
 
 test("A GENERATED AGENT IS AN ORDINARY DiagnosticAgent, WITH NO SPECIAL CASE ANYWHERE", async () => {
   // The premise of the whole pivot: a customer-authored agent routes, registers and
   // publishes through exactly the same interfaces as a hand-written one.
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema());
+  const { agent } = registry.register(schema(), { tenant: T });
 
   assert.equal(agent.maturity, "ready");
   assert.equal(agent.domain, "anomaly");
@@ -415,7 +419,7 @@ test("SELECTION USES THE SCHEMA'S OWN VOCABULARY, AND AN EMPTY SCOPE MATCHES NOT
     title: "Server Health Agent",
     capabilities: ["watches heap and GC pauses"],
     streams: ["jvm-metrics"],
-  }));
+  }), { tenant: T });
 
   assert.equal(agent.handles("is the server health agent unhappy?"), true);
   assert.equal(agent.handles("check jvm-metrics please"), true);
@@ -433,7 +437,7 @@ test("A CONSTRUCTED AGENT REFUSES AN INVALID SCHEMA RATHER THAN NEVER FIRING", (
 
 test("AN AGENT WITH NO STREAM ANSWERS WITH ZERO EVENTS RATHER THAN A REFUSAL", async () => {
   const registry = new DynamicAgentRegistry();
-  const { agent } = registry.register(schema());
+  const { agent } = registry.register(schema(), { tenant: T });
 
   const result = await agent.diagnose({ prompt: "" });
 
@@ -573,4 +577,111 @@ test("THE ZAP SCANNER EMITS AN ALERT AT ITS CLOSING TAG, NOT AT THE END OF THE D
   assert.equal(found[0]?.severity, "critical");
   assert.equal(found[1]?.severity, "warning");
   assert.equal(scanner.flush(), undefined, "nothing left to flush");
+});
+
+/* ------------------------------------------------------------------ */
+/* TENANCY                                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Two customers, one id.
+ *
+ * This is the whole reason the registry takes a tenant on every method. Keyed on
+ * the bare id, the second registration below would REPLACE the first, and
+ * `acme`'s portal would quietly start rendering `globex`'s agent.
+ */
+
+test("TWO TENANTS MAY BOTH HOLD AN AGENT CALLED orders, AND BOTH SURVIVE", () => {
+  const registry = new DynamicAgentRegistry();
+  registry.register(schema({ id: "orders", title: "Acme orders" }), { tenant: "acme" });
+  registry.register(schema({ id: "orders", title: "Globex orders" }), { tenant: "globex" });
+
+  assert.equal(registry.size, 2);
+  assert.equal(registry.get("acme", "orders")?.title, "Acme orders");
+  assert.equal(registry.get("globex", "orders")?.title, "Globex orders");
+});
+
+test("THE COMPOSITE ID MAKES A CROSS-TENANT LOOKUP IMPOSSIBLE TO EXPRESS BY MISTAKE", () => {
+  const registry = new DynamicAgentRegistry();
+  registry.register(schema({ id: "orders" }), { tenant: "acme" });
+
+  // The bare id no longer resolves to anything, so a call site that forgot the
+  // tenant gets `undefined` rather than somebody else's agent.
+  assert.equal(registry.getByCompositeId("orders"), undefined);
+  assert.equal(registry.getByCompositeId("acme/orders")?.id, "acme/orders");
+});
+
+test("A LISTING IS SCOPED TO ONE TENANT", () => {
+  const registry = new DynamicAgentRegistry();
+  registry.register(schema({ id: "orders" }), { tenant: "acme" });
+  registry.register(schema({ id: "ledger" }), { tenant: "acme" });
+  registry.register(schema({ id: "orders" }), { tenant: "globex" });
+
+  assert.deepEqual(registry.ids("acme").sort(), ["acme/ledger", "acme/orders"]);
+  assert.deepEqual(registry.ids("globex"), ["globex/orders"]);
+  assert.deepEqual(registry.describeFor("acme").map((d) => d.id).sort(), ["acme/ledger", "acme/orders"]);
+  assert.deepEqual(registry.schemasFor("globex").map((s) => s.id), ["orders"]);
+  assert.deepEqual(registry.tenants().sort(), ["acme", "globex"]);
+});
+
+test("DELETING ONE TENANT'S AGENT LEAVES THE OTHER TENANT'S IDENTICALLY NAMED ONE", () => {
+  const registry = new DynamicAgentRegistry();
+  registry.register(schema({ id: "orders" }), { tenant: "acme" });
+  registry.register(schema({ id: "orders" }), { tenant: "globex" });
+
+  assert.equal(registry.remove("acme", "orders"), true);
+
+  assert.equal(registry.get("acme", "orders"), undefined);
+  assert.equal(registry.get("globex", "orders")?.id, "globex/orders", "the wrong tenant's agent survived");
+});
+
+test("AN UPGRADE IN ONE TENANT DOES NOT UPGRADE THE OTHER'S", () => {
+  const registry = new DynamicAgentRegistry();
+  registry.register(schema({ id: "orders", version: "1.0.0" }), { tenant: "acme" });
+  registry.register(schema({ id: "orders", version: "1.0.0" }), { tenant: "globex" });
+
+  const replaced = registry.register(schema({ id: "orders", version: "2.0.0" }), { tenant: "acme" });
+
+  assert.equal(replaced.replaced?.version, "1.0.0");
+  assert.equal(registry.get("acme", "orders")?.version, "2.0.0");
+  assert.equal(registry.get("globex", "orders")?.version, "1.0.0");
+});
+
+test("AN AGENT WITHOUT A TENANT IS REFUSED, BECAUSE A DEFAULT IS A SHARED BUCKET", () => {
+  assert.throws(
+    () => new DynamicAgent({
+      id: "x", title: "t", domain: "anomaly", version: "1", capabilities: [], streams: [],
+      rules: [{ id: "r", kind: "missing-field", severity: "info", message: "m", field: "f" }],
+    }, { tenant: "" }),
+    /no default/,
+  );
+});
+
+test("A REGISTRATION WITH A BLANK TENANT IS REFUSED WITH AN ISSUE, NOT A DEFAULT", () => {
+  const registry = new DynamicAgentRegistry();
+
+  assert.throws(
+    () => registry.register(schema({ id: "x" }), { tenant: "  " }),
+    (error: unknown) => {
+      assert.ok(error instanceof SchemaRejected);
+      assert.ok(error.issues.some((issue) => issue.path === "$.tenant"));
+      return true;
+    },
+  );
+  assert.equal(registry.size, 0);
+});
+
+test("THE VERDICT SAYS WHOSE FINDINGS THESE ARE", async () => {
+  // A summary of "orders@1.0.0" in a shared log tells a reader nothing about whose
+  // data it describes.
+  const registry = new DynamicAgentRegistry();
+  const { agent } = registry.register(schema({ id: "orders" }), { tenant: "acme" });
+
+  const result = await agent.diagnose({
+    prompt: "",
+    stream: (async function* () { yield { partition: "orders", fields: { amount: "5000" } }; })(),
+  });
+
+  assert.match(result.summary, /agent acme\/orders@1\.0\.0/);
+  assert.equal(result.agentId, "acme/orders");
 });
