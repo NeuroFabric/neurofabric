@@ -4,8 +4,8 @@ import {
   outliersFromSorted,
   percentileSorted,
   streamCsvRecordsSync,
-  MAX_DURATIONS as MAX_DURATIONS_PER_KEY,
-  MAX_LOGGERS as MAX_LOGGERS_PER_KEY,
+  HourlyCounter,
+  KeyedAggregator,
   type FenceSummary,
   type StreamColumnSnapshot,
 } from "./stream-profile.ts";
@@ -210,6 +210,12 @@ export interface RankingScope {
   readonly droppedCategoryKeys: number;
   /** The key budget, so the report can state the limit it enforced. */
   readonly categoryKeyBudget: number;
+  /** Sources evicted from `bySource`. Zero for any file with a normal fleet. */
+  readonly droppedSourceKeys: number;
+  readonly sourceKeyBudget: number;
+  /** Error signatures evicted from `recurring`. */
+  readonly droppedSignatureKeys: number;
+  readonly signatureKeyBudget: number;
 }
 
 export interface BottleneckAnalysis {
@@ -470,30 +476,56 @@ function isError(status: string): boolean {
 }
 
 /**
- * A RANKED GROUP OF ROWS: the entries behind a ranking.
+ * THE BOUND ON DISTINCT CATEGORY KEYS.
  *
- * `count` is carried EXPLICITLY rather than being `rows.length`, and that is the
- * change that made a whole-file ranking possible. Citations are now a SAMPLE --
- * capped per key -- because a category with 400,000 rows used to hold 400,000
- * line numbers, so the array that existed to help a reader jump to a row was the
- * thing preventing the product from ranking 400,000 rows at all.
+ * An aggregator grows with the number of DISTINCT VALUES, so a `category` column
+ * holding a million different strings would hold a million entries -- the memory
+ * wall again wearing a different hat.
  *
- * So: `count` is a measurement over every row, `rows` is a convenience of bounded
- * size, and neither is derived from the other.
+ * 256 is not a tight budget, it is a generous one: it is exact for every real
+ * categorical column this product meets (`alertType`, `channel`, `region`,
+ * `status` -- dozens, not hundreds). Past it the rarest key is evicted and the
+ * analysis records that it did, because a ranking that quietly omits a key is
+ * the silent-partial-answer bug this codebase has paid for twice.
  */
-interface RankedGroup {
-  error: number;
-  rows: number[];
-  count: number;
-}
+const MAX_CATEGORY_KEYS = 256;
 
-function rank(entries: Map<string, RankedGroup>): Bottleneck[] {
-  return [...entries.entries()]
-    .map(([key, v]) => ({
-      key,
+/**
+ * THE BOUND FOR ERROR SIGNATURES.
+ *
+ * `recurring` counts distinct error messages. A file with a thousand of them is
+ * already unusual, and this ranking is about which messages recur -- so a tight
+ * budget costs little, and the eviction count is published.
+ */
+const MAX_SIGNATURE_KEYS = 256;
+
+/**
+ * THE BOUND FOR SOURCES, and it is deliberately LOOSER than the categories'.
+ *
+ * `bySource` is the ranking most likely to meet genuinely high cardinality: a
+ * fleet of a thousand hosts produces a thousand distinct values, every one of
+ * which is a real source a user may want to see. `reader-shape.test.ts` asserts
+ * that a 400-row file with 400 distinct sources ranks ALL 400 -- a deliberate
+ * property, written after an earlier release ranked only the sample.
+ *
+ * So sources get 4096 keys, and a tighter citation budget to pay for it. The
+ * memory is 4096 x 50 line numbers rather than 4096 x 200, which is the trade
+ * that keeps a fleet-sized file affordable while a 400-host file stays complete.
+ */
+const MAX_SOURCE_KEYS = 4096;
+
+/** Citations kept per source. Lower than elsewhere: the ranking needs counts, not a trail. */
+const MAX_SOURCE_CITATIONS = 50;
+
+function rank(
+  entries: readonly { key: string; count: number; errors: number; rows: readonly number[] }[],
+): Bottleneck[] {
+  return entries
+    .map((v) => ({
+      key: v.key,
       count: v.count,
-      errorCount: v.error,
-      errorRate: v.count === 0 ? 0 : v.error / v.count,
+      errorCount: v.errors,
+      errorRate: v.count === 0 ? 0 : v.errors / v.count,
       rows: [...v.rows].sort((a, b) => a - b),
     }))
     .sort((a, b) => b.errorCount - a.errorCount || b.errorRate - a.errorRate || a.key.localeCompare(b.key));
@@ -544,16 +576,8 @@ function durationStats(samples: readonly number[]): { mean: number | null; media
   return { mean, median, p95: sorted[rank - 1] };
 }
 
-/** Line citations kept per key. The COUNT beside them is exact; these are a sample. */
+/** Line citations kept for the small per-row lists that are not rankings. */
 const MAX_CITATIONS = 200;
-
-function bucket(map: Map<string, RankedGroup>, key: string, error: boolean, row: number): void {
-  const entry = map.get(key) ?? { error: 0, rows: [], count: 0 };
-  if (error) entry.error += 1;
-  entry.count += 1;
-  if (entry.rows.length < MAX_CITATIONS) entry.rows.push(row);
-  map.set(key, entry);
-}
 
 /** Turn a parsed CSV into the ranked bottleneck view. Never throws. */
 /**
@@ -1057,24 +1081,24 @@ const SPIKE_MULTIPLE = 2;
  * report says the window was too short to judge, because a table that simply
  * omits a column reads as "nothing to see here".
  */
-function hourlyProfile(hours: Map<string, RankedGroup>): HourlyProfile {
-  const entries = [...hours.entries()].sort(([a], [b]) => a.localeCompare(b));
-  // THE COUNT, not the citations. See `RankedGroup`: a timeline that summed its
-  // citation arrays would report the busiest hour as 200 and every other hour as
-  // fewer, which is a chart of the sampling policy rather than of the file.
-  const counts = entries.map(([, v]) => v.count);
+function hourlyProfile(hours: HourlyCounter): HourlyProfile {
+  const entries = hours.entries().sort((a, b) => a.hour.localeCompare(b.hour));
+  // THE COUNT, not the citations. A timeline that summed its citation arrays
+  // would report the busiest hour as 200 and every other hour as fewer, which is
+  // a chart of the sampling policy rather than of the file.
+  const counts = entries.map((e) => e.count);
   const countedRows = counts.reduce((s, n) => s + n, 0);
   const buckets = counts.length;
   const meanPerHour = buckets === 0 ? 0 : countedRows / buckets;
   const variance = buckets === 0 ? 0 : counts.reduce((s, n) => s + (n - meanPerHour) ** 2, 0) / buckets;
   const insufficient = buckets < MIN_HOUR_BUCKETS;
 
-  const hours2 = entries.map(([key, v]): HourStat => {
-    const count = v.count;
+  const hours2 = entries.map((entry): HourStat => {
+    const count = entry.count;
     const multiple = meanPerHour > 0 ? count / meanPerHour : null;
     const isSpike = !insufficient && multiple !== null && multiple > SPIKE_MULTIPLE;
     return {
-      key,
+      key: entry.hour,
       count,
       share: countedRows === 0 ? 0 : count / countedRows,
       multiple,
@@ -1115,9 +1139,9 @@ export function analyseBottlenecks(
   const thresholdCol = chosen.threshold;
   const aliasCol = chosen.alias;
 
-  const sources = new Map<string, RankedGroup>();
-  const signatures = new Map<string, RankedGroup>();
-  const hours = new Map<string, RankedGroup>();
+  const sourceKeys = new KeyedAggregator({ capacity: MAX_SOURCE_KEYS, citations: MAX_SOURCE_CITATIONS });
+  const signatureKeys = new KeyedAggregator({ capacity: MAX_SIGNATURE_KEYS });
+  const hourCounts = new HourlyCounter();
   const unreadable: number[] = [];
   const bands: { limit: number; label: string; rows: number[]; count: number }[] = [
     { limit: 50, label: "<50ms", rows: [], count: 0 },
@@ -1128,36 +1152,7 @@ export function analyseBottlenecks(
 
   let errorRows = 0;
 
-  const categories = new Map<string, { count: number; elapsed: number | null; breach: number; rows: number[]; loggers: Set<string>; durations: number[] }>();
-
-  /**
-   * HOW MANY DISTINCT CATEGORY KEYS ARE TRACKED.
-   *
-   * The rankings are Maps, and a Map grows with the number of DISTINCT VALUES --
-   * so a `category` column holding a million different strings would hold a
-   * million entries, which is the memory wall again wearing a different hat.
-   *
-   * 256 is not a tight budget, it is a generous one: it is exact for every real
-   * categorical column this product meets (`alertType`, `channel`, `region`,
-   * `status` -- dozens, not hundreds). Past it the rarest key is dropped and the
-   * analysis records that it did, because a ranking that quietly omits a key is
-   * the silent-partial-answer bug this codebase has paid for twice.
-   */
-  const MAX_CATEGORY_KEYS = 256;
-  let droppedCategoryKeys = 0;
-  const boundCategories = (): void => {
-    if (categories.size <= MAX_CATEGORY_KEYS) return;
-    let smallestKey = "";
-    let smallest = Number.POSITIVE_INFINITY;
-    for (const [key, value] of categories) {
-      if (value.count < smallest) {
-        smallest = value.count;
-        smallestKey = key;
-      }
-    }
-    categories.delete(smallestKey);
-    droppedCategoryKeys += 1;
-  };
+  const categoryKeys = new KeyedAggregator({ capacity: MAX_CATEGORY_KEYS });
 
   let naiveTimestamps = 0;
   let timestampRows = 0;
@@ -1187,11 +1182,11 @@ export function analyseBottlenecks(
     const error = statusCol === undefined ? false : isError(status);
     if (error) errorRows += 1;
 
-    if (sourceCol !== undefined) bucket(sources, get(sourceCol) || "(none)", error, rowNumber);
+    if (sourceCol !== undefined) sourceKeys.add(get(sourceCol) || "(none)", { row: rowNumber, isError: error });
 
     if (rawCol !== undefined && error) {
       const signature = errorSignature(get(rawCol));
-      if (signature !== undefined) bucket(signatures, signature, true, rowNumber);
+      if (signature !== undefined) signatureKeys.add(signature, { row: rowNumber, isError: true });
     }
 
     if (timeCol !== undefined) {
@@ -1203,7 +1198,7 @@ export function analyseBottlenecks(
         if (unreadable.length < MAX_CITATIONS) unreadable.push(rowNumber);
       } else {
         const hour = new Date(instant).toISOString().slice(0, 13);
-        bucket(hours, hour, error, rowNumber);
+        hourCounts.add(hour, error, rowNumber);
       }
     }
 
@@ -1225,40 +1220,27 @@ export function analyseBottlenecks(
     // question asks for both.
     if (categoryCol !== undefined) {
       const key = get(categoryCol) || "(none)";
-      const entry = categories.get(key) ?? { count: 0, elapsed: latencyCol === undefined ? null : 0, breach: 0, rows: [], loggers: new Set<string>(), durations: [] };
       // A BLANK IS NOT A ZERO. `Number("")` is 0 and `Number(" ")` is 0, so the
       // obvious parse silently invents a measurement: a row with no duration was
       // being counted as a row that took 0 ms, which drags the mean down and
       // quietly asserts the work was free. An unparseable cell is therefore NOT
-      // MEASURED, and it is excluded from the total and from all three measures
-      // alike -- one branch, so the four can never disagree about the sample.
+      // MEASURED, and the aggregator ignores it -- one decision, so the total and
+      // the three measures can never disagree about which rows were measured.
       const raw = latencyCol === undefined ? "" : get(latencyCol).trim();
       const rawDuration = raw.length === 0 ? Number.NaN : Number(raw);
-      // One branch, so the total and the three measures can never disagree about
-      // which rows were measured. A blank or non-numeric duration is skipped
-      // entirely rather than folded in as a zero.
-      if (entry.elapsed !== null && Number.isFinite(rawDuration)) {
-        entry.elapsed += rawDuration;
-        // DURATIONS ARE SAMPLED, the total is not. The mean and the median are
-        // computed from a bounded window so a category with 400,000 rows cannot
-        // hold 400,000 numbers, while `elapsed` stays exact over every row.
-        if (entry.durations.length < MAX_DURATIONS_PER_KEY) entry.durations.push(rawDuration);
-      }
-      if (thresholdCol !== undefined && Number.isFinite(rawDuration)
-        && Number(get(thresholdCol)) < rawDuration) {
-        entry.breach += 1;
-      }
-      entry.count += 1;
-      if (entry.rows.length < MAX_CITATIONS) entry.rows.push(rowNumber);
-      if (aliasCol !== undefined) {
-        const logger = get(aliasCol).trim();
-        if (logger.length > 0 && entry.loggers.size < MAX_LOGGERS_PER_KEY) entry.loggers.add(logger);
-      }
-      categories.set(key, entry);
+      const breached = thresholdCol !== undefined && Number.isFinite(rawDuration)
+        && Number(get(thresholdCol)) < rawDuration;
+      // ONE CALL. The aggregator owns the count, the elapsed total, the bounded
+      // duration window, the bounded citations and the bounded alias set, and owns
+      // the key budget with Space-Saving eviction -- so the loop below states what
+      // a row IS and the data structure decides how much of it is kept.
+      categoryKeys.add(key, {
+        row: rowNumber,
+        duration: Number.isFinite(rawDuration) ? rawDuration : null,
+        breach: breached,
+        logger: aliasCol === undefined ? null : get(aliasCol).trim(),
+      });
     }
-    // The distinct-key budget, enforced per row rather than in a final sweep, so
-    // the Map never exceeds its cap even transiently.
-    boundCategories();
   };
 
   // === THE TWO DRIVERS, AND WHY THE SECOND ONE EXISTS ===
@@ -1311,25 +1293,28 @@ export function analyseBottlenecks(
   // labelling the majority of its rows with it would be wrong for them.
   const aliasOf = new Map<string, string>();
   const ambiguousAliases: string[] = [];
-  for (const [key, v] of categories) {
-    if (v.loggers.size !== 1) continue;
-    const logger = [...v.loggers][0];
-    const sharedWith = [...categories.entries()].filter(([, o]) => o.loggers.has(logger));
-    if (sharedWith.length === 1) aliasOf.set(key, logger);
+  for (const entry of categoryKeys.entries()) {
+    if (entry.loggers.length !== 1) continue;
+    const logger = entry.loggers[0]!;
+    const sharedWith = categoryKeys.entries().filter((other) => other.loggers.includes(logger));
+    if (sharedWith.length === 1) aliasOf.set(entry.key, logger);
     else ambiguousAliases.push(logger);
   }
 
-  const categoryStats: CategoryStat[] = [...categories.entries()].map(([key, v]) => {
+  const categoryStats: CategoryStat[] = categoryKeys.entries().map((v) => {
     const stats = durationStats(v.durations);
     return {
-      key,
-      label: categoryLabel(key, aliasOf.get(key)),
+      key: v.key,
+      label: categoryLabel(v.key, aliasOf.get(v.key)),
       count: v.count,
-      totalElapsed: v.elapsed,
+      // Null, not zero, when the file states no duration at all -- the report
+      // distinguishes "no timing data" from "took no time", and zero would claim
+      // the second.
+      totalElapsed: latencyCol === undefined ? null : v.sum,
       meanElapsed: stats.mean,
       medianElapsed: stats.median,
       p95Elapsed: stats.p95,
-      breachCount: v.breach,
+      breachCount: v.breaches,
       rows: [...v.rows].sort((a, b) => a - b),
     };
   });
@@ -1368,9 +1353,13 @@ export function analyseBottlenecks(
     rowsRanked: total,
     fileRows: csv.profile?.rowCount ?? csv.rows.length,
     viaStreamingPass: !windowIsWholeFile,
-    categoryKeysTracked: categories.size,
-    droppedCategoryKeys,
+    categoryKeysTracked: categoryKeys.size,
+    droppedCategoryKeys: categoryKeys.evictions,
     categoryKeyBudget: MAX_CATEGORY_KEYS,
+    droppedSourceKeys: sourceKeys.evictions,
+    sourceKeyBudget: MAX_SOURCE_KEYS,
+    droppedSignatureKeys: signatureKeys.evictions,
+    signatureKeyBudget: MAX_SIGNATURE_KEYS,
   };
   // PEGA VOCABULARY IS EARNED, NEVER DEFAULTED. "Alert" and "threshold" appear
   // only when a mapping a PERSON checked is actually being applied. Three states
@@ -1418,11 +1407,13 @@ export function analyseBottlenecks(
     purpose: describePurpose({ headers: csv.headers, rows: csv.rows }),
     errorRows,
     errorRate: total === 0 ? 0 : errorRows / total,
-    bySource: rank(sources),
+    bySource: rank(sourceKeys.entries()),
     rankingScope,
-    recurring: rank(signatures),
-    byHour: rank(hours),
-    hourly: hourlyProfile(hours),
+    recurring: rank(signatureKeys.entries()),
+    byHour: rank(hourCounts.entries().map((e) => ({
+      key: e.hour, count: e.count, errors: e.errors, rows: e.rows,
+    }))),
+    hourly: hourlyProfile(hourCounts),
     numerical: numeric.numerical,
     health: numeric.health,
     latency: bands.filter((b) => b.count > 0).map((b) => ({ label: b.label, count: b.count, rows: b.rows })),

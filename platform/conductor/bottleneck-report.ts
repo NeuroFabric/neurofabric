@@ -594,6 +594,17 @@ export function toBottleneckMarkdown(analysis: BottleneckAnalysis, title = "Anal
       `> **${scope.droppedCategoryKeys} category key(s) were dropped** from the ranking, which tracks the ${scope.categoryKeyBudget} most frequent of ${scope.categoryKeysTracked + scope.droppedCategoryKeys} seen. The ranking below is a ranking of the most frequent categories, not of all of them.`,
     );
   }
+  for (const [label, dropped, budget] of [
+    ["source", scope.droppedSourceKeys, scope.sourceKeyBudget],
+    ["error signature", scope.droppedSignatureKeys, scope.signatureKeyBudget],
+  ] as const) {
+    if (dropped > 0) {
+      provenance.push(
+        `> [!WARNING]`,
+        `> **${dropped} ${label}(s) were dropped** from this ranking, which tracks at most ${budget} distinct keys.`,
+      );
+    }
+  }
   if (scope.viaStreamingPass) {
     // NOT a warning. Both routes rank every row, and a note that implied
     // otherwise would teach the reader to distrust correct numbers. It is here
