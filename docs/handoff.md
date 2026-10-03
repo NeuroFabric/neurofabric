@@ -1,5 +1,59 @@
 # Agent Harness Handoff Document
 
+## Governance
+
+Forged 2026-10-03. Three roles, three separate authorities. The split exists so
+that no single party can sponsor, decide, and self-certify the same change — and
+so that "who does it" is answerable without reading a chat log.
+
+### Roles
+
+| Role | Owns | Does NOT own |
+|---|---|---|
+| **CEO agent** (this assistant) | The backlog. MR sequencing. Decision records. Honest reporting. Everything required to get a change to a merge-ready state. | Merging. Credential files. Approvals. Sponsorship. |
+| **Operator** (sponsor) | Merges. Credential files. Approvals. Which task runs next. | Implementation detail. Writing the code. |
+| **Advisor** | Strategy. Scope. What is worth building next. | Execution. Sequencing of individual MRs. |
+
+### What the CEO agent is answerable for
+
+- **The backlog** is real and ordered. A queue is not a list of ideas.
+- **One task, one branch.** Never two tasks stacked on one branch. The !77/!78
+  split is the lesson: a second change landed on a branch whose MR had already
+  merged, so the two became inseparable and the second had to be re-scoped into a
+  new MR.
+- **Decision records precede architectural moves.** D-034 before any LLM code, and
+  by the same rule a decision record before any architectural change. A decision
+  discovered halfway through an implementation is a decision nobody reviewed.
+- **Both gates green before push**, with exact counts recorded in the MR. Not
+  "passing" — counts, so a reader can check them rather than trust them.
+- **Reporting states what is true, what is unfinished, and what is blocked, and
+  whose hands it needs.** A report that only lists successes is a report nobody
+  can plan from.
+- **Never idle.** While an MR awaits operator merge, the next task starts on a
+  branch cut from `main`.
+
+### What the operator holds
+
+Merging, credential files, and approvals. Three things, deliberately not
+delegated to an agent that can also write the code.
+
+### The credential-file guard is a feature, not a limitation
+
+This repository's policy guard **refuses any write or command that names a
+credential file** — `.env`, `.env.local`, `.env.example` — for every agent,
+including one with full write access. During !78 the agent attempted to create
+`frontend/.env.local` and was denied by both the write tool and the shell.
+
+**That denial is the control, and it is load-bearing.** No agent in this
+repository can put a credential into a file it is also responsible for keeping out
+of version control. A convention would not survive a distracted session; a guard
+that refuses the operation does. The agent's correct response is to document the
+manual step and hand it to the operator — which is what `frontend/README.md` now
+does.
+
+Recorded so a future session does not "fix" the denial by improvising a path
+around it. **Never hazard commands. Never route around a policy denial.**
+
 ## Agent operating rules
 
 Forged 2026-09-26 from three session deaths in one day (F-006, F-007, F-008). Mandatory for every agent session in this repo:
@@ -346,7 +400,106 @@ squash SHA on `main`; anything else is *authorized*, *awaiting*, *not started*,
 *dropped*, or an *open flag*. **Drafted is not recorded, and recorded is not
 merged.**
 
-### Active queue — M2
+### Command Center auth — RECORDED (MR !78)
+
+**Squash SHA on `main`: `0573ea02f74cc0b97fc192dc8913f880033d997b`** (merge
+commit; content commit `51b4038`). Merged 2026-10-03T15:53:29Z. Fetched with
+`glab api .../merge_requests/78` and confirmed present on `origin/main`.
+
+**The defect.** A refused gateway credential produced 62 identical errors in 31
+seconds and left a degraded dashboard whose live panel could only say
+"unreachable". Three distinct causes behind one symptom: a fixed-interval poller
+that ignored what the last poll returned; two different 401s collapsed into one
+`kind`; and a typed credential correction silently discarded by
+environment-first precedence.
+
+**Why the classification mattered.** The refusal reason is the whole diagnosis:
+`no credential presented` means nothing arrived, and `the credential presented is
+not recognised` means something arrived and it was wrong. Only the second is fixed
+by a person typing. `GatewayError` now carries the edge's `code` and `reason`
+(redacted, and in `toJSON()`); the edge's nested `{status, failure:{code, reason}}`
+and the flattened form an operator sees in a browser network panel are BOTH read,
+nested first.
+
+**Six portal routes, through the dev proxy at 5173, all 200 with the credential
+and 401 without:**
+
+| Route | Verdict | Body shape |
+|---|---|---|
+| `GET /api/portal/config` | `200` / `401` | derived-portal envelope |
+| `GET /api/portal/agents` | `200` | roster, `total: 1` |
+| `GET /api/portal/live` | `200` | `LiveSnapshot` with a verdict |
+| `GET /api/portal/schema/:id` | `200` | `{"schema":{…}}` |
+| `POST /api/portal/schema` | `200` | install result |
+| `POST /api/portal/ingest` | `200` | `{"accepted":200,"refused":0,"provider":"pega"}` |
+
+**Verdict body, after a flood ingest:**
+
+```
+GET /api/portal/live
+records 262   breachedColumns 2   open true   synthetic false
+throughput {"records":262,"delta":200,"windowMs":15149,"eventsPerSecond":13}
+  elapsed_time  max 50000  outerFence 4500  breached true
+  queue_depth   max 900    outerFence 2     breached true
+```
+
+A first throughput sample of `null` is by design — a rate needs two instants.
+
+**Gates at push time.** Root `npm test`: 1480 tests / 1478 pass / 0 fail / 2
+skipped (`test:mjs` 22/22, `test:ts` 1456 pass, typecheck clean). Frontend
+`tsc --noEmit` clean; frontend `vitest run` 251 tests / 245 pass / 6 skipped / 0
+fail across 12 files; the opt-in live suite 7/7 green across four consecutive runs
+against a running wedge.
+
+**!77 shipped a RED SUITE, and this is the correction.** The root gate was already
+failing when !78 opened, from a defect !78 did not introduce:
+`platform/swarm/e2e-dynamic-platform.test.ts` asserted
+`routes.routes.length === 4`, stale since the two live routes landed in `9be7b6c`.
+It now asserts the route LIST, so it fails on an addition or a removal rather than
+on a stale count. **Why this matters more than the one-line fix:** !77's own
+description reported "1461 pass, 0 fail", a figure that counted this assertion as
+passing while it was failing. The count was never re-measured against a red run.
+This project has no CI runner — `frontend/README.md` says so in detail — so a
+suite that fails for a day reports itself as green. **When the operator enables
+runners, triage the first pipeline run as priority work; a never-run pipeline's
+first failure is expected, and each fix converts an enterprise claim into
+evidence.**
+
+### Operator session note — first end-to-end live proof (verbatim, 2026-10-03)
+
+> Flood: `--token=demo-gw-value --url=http://127.0.0.1:8080` (equals form required;
+> port override required due to drift bug 1d). MEASURED: 20,000 accepted, 0 refused,
+> 0 failed, 37,313 events/sec, elapsed 0.54s. UI at 5173 populated from idle: records
+> in snapshot 20,000; columns 2 — `elapsed_time` BREACHED in every partition (outer
+> fence -1,170..2,512), `threshold` within fence (-1,339..-3,834); top keys checkout
+> 3,387, claims 3,383, dispatch 3,360, onboarding 3,315, returns 3,303, payments
+> 3,252; ALERTS: CRITICAL — 1 column past the outer fence, `elapsed_time` in every
+> partition. Console: 51x GET /api/portal/live, all 200, zero errors. NOTE:
+> throughput showed 0 events/sec after the flood completed while records held at
+> 20,000 — this is correct count-vs-rate behavior, not a defect. Do not "fix" it; it
+> is the house rule rendering itself.
+
+**Session tally: four bootstrap-path failures, zero engine failures.**
+
+Two items in that note are load-bearing for the next task and are recorded here so
+they are not rediscovered:
+
+- **`--token=<value>` is the only form accepted.** The space form `--token <value>`
+  silently fails to bind, and the guard then fires on the value. Recorded in the
+  operator note as "equals form required".
+- **The port override was required because of drift bug 1d** —
+  `generate-synthetic-data.ts` still defaults `--url` to
+  `http://127.0.0.1:3000`, which the !77 3000->8080 migration missed. It swept
+  the README, `vite.config.ts` and `start-ui.mjs` and not the flood generator, so
+  the flood refused with "fetch failed" against a dead port **while the wedge ran
+  healthy on 8080**.
+
+**Do not "fix" the 0 events/sec reading.** It is the count-versus-rate house rule
+rendering itself: `records` is a count held at 20,000, and a rate is zero once no
+new records arrive in the window. A change that made the rate agree with the count
+would be making a measurement agree with a number it was never derived from.
+
+### Active queue — current
 
 M2 opened from `e9c3064`, the last merge of cycle 1.
 
