@@ -1,4 +1,5 @@
 import type { OmniRouteEvent, OmniRouteGateway, ProviderBinding } from "../omniroute-gateway.ts";
+import { ConsumerGroup, type BrokerAddress } from "./kafka-consumer.ts";
 
 /**
  * THE KAFKA PROVIDER: the first official Omniroute adapter.
@@ -51,6 +52,22 @@ export interface KafkaBinding extends ProviderBinding {
   readonly timeColumn?: string;
   /** Decode the payload as JSON. On by default; off for binary bodies. */
   readonly json?: boolean;
+  /**
+   * THE BROKERS, when this adapter is to connect to a real cluster.
+   *
+   * Omitted means the adapter stays in RECORD-MODE: it consumes an async iterable
+   * of already-decoded messages and never opens a socket. Both modes exist because
+   * a record-mode adapter is how the translation is tested without a cluster, and
+   * a cluster is not something a unit test should require.
+   */
+  readonly brokers?: readonly BrokerAddress[];
+  readonly groupId?: string;
+  readonly clientId?: string;
+  /** Poll, join and exit on each cycle. Overrides `consume`. */
+  readonly loop?: boolean;
+  readonly pollIntervalMs?: number;
+  /** Bound each cycle. Undefined runs until the gateway is closed. */
+  readonly maxCycles?: number;
 }
 
 /** How one record was turned into an event, for operators reading the logs. */
@@ -66,8 +83,21 @@ export interface KafkaProvider {
   readonly binding: KafkaBinding;
   /** Translate one message. Returns undefined when it cannot be decoded. */
   decode(message: KafkaMessage): OmniRouteEvent | undefined;
+  /** Translate a record off the wire. Same rules, fewer assumptions. */
+  decodeFetched(record: { key: Buffer | string | null; value: Buffer | string | null; timestamp?: number }): OmniRouteEvent | undefined;
   /** Consume a client-library stream until it ends or the caller stops. */
   consume(source: AsyncIterable<KafkaMessage>): Promise<{ decoded: number; skipped: DecodeFailure[] }>;
+  /**
+   * Connect to a real cluster, join the group, and poll.
+   *
+   * The group is what makes partition ownership correct: one member per partition,
+   * with the leader computing contiguous ranges so two instances cannot end up
+   * reading the same partition. See `rangeAssignment`, which is the piece most
+   * worth reading before changing anything here.
+   */
+  connect(): Promise<{ partitions: number; cycles: number; decoded: number; skipped: DecodeFailure[] }>;
+  /** Partitions this adapter currently owns. Empty in record mode. */
+  readonly assignedPartitions: readonly { topic: string; partition: number }[];
   /** Records that could not be decoded, for an operator rather than a throw. */
   readonly failures: readonly DecodeFailure[];
 }
@@ -104,6 +134,7 @@ function flatten(payload: Record<string, unknown>, prefix = ""): Record<string, 
 
 export function createKafkaProvider(binding: KafkaBinding, gateway: OmniRouteGateway): KafkaProvider {
   const failures: DecodeFailure[] = [];
+  let assignedPartitions: { topic: string; partition: number }[] = [];
   // ONE PROVIDER PER TOPIC-PARTITION. The topic is part of the name so an operator
   // reading an alert knows which topic spoke, and the partition keeps the counters
   // separate rather than merging unrelated series into one ranking.
@@ -158,10 +189,21 @@ export function createKafkaProvider(binding: KafkaBinding, gateway: OmniRouteGat
     };
   };
 
+  const decodeFetched = (record: { key: Buffer | string | null; value: Buffer | string | null; timestamp?: number }): OmniRouteEvent | undefined =>
+    decode({
+      topic: binding.topic,
+      partition: -1,
+      offset: 0,
+      key: record.key,
+      value: record.value,
+      ...(record.timestamp === undefined ? {} : { timestamp: record.timestamp }),
+    });
+
   return {
     binding,
     decode,
     failures,
+    assignedPartitions,
     async consume(source) {
       let decoded = 0;
       for await (const message of source) {
@@ -172,6 +214,41 @@ export function createKafkaProvider(binding: KafkaBinding, gateway: OmniRouteGat
       }
       gateway.closePushes(name);
       return { decoded, skipped: [...failures] };
+    },
+    decodeFetched,
+    async connect() {
+      const brokers = binding.brokers;
+      if (brokers === undefined) {
+        throw new Error("kafka: connect() needs brokers; omit them to stay in record mode");
+      }
+      const group = new ConsumerGroup({
+        brokers,
+        topic: binding.topic,
+        groupId: binding.groupId ?? `omniroute-${binding.name}`,
+        clientId: binding.clientId ?? "omniroute",
+        onAssignment: (partitions) => { assignedPartitions = partitions; },
+      });
+      try {
+        await group.join(brokers);
+        let cycles = 0;
+        let decoded = 0;
+        for (;;) {
+          cycles += 1;
+          const records = await group.poll(brokers);
+          for (const record of records) {
+            const event = decodeFetched(record);
+            if (event === undefined) continue;
+            gateway.push(name, event);
+            decoded += 1;
+          }
+          if (binding.maxCycles !== undefined && cycles >= binding.maxCycles) break;
+          if (binding.loop === false) break;
+          await new Promise((resolve) => setTimeout(resolve, binding.pollIntervalMs ?? 200));
+        }
+        return { partitions: assignedPartitions.length, cycles, decoded, skipped: [...failures] };
+      } finally {
+        group.close();
+      }
     },
   };
 }
