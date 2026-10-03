@@ -5,8 +5,9 @@ import { AgentSelector } from "./components/AgentSelector";
 import { AlertCenter } from "./components/AlertCenter";
 import { DynamicDashboard } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
+import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
 import { SchemaStore, type PortalSource } from "./store/SchemaStore";
-import type { AlertPayload, LiveVerdict } from "./api/live-contracts";
+import type { AlertPayload } from "./api/live-contracts";
 
 /**
  * THE COMMAND CENTER.
@@ -27,26 +28,38 @@ import type { AlertPayload, LiveVerdict } from "./api/live-contracts";
 export interface AppProps {
   readonly store: SchemaStore;
   readonly source: PortalSource;
-  /** The current live verdict, or null before one arrives. */
-  readonly verdict?: LiveVerdict | null;
+  /**
+   * The transport for telemetry. Separate from `source` because the store only
+   * needs the three calls it makes, while polling needs `fetchLive`, and a test
+   * double for one should not be forced to implement the other.
+   */
+  readonly liveSource?: LiveSource;
   /** Dispatched webhook payloads, newest first. */
   readonly alerts?: readonly AlertPayload[];
-  /** Shown in the header so a screenshot is attributable to a credential. */
-  readonly tenantHint?: string;
+  /** Poll cadence. Defaults to 500ms; tests shorten it rather than disabling it. */
+  readonly pollMs?: number;
 }
 
-export function App({
-  store,
-  source,
-  verdict = null,
-  alerts = [],
-  tenantHint = "",
-}: AppProps): ReactElement {
+/**
+ * What the hook polls when no live transport was supplied.
+ *
+ * A rejected promise rather than a fake snapshot, so an unwired app says
+ * "connecting" and never shows a number nobody measured.
+ */
+const IDLE_SOURCE: LiveSource = {
+  fetchLive: () => Promise.reject(new Error("no live transport is wired")),
+};
+
+export function App({ store, source, liveSource, alerts = [], pollMs }: AppProps): ReactElement {
   // `getServerSnapshot` is the third argument and it is required: without it
   // React refuses to render this component on a server at all, and throws
   // rather than degrading. Passing the same getter for both is correct here --
   // the store's state is the same object on either side.
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+
+  // Polling only runs when a live transport was supplied, so a static render --
+  // and every integration test -- creates no interval and leaves no timer.
+  const live = useLiveTelemetry(liveSource ?? IDLE_SOURCE, pollMs);
 
   useEffect(() => {
     void store.load(source);
@@ -70,8 +83,8 @@ export function App({
         <div>
           <h1>Command Center</h1>
           <p className="muted">
-            {tenantHint === "" ? "" : `${tenantHint} · `}
-            schema-driven · {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
+            {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
+            {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
           </p>
         </div>
         <div className="app__actions">
@@ -94,8 +107,15 @@ export function App({
       <main className="app__main">
         <DynamicDashboard config={state} />
         <aside className="app__side">
-          <LiveStreamView verdict={verdict} />
-          <AlertCenter alerts={alerts} verdict={verdict} />
+          <LiveStreamView
+            verdict={live.snapshot?.verdict ?? null}
+            throughput={live.snapshot?.throughput ?? null}
+            error={live.error ?? undefined}
+            loading={live.loading}
+            idle={live.snapshot !== null && live.snapshot.verdict !== null && live.snapshot.verdict.records === 0}
+            provider={live.snapshot?.provider ?? "pega"}
+          />
+          <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
         </aside>
       </main>
     </div>

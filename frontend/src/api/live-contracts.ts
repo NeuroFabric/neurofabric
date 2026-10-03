@@ -66,6 +66,92 @@ export interface LiveVerdict {
   readonly synthetic: boolean;
 }
 
+/**
+ * A MEASURED RATE, mirroring `platform/omniroute/throughput-meter.ts`.
+ *
+ * The window travels with the rate because a rate without it is not a
+ * measurement: sampled over 40ms and over 10s are both "events/sec" and can
+ * differ by orders of magnitude around a burst. A dashboard that prints the rate
+ * and hides the window is choosing to look authoritative while being
+ * uninterpretable.
+ */
+export interface ThroughputReading {
+  readonly records: number;
+  readonly delta: number;
+  readonly windowMs: number;
+  readonly eventsPerSecond: number;
+}
+
+/** The `GET /api/portal/live` body. Nulls are explicit and each one means something. */
+export interface LiveSnapshot {
+  readonly at: string;
+  readonly provider: string;
+  readonly enabled: boolean;
+  /** Null before the first event arrives. Distinct from "connected but idle". */
+  readonly verdict: LiveVerdict | null;
+  /** Null until two observations exist. See `ThroughputMeter`, which is why. */
+  readonly throughput: ThroughputReading | null;
+}
+
+/**
+ * VALIDATE A LIVE SNAPSHOT.
+ *
+ * The throughput half is validated as strictly as the verdict, because a dashboard
+ * rendering a NaN or an Infinity rate because a field went missing is the exact
+ * untrustworthiness this whole layer was added to prevent.
+ */
+export function validateLiveSnapshot(input: unknown): ShapeResult<LiveSnapshot> {
+  if (!isRecord(input)) {
+    return { ok: false, issues: [{ path: "$", reason: "a live snapshot must be an object" }] };
+  }
+  if (typeof input.at !== "string") {
+    return { ok: false, issues: [{ path: "$.at", reason: "at is required" }] };
+  }
+  if (typeof input.provider !== "string" || input.provider.trim() === "") {
+    return { ok: false, issues: [{ path: "$.provider", reason: "provider is required" }] };
+  }
+  if (typeof input.enabled !== "boolean") {
+    return { ok: false, issues: [{ path: "$.enabled", reason: "enabled must be a boolean" }] };
+  }
+
+  let verdict: LiveVerdict | null = null;
+  if (input.verdict !== null && input.verdict !== undefined) {
+    const inner = validateLiveVerdict(input.verdict);
+    if (!inner.ok) {
+      return { ok: false, issues: inner.issues.map((issue) => ({ ...issue, path: `$.verdict${issue.path}` })) };
+    }
+    verdict = inner.value;
+  }
+
+  let throughput: ThroughputReading | null = null;
+  const raw = input.throughput;
+  if (raw !== null && raw !== undefined) {
+    if (!isRecord(raw)) {
+      return { ok: false, issues: [{ path: "$.throughput", reason: "throughput must be an object or null" }] };
+    }
+    for (const key of ["records", "delta", "windowMs", "eventsPerSecond"] as const) {
+      const value = raw[key];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return { ok: false, issues: [{ path: `$.throughput.${key}`, reason: "must be a finite number" }] };
+      }
+    }
+    // A non-positive window means the rate was computed over no interval at all --
+    // a divide by zero that reached the wire. Refusing it here is what stops an
+    // `Infinity events/sec` appearing on a live dashboard.
+    if ((raw.windowMs as number) <= 0) {
+      return { ok: false, issues: [{ path: "$.throughput.windowMs", reason: "a rate must publish a positive window" }] };
+    }
+    throughput = {
+      records: raw.records as number,
+      delta: raw.delta as number,
+      windowMs: raw.windowMs as number,
+      eventsPerSecond: raw.eventsPerSecond as number,
+    };
+  }
+
+  return { ok: true, value: { at: input.at, provider: input.provider, enabled: input.enabled, verdict, throughput } };
+}
+
 export interface AlertColumn {
   readonly column: string;
   readonly partitions: number;

@@ -5,7 +5,7 @@ import { App } from "./App";
 import { CredentialPrompt } from "./components/CredentialPrompt";
 import { GatewayClient } from "./api/gateway-client";
 import { SchemaStore } from "./store/SchemaStore";
-import { simulateVerdict, type AlertPayload, type LiveVerdict } from "./api/live-contracts";
+import { type AlertPayload } from "./api/live-contracts";
 import { initialToken, isUsableToken, sessionTokenStorage, type TokenStorage } from "./token-storage";
 
 /**
@@ -39,8 +39,9 @@ export interface RootProps {
   readonly storage?: TokenStorage;
   /** Usually `import.meta.env.VITE_GATEWAY_TOKEN`. An empty value falls through to storage. */
   readonly environmentToken?: string | undefined;
-  readonly verdict?: LiveVerdict;
   readonly alerts?: readonly AlertPayload[];
+  /** Poll cadence for the live panel. */
+  readonly pollMs?: number;
 }
 
 /**
@@ -61,8 +62,8 @@ export function makeClient(token: string | null): GatewayClient | null {
 export function Root({
   storage,
   environmentToken,
-  verdict = simulateVerdict(1, 250_000),
   alerts = [],
+  pollMs,
 }: RootProps): ReactElement {
   const resolved = useMemo(() => storage ?? sessionTokenStorage(), [storage]);
 
@@ -103,9 +104,16 @@ export function Root({
     <App
       store={store}
       source={client}
-      verdict={verdict}
+      // The SAME client polls the live route. One transport, one credential, one
+      // timeout policy -- so there is no second place where the gateway
+      // credential could be handled differently.
+      liveSource={client}
       alerts={alerts}
-      tenantHint="gateway configured"
+      // Conditional spread rather than `pollMs={pollMs}`: under
+      // `exactOptionalPropertyTypes` an explicitly-passed `undefined` is not the
+      // same as an absent optional, and the difference is the difference between
+      // "use the default" and "pass undefined to a default parameter".
+      {...(pollMs === undefined ? {} : { pollMs })}
     />
   );
 }

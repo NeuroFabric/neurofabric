@@ -1,49 +1,69 @@
 import type { ReactElement } from "react";
 
-import type { LiveVerdict } from "../api/live-contracts";
+import type { LiveVerdict, ThroughputReading } from "../api/live-contracts";
 
 /**
  * THE LIVE STREAM VIEW.
  *
- * === IT DOES NOT DISPLAY A THROUGHPUT RATE, AND THAT IS THE DESIGN ===
+ * === IT NOW SHOWS A REAL RATE, MEASURED SERVER-SIDE ===
  *
- * The brief asked this view to "prove the 257k event/sec throughput is
- * happening". It cannot. No backend endpoint reports a rate: `LiveVerdict`
- * carries `records`, a count from one snapshot, and a rate needs two instants and
- * a numerator. So there is no figure here to render, and inventing one --
- * hardcoded, interpolated, or derived from a count -- would put an unfalsifiable
- * number on screen with a live-looking spinner beside it.
+ * This view used to state that no endpoint reported throughput and therefore
+ * displayed none. That was true, and it is no longer: `GET /api/portal/live`
+ * returns a rate computed by `ThroughputMeter` from two consecutive observations,
+ * because the server is the only place both instants exist.
  *
- * What it renders instead, all of it real:
- *   - the record count a snapshot actually saw, labelled as a COUNT,
- *   - every column's measured / min / max, which is measured data,
- *   - the fence each column is judged against, and whether it breached,
- *   - the busiest hour and the top keys, which are computed from the snapshot.
+ * The number rendered here is therefore MEASURED, and two consequences follow
+ * that this component takes seriously:
  *
- * AND IT NEVER PUTS RAW EVENTS IN THE DOM. A log line per event at any real
- * rate is the fastest way to lock a browser tab: 257k events a second is not a
- * rendering problem, it is a heap problem. There is no scrolling log here and no
- * array of events, so there is nothing for the main thread to choke on. The
- * aggregated columns ARE the log, read as statistics.
+ *   - It renders the WINDOW beside the rate. 56,690 events/sec over 1.4s and 56,690
+ *     over 10s are different claims, and showing the rate alone would let a
+ *     one-sample spike read as a sustained throughput. The window is not detail;
+ *     it is what makes the number mean anything.
+ *   - It renders "no reading yet" until a window exists, rather than a zero. One
+ *     observation cannot produce a rate, and zero would read as a dead stream.
  *
- * === SYNTHETIC DATA IS ALWAYS LABELLED ===
+ * === SYNTHETIC IS STILL LABELLED, AND STILL MATTERS ===
  *
- * `verdict.synthetic` is rendered as a banner whenever it is true. A simulated
- * number that cannot be mistaken for a measurement is a fixture; one that can is
- * a lie, and the person who believes it is the person who does not page anyone
- * at three in the morning.
+ * The banner is now conditional. It appears when `verdict.synthetic` is true and
+ * disappears when it is false -- which is the whole point: a simulated figure
+ * that could be mistaken for a measurement is a fixture, and one that CANNOT is
+ * no longer a fixture at all. The check remains because the frontend can still be
+ * handed a simulated sample, and the condition is what makes the label honest
+ * rather than decorative.
+ *
+ * === IT STILL DOES NOT PUT RAW EVENTS IN THE DOM ===
+ *
+ * There is no scrolling log and no array of events. At any real rate a line per
+ * event is a heap problem, not a rendering problem; 56,000 events a second is not
+ * something a browser can render one node at a time. The aggregated columns ARE
+ * the log, read as statistics, and they are why a flood of half a million events
+ * moves this panel without moving the DOM count.
  */
 export interface LiveStreamViewProps {
   /** Null until a snapshot has arrived. Rendered as an explicit absence. */
   readonly verdict: LiveVerdict | null;
+  /** The measured rate, or null until two observations exist. */
+  readonly throughput?: ThroughputReading | null;
   readonly error?: string | undefined;
+  readonly loading?: boolean;
+  /** True while the gateway is attached but nothing has arrived. */
+  readonly idle?: boolean;
+  /** Which provider this is reporting on, for the idle message. */
+  readonly provider?: string;
 }
 
 function numberOrDash(value: number | null): string {
   return value === null ? "—" : value.toLocaleString("en-GB");
 }
 
-export function LiveStreamView({ verdict, error }: LiveStreamViewProps): ReactElement {
+export function LiveStreamView({
+  verdict,
+  throughput = null,
+  error,
+  loading = false,
+  idle = false,
+  provider = "pega",
+}: LiveStreamViewProps): ReactElement {
   if (error !== undefined && error !== "") {
     return (
       <div className="banner banner--error" role="alert">
@@ -59,8 +79,7 @@ export function LiveStreamView({ verdict, error }: LiveStreamViewProps): ReactEl
       <section className="live" aria-label="Live telemetry">
         <h3>Live telemetry</h3>
         <p className="muted">
-          No snapshot yet. This view renders verdict samples when one arrives; it shows no throughput rate, because
-          no endpoint reports one.
+          {loading ? "Connecting to the live gateway…" : "No verdict yet. This view reports the gateway's own verdict and the rate it measured."}
         </p>
       </section>
     );
@@ -77,7 +96,32 @@ export function LiveStreamView({ verdict, error }: LiveStreamViewProps): ReactEl
         </div>
       ) : null}
 
+      {/* IDLE IS ITS OWN STATE. Connected, healthy, and holding zero records is a
+          real condition -- it is what the gateway looks like before the flood
+          starts -- and folding it into "no data" would make a healthy idle system
+          look broken. */}
+      {idle || verdict.records === 0 ? (
+        <p className="muted">
+          Connected but idle: the gateway holds no records yet for provider <code>{provider}</code>. Start the flood and
+          this fills in.
+        </p>
+      ) : null}
+
       <dl className="kv kv--wide">
+        <dt>measured throughput</dt>
+        <dd>
+          {throughput === null ? (
+            <span className="muted">no reading yet — one observation cannot produce a rate</span>
+          ) : (
+            <>
+              <strong>{throughput.eventsPerSecond.toLocaleString("en-GB")}</strong> events/sec
+              <span className="muted">
+                {" "}
+                over {throughput.windowMs.toLocaleString("en-GB")}ms ({throughput.delta.toLocaleString("en-GB")} events)
+              </span>
+            </>
+          )}
+        </dd>
         <dt>snapshot at</dt>
         <dd>{verdict.at}</dd>
         <dt>

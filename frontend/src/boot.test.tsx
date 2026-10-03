@@ -169,13 +169,13 @@ describe("Root renders a prompt instead of crashing", () => {
   it("renders the app when the environment supplies a credential", () => {
     const html = text(render(<Root storage={memoryTokenStorage(null)} environmentToken="gw-env" />));
     expect(html).toContain("Command Center");
-    expect(html).toContain("gateway configured");
+    expect(html).toContain("schema-driven · live ·");
     expect(html).not.toContain("No gateway credential is configured");
   });
 
   it("renders the app when only storage supplies one", () => {
     const html = text(render(<Root storage={memoryTokenStorage("gw-stored")} environmentToken={undefined} />));
-    expect(html).toContain("gateway configured");
+    expect(html).toContain("schema-driven · live ·");
   });
 
   it("renders the prompt when the environment variable is present but empty", () => {
