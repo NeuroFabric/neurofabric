@@ -99,11 +99,11 @@ async function streamCsvRead(target: string): Promise<CsvReadResult> {
   let sawHeader = false;
   let rowCount = 0;
 
-  await streamCsvRecords(target, (record) => {
+  await streamCsvRecords(target, (cells, line) => {
     if (!sawHeader) {
       sawHeader = true;
-      headers = record.cells.map((cell) => cell.trim());
-      profile.setHeaders(record.cells);
+      headers = cells.map((cell) => cell.trim());
+      profile.setHeaders(cells);
       headers.forEach((header, index) => {
         if (header.length === 0) note(`column ${index + 1} has no header name`);
       });
@@ -116,10 +116,10 @@ async function streamCsvRead(target: string): Promise<CsvReadResult> {
     // old parser stopped looking at row 10,001 and reported a tidy file for
     // everything past it. The message count is capped, because a file ragged on
     // every row must not produce half a million strings.
-    if (record.cells.length !== headers.length) {
-      note(`row ${record.line} has ${record.cells.length} value(s) but the header declares ${headers.length}`);
+    if (cells.length !== headers.length) {
+      note(`row ${line} has ${cells.length} value(s) but the header declares ${headers.length}`);
     }
-    profile.push(record.cells);
+    profile.push(cells);
   }, { problems });
 
   if (!sawHeader) {
