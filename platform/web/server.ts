@@ -6,6 +6,9 @@ import { applyFeedback } from "./feedback.ts";
 import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
+import { createPortalRoutes, InMemoryPortalStore, type PortalRouter } from "../api/portal-routes.ts";
+import { environmentVault, type VaultProvider } from "../omniroute/edge-security.ts";
+import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
@@ -95,6 +98,20 @@ export interface WedgeOptions {
   host?: string;
   /** The install root, for finding the shipped schemas. */
   installRoot?: string;
+  /**
+   * WHERE THE PORTAL API READS ITS CREDENTIALS FROM.
+   *
+   * Defaults to the environment provisioner, which reads one JSON array from
+   * `NEUROFEBRIC_GATEWAY_TOKENS`. Injectable so a test can present a known
+   * credential without touching the environment, and so a deployment that mints
+   * its own can hand the result to the same call site.
+   *
+   * Empty is not a default: an unset variable yields NO tokens, so with nothing
+   * provisioned every portal route answers 401. That is the correct answer --
+   * a portal surface nobody is admitted to serves nobody -- and it is why the
+   * frontend shows a sign-in fault rather than an empty dashboard.
+   */
+  portalVault?: VaultProvider;
 }
 
 export interface RunningWedge {
@@ -344,10 +361,80 @@ export function createWedgeServer(options: WedgeOptions): Server {
    */
   const sessions = path.join(cwd, "workspace", "sessions");
 
+  /**
+   * THE PORTAL API, MOUNTED ONCE PER SERVER INSTANCE.
+   *
+   * Built here, outside the request handler, and that placement is the whole
+   * point. The registry is the store of registered agents: build one per request
+   * and every `POST /api/portal/schema` installs into a registry that is
+   * discarded the moment the response is written, so the write route would answer
+   * 200 and the next read would see nothing. A 200 that installs nothing is
+   * worse than an error, because it is a success the caller has to disbelieve.
+   *
+   * The registry starts EMPTY, and that is not an oversight to be papered over.
+   * `configs/default-schemas.json` is not a source for it: that file describes
+   * core diagnostics in a `match`/`allOf` shape, while `AgentSchema` wants
+   * `rules`/`capabilities`/`streams`. Feeding one to the other would be refused
+   * by `validateSchema` for every entry. So agents arrive through
+   * `POST /api/portal/schema`, and until one does, `GET /api/portal/config`
+   * honestly reports a derived portal with nothing in it.
+   *
+   * Nothing else about the wedge changes. Same containment, same loopback
+   * default, same body ceiling, and the portal routes are reached only after the
+   * same `resolveWithinRoot` boundary as every other path that reads a file.
+   */
+  const registry = new DynamicAgentRegistry();
+  const portalRoutes: PortalRouter = createPortalRoutes({
+    registry,
+    store: new InMemoryPortalStore(),
+    vault: options.portalVault ?? environmentVault(),
+  });
+
   return createServer((request, response) => {
     void (async () => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+        /**
+         * THE PORTAL SURFACE, BEFORE ANY WEDGE ROUTE.
+         *
+         * Delegated first so `/api/portal/*` can never fall through to a wedge
+         * handler written for a different verb, and so a 404 from the portal
+         * router is a portal 404 rather than the wedge's own.
+         *
+         * The body is read only for a write. Reading it on a GET would leave the
+         * request stream undrained on any client that sent one anyway, and
+         * `readBody` rejects past the same ceiling every other body is held to.
+         */
+        if (url.pathname.startsWith("/api/portal/")) {
+          const headers: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(request.headers)) {
+            headers[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
+          }
+
+          let payload: unknown;
+          if (request.method === "POST" || request.method === "PUT" || request.method === "PATCH") {
+            try {
+              const raw = await readBody(request);
+              payload = raw.trim() === "" ? undefined : JSON.parse(raw);
+            } catch {
+              // A body that is not JSON is the caller's error, and saying so is
+              // more useful than letting the router receive `undefined` and
+              // report every required field missing.
+              sendJson(response, 400, { error: "the request body is not valid JSON" });
+              return;
+            }
+          }
+
+          const result = await portalRoutes.handle(request.method ?? "GET", url.pathname, headers, payload);
+          const text = JSON.stringify(result.body ?? null);
+          response.writeHead(result.status, {
+            ...result.headers,
+            "content-length": Buffer.byteLength(text),
+          });
+          response.end(text);
+          return;
+        }
         if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
           const page = await import("./page.ts").then((m) => m.PAGE_HTML);
           response.writeHead(200, {
