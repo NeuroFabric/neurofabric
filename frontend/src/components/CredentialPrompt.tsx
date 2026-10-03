@@ -51,9 +51,19 @@ export interface CredentialPromptProps {
   readonly onSubmit: (token: string) => void;
   /** Shown when the client could not be built from a credential that was entered. */
   readonly error?: string | undefined;
+  /**
+   * Replaces the default lead paragraph.
+   *
+   * Needed because this form is asked for in two genuinely different situations,
+   * and "no credential is configured for this browser" is false in one of them: a
+   * credential WAS configured and the server refused it. Telling an operator
+   * their configuration is missing, when the server has just told them the value
+   * they sent is not recognised, sends them looking in the wrong place.
+   */
+  readonly lead?: string | undefined;
 }
 
-export function CredentialPrompt({ onSubmit, error }: CredentialPromptProps): ReactElement {
+export function CredentialPrompt({ onSubmit, error, lead }: CredentialPromptProps): ReactElement {
   const [value, setValue] = useState("");
   const [blank, setBlank] = useState(false);
 
@@ -75,7 +85,7 @@ export function CredentialPrompt({ onSubmit, error }: CredentialPromptProps): Re
       <form className="gate__card" onSubmit={submit}>
         <h1>Command Center</h1>
         <p className="muted">
-          No gateway credential is configured for this browser. Enter one to reach the portal API.
+          {lead ?? "No gateway credential is configured for this browser. Enter one to reach the portal API."}
         </p>
 
         <label className="gate__field" htmlFor="gatewayToken">

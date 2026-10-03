@@ -370,6 +370,19 @@ test("AN UPGRADED SCHEMA IS REFLECTED IN THE PORTAL WITHOUT A STORED CONFIG", as
   registry.register({ ...FINANCIAL_SCHEMA, version: "2.0.0", capabilities: ["now also flags chargebacks"] }, { tenant: T });
 
   assert.equal(before, "1.0.0");
-  assert.equal(registry.get(T, "financial-agent")?.version, "2.0.0");
-  assert.equal(routes.routes.length, 4);
+  assert.equal(registry.get("financial-agent")?.version, "2.0.0");
+  // Six, not four. The two live routes -- `GET /live` and `POST /ingest` -- were
+  // added when the live gateway was mounted, and this assertion was not moved with
+  // them. A count that pins a stale number does not fail usefully: it fails the
+  // suite for a change nobody made here, which trains everyone to ignore it. So the
+  // ROUTES themselves are asserted instead of their number, which fails when a
+  // route is added OR removed and reads as what it is on the day it breaks.
+  assert.deepEqual(routes.routes, [
+    "GET /api/portal/config",
+    "GET /api/portal/agents",
+    "GET /api/portal/live",
+    "GET /api/portal/schema/:id",
+    "POST /api/portal/schema",
+    "POST /api/portal/ingest",
+  ]);
 });

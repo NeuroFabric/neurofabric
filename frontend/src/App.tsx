@@ -5,6 +5,7 @@ import { AgentSelector } from "./components/AgentSelector";
 import { AlertCenter } from "./components/AlertCenter";
 import { DynamicDashboard } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
+import { RefusalScreen } from "./components/RefusalScreen";
 import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
 import { SchemaStore, type PortalSource } from "./store/SchemaStore";
 import type { AlertPayload } from "./api/live-contracts";
@@ -38,6 +39,15 @@ export interface AppProps {
   readonly alerts?: readonly AlertPayload[];
   /** Poll cadence. Defaults to 500ms; tests shorten it rather than disabling it. */
   readonly pollMs?: number;
+  /**
+   * Called with a newly entered credential when polling has been halted by a
+   * refusal.
+   *
+   * Optional because the caller that owns the credential is `Root`, and a test
+   * that renders `App` with a fake transport does not own one. Absent, the tree
+   * says what is wrong and stops -- which is a complete screen, not a broken one.
+   */
+  readonly onCredentialRequired?: ((token: string) => void) | undefined;
 }
 
 /**
@@ -50,7 +60,14 @@ const IDLE_SOURCE: LiveSource = {
   fetchLive: () => Promise.reject(new Error("no live transport is wired")),
 };
 
-export function App({ store, source, liveSource, alerts = [], pollMs }: AppProps): ReactElement {
+export function App({
+  store,
+  source,
+  liveSource,
+  alerts = [],
+  pollMs,
+  onCredentialRequired,
+}: AppProps): ReactElement {
   // `getServerSnapshot` is the third argument and it is required: without it
   // React refuses to render this component on a server at all, and throws
   // rather than degrading. Passing the same getter for both is correct here --
@@ -76,6 +93,29 @@ export function App({ store, source, liveSource, alerts = [], pollMs }: AppProps
     },
     [store, source],
   );
+
+  /**
+   * THE REFUSAL SCREEN, TAKEN BEFORE THE DASHBOARD.
+   *
+   * A refused credential is not a degraded dashboard. It is a question only a
+   * person can answer, and it is asked ONCE, in place of the screen whose data
+   * could never arrive. Returning early here is what makes the two states visibly
+   * distinct rather than merely differently bad: without it the operator gets a
+   * shell with refused-field panels and a live panel that can only ever say
+   * "unreachable", which is precisely the screenshot this replaces.
+   *
+   * Both variants live in `RefusalScreen`, reachable without an effect, so what
+   * is asserted about them is what an operator would actually see.
+   */
+  if (live.credentialRequired) {
+    return (
+      <RefusalScreen
+        state={live.state}
+        {...(onCredentialRequired === undefined ? {} : { onCredentialRequired })}
+        onRetry={reload}
+      />
+    );
+  }
 
   return (
     <div className="app">

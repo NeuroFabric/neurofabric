@@ -109,6 +109,10 @@ export function Root({
       // credential could be handled differently.
       liveSource={client}
       alerts={alerts}
+      // A refusal halts polling and re-opens this same prompt. The submitted
+      // value replaces the token in state, which builds a NEW client, which is
+      // what restarts the poller -- so recovery needs no flag of its own.
+      onCredentialRequired={submit}
       // Conditional spread rather than `pollMs={pollMs}`: under
       // `exactOptionalPropertyTypes` an explicitly-passed `undefined` is not the
       // same as an absent optional, and the difference is the difference between

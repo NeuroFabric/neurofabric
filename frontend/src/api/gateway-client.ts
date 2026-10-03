@@ -98,6 +98,31 @@ export class GatewayError extends Error {
   readonly issues: readonly ShapeIssue[];
   /** Seconds to wait, for a throttled response. */
   readonly retryAfterSeconds?: number;
+  /**
+   * The edge's own machine code for a refusal, e.g. `UNAUTHENTICATED`.
+   *
+   * Carried because `kind` is the CLIENT's classification and this is the
+   * SERVER's, and the disagreement is useful: a 401 the edge calls
+   * `UNAUTHENTICATED` while the client calls the failure `refused` is a signal,
+   * not a bug to be smoothed over.
+   */
+  readonly code: string;
+  /**
+   * The edge's prose for a refusal, redacted.
+   *
+   * === WHY THIS FIELD EXISTS ===
+   *
+   * Two 401s used to be indistinguishable to every caller, and they are not the
+   * same event: "no credential presented" means nothing arrived, and "the
+   * credential presented is not recognised" means something arrived and it was
+   * wrong. Only the second one is fixed by a person typing something. The
+   * difference is in the prose and nowhere else, so the prose has to survive to
+   * the caller. `credentialStateOf` classifies on it.
+   *
+   * Defaults to the empty string rather than being optional so no consumer has
+   * to null-check before calling `.toLowerCase()` on it.
+   */
+  readonly reason: string;
 
   constructor(
     kind: GatewayFailure,
@@ -106,6 +131,8 @@ export class GatewayError extends Error {
       readonly status?: number;
       readonly issues?: readonly ShapeIssue[];
       readonly retryAfterSeconds?: number;
+      readonly code?: string;
+      readonly reason?: string;
     } = {},
   ) {
     super(message);
@@ -114,6 +141,10 @@ export class GatewayError extends Error {
     if (detail.status !== undefined) this.status = detail.status;
     this.issues = detail.issues ?? [];
     if (detail.retryAfterSeconds !== undefined) this.retryAfterSeconds = detail.retryAfterSeconds;
+    // Assigned unconditionally, unlike the rest: both default to empty rather
+    // than being absent, so the shape is the same for every error thrown here.
+    this.code = detail.code ?? "";
+    this.reason = detail.reason ?? "";
   }
 
   /**
@@ -129,6 +160,12 @@ export class GatewayError extends Error {
       name: this.name,
       kind: this.kind,
       message: this.message,
+      // The reason is already redacted -- it passed through `snippet()` in
+      // `#statusError` -- so it is safe here, and it is included because a log
+      // with the status and not the reason is the log that sends somebody
+      // looking in the wrong place.
+      ...(this.reason === "" ? {} : { reason: this.reason }),
+      ...(this.code === "" ? {} : { code: this.code }),
       ...(this.status === undefined ? {} : { status: this.status }),
       issues: this.issues.map((issue) => ({ ...issue })),
       ...(this.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: this.retryAfterSeconds }),
@@ -411,7 +448,11 @@ export class GatewayClient {
     // The edge renders refusals as `{ status: "FAILED", failure: { code, reason } }`.
     // That shape is unpacked here so `reason` survives into the message, which
     // is often the only explanation a developer gets for a 401.
-    const reason = readEdgeReason(body, this.#token);
+    // Read as a PAIR rather than as a reason alone. `code` says WHAT was refused
+    // and `reason` says why, and the classification of a 401 needs both -- see
+    // `credentialStateOf`.
+    const refusal = readEdgeRefusal(body, this.#token);
+    const reason = refusal.reason;
 
     const kind: GatewayFailure =
       status === 401 || status === 403
@@ -436,6 +477,8 @@ export class GatewayClient {
       status,
       issues,
       ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+      ...(refusal.code === "" ? {} : { code: refusal.code }),
+      ...(refusal.reason === "" ? {} : { reason: refusal.reason }),
     });
   }
 }
@@ -453,13 +496,41 @@ function isRecordWithString(value: unknown, key: string): value is Record<string
   return typeof value === "object" && value !== null && !Array.isArray(value) && key in value;
 }
 
-/** Pull `failure.reason` out of an edge refusal, redacted. */
-function readEdgeReason(body: unknown, token: string): string {
-  if (!isRecordWithString(body, "failure")) return "";
+/**
+ * Pull the code and the reason out of a refusal, redacted.
+ *
+ * === WHY TWO BODY SHAPES ARE ACCEPTED ===
+ *
+ * The edge renders `{ status: "FAILED", failure: { code, reason } }`. That is the
+ * shape this client was written against, and it is what the running wedge emits.
+ *
+ * But an operator reading a browser's network panel sees the flattened
+ * `{ code, reason }` -- devtools renders a single-key wrapper that way, and the
+ * screenshot that opened this investigation carried it flat -- and a client that
+ * recognised only the nested form reads that body as having no reason at all,
+ * classifies the 401 as unclassifiable, and shows the generic screen. So both are
+ * read, nested first, and the flat form is a fallback rather than an equal
+ * alternative. An operator's evidence is not adjusted to fit the parser.
+ */
+function readEdgeRefusal(body: unknown, token: string): { code: string; reason: string } {
+  if (!isRecordWithString(body, "failure")) {
+    // Flat form: `{ code, reason }` at the top level.
+    const flatCode = readStringField(body, "code");
+    const flatReason = readStringField(body, "reason");
+    return { code: flatCode, reason: flatReason === "" ? "" : snippet(flatReason, token) };
+  }
   const failure = body.failure;
-  if (typeof failure !== "object" || failure === null || Array.isArray(failure)) return "";
-  const reason = (failure as Record<string, unknown>).reason;
-  return typeof reason === "string" ? snippet(reason, token) : "";
+  if (typeof failure !== "object" || failure === null || Array.isArray(failure)) return { code: "", reason: "" };
+  const record = failure as Record<string, unknown>;
+  const reason = readStringField(record, "reason");
+  return { code: readStringField(record, "code"), reason: reason === "" ? "" : snippet(reason, token) };
+}
+
+/** A string field, or the empty string. Never a non-string coerced to one. */
+function readStringField(value: unknown, key: string): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+  const found = (value as Record<string, unknown>)[key];
+  return typeof found === "string" ? found : "";
 }
 
 /** `retry-after` in whole seconds, or undefined when absent or nonsense. */

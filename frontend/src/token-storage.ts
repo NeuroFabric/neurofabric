@@ -118,15 +118,28 @@ export function sessionTokenStorage(scope?: Storage): TokenStorage {
 /**
  * THE CREDENTIAL TO START WITH.
  *
- * Environment first, then storage. The environment is how a deployment supplies
- * one without a human typing it; storage is how a person avoids retyping it
- * after a reload. Neither is trusted blindly -- `isUsableToken` gates both, so a
- * variable that is present but empty falls through to the prompt instead of
- * producing a blank-token crash.
+ * === STORAGE FIRST, ENVIRONMENT SECOND, AND THE ORDER IS THE FIX ===
+ *
+ * This was environment-first, on the reasoning that a deployment's configuration
+ * should outrank a person. It has the opposite effect in the only place it
+ * matters: once a `VITE_GATEWAY_TOKEN` exists, a value typed into the prompt is
+ * read, stored, and then ignored. The operator watches their entry have no
+ * effect while the client keeps presenting the configured one, which is
+ * indistinguishable from the entry being rejected.
+ *
+ * A person at the keyboard is the more authoritative source. The environment is
+ * the DEFAULT -- what a person gets before they have expressed a preference --
+ * and a stored value is that preference, recorded. So the stored value wins,
+ * and the environment still supplies one on a fresh tab with nothing stored, which
+ * is what makes an unattended demo boot at all.
+ *
+ * Neither is trusted blindly: `isUsableToken` gates both, so a variable that is
+ * present but empty falls through to the prompt instead of producing a
+ * blank-credential crash.
  */
 export function initialToken(fromEnvironment: string | undefined, storage: TokenStorage): string | null {
+  const stored = normaliseToken(storage.read() ?? "");
+  if (stored !== null) return stored;
   const fromEnv = normaliseToken(fromEnvironment ?? "");
-  if (fromEnv !== null) return fromEnv;
-  const stored = storage.read();
-  return isUsableToken(stored) ? stored : null;
+  return fromEnv;
 }
