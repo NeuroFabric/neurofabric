@@ -48,7 +48,10 @@ export default defineConfig({
 
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // `.tsx` is included because the component tests render through
+    // `react-dom/server`, which runs in plain node. See components.test.tsx
+    // for why that means no jsdom dependency is installed.
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     // Explicit imports, not ambient globals -- see tsconfig.json.
     globals: false,
   },

@@ -1,0 +1,307 @@
+import type { ReactElement } from "react";
+
+import type { AgentDescriptor, PortalWidget, RuleSpec } from "../api/contracts";
+import type { UIConfig } from "../store/SchemaStore";
+
+/**
+ * THE DASHBOARD ENGINE. NOTHING ABOUT IT IS ABOUT A PARTICULAR AGENT.
+ *
+ * There is no `log-anomaly` in this file, no `pega-alert-export`, no domain.
+ * Every element below is derived from the JSON that arrived -- the portal
+ * config's widgets and forms, and the selected schema's rules -- and a new agent
+ * renders with no edit here at all. That is the test: if adding an agent
+ * required touching this component, it would be a template wearing a dynamic
+ * component's name, which is the thing `portal-routes.ts` refused to be when it
+ * returned a config value instead of HTML.
+ *
+ * === WHAT THE SCHEMA DOES NOT CONTAIN, AND WHAT IS THEREFORE NOT DRAWN ===
+ *
+ * A schema describes RULES. It does not carry observations: a threshold rule
+ * says "fire above 1000", and nothing anywhere says the current value is 1043.
+ * So the threshold visualizer draws the CONFIGURED THRESHOLD and labels it as
+ * configured. It does not render a bar at a height invented from the schema,
+ * because a bar at an invented height is a picture of a number nobody measured,
+ * and a dashboard whose numbers are decorative is the one failure mode the
+ * platform's whole claim is against.
+ *
+ * Where a reading arrives later -- from the live stream -- it is passed in as
+ * `readings` and rendered alongside. Absent readings are stated, never faked.
+ */
+
+/** How each rule kind is presented. The table itself comes from the schema. */
+type RuleKind = RuleSpec["kind"];
+
+const RULE_ORDER: readonly RuleKind[] = ["threshold", "rate", "regex", "missing-field"];
+
+export interface RuleReading {
+  readonly ruleId: string;
+  /** A measured value. Never inferred from the schema. */
+  readonly value: number;
+}
+
+export interface DynamicDashboardProps {
+  readonly config: UIConfig;
+  /** Observed values, keyed by rule id. Absent values are stated, never invented. */
+  readonly readings?: readonly RuleReading[];
+}
+
+function readingFor(readings: readonly RuleReading[], ruleId: string): number | undefined {
+  return readings.find((reading) => reading.ruleId === ruleId)?.value;
+}
+
+/**
+ * The label a rule gets, derived from its kind.
+ *
+ * `threshold` and `rate` describe a comparison, so the comparison is rendered.
+ * `regex` describes a pattern and `missing-field` a field name; neither has an
+ * order to place on a scale, so forcing them onto one would be a graphic that
+ * means nothing.
+ */
+function describeRule(rule: RuleSpec): string {
+  switch (rule.kind) {
+    case "threshold":
+      return `${rule.operator ?? "="} ${rule.value ?? 0}${rule.field === undefined ? "" : ` on ${rule.field}`}`;
+    case "rate":
+      return `more than ${rule.rateAbove ?? 0} per ${rule.windowMs ?? 0}ms`;
+    case "regex":
+      return `matches /${rule.pattern ?? ""}/${rule.flags ?? ""}`;
+    case "missing-field":
+      return `field ${rule.field ?? "(unnamed)"} is absent`;
+  }
+}
+
+/**
+ * THE THRESHOLD BAR.
+ *
+ * A filled track with the threshold marked on it, and the measured value marked
+ * separately when one exists. The scale is not `value * 2`: a bar whose full
+ * width means "twice the threshold" would make a rule at 1 and a rule at 100000
+ * draw the same picture. The scale is the threshold itself, so a bar at full
+ * width means exactly one thing everywhere in this UI -- "at or over the limit".
+ */
+function ThresholdBar({ rule, measured }: { rule: RuleSpec; measured: number | undefined }): ReactElement {
+  const limit = rule.kind === "rate" ? rule.rateAbove ?? 0 : rule.value ?? 0;
+  const breached = measured !== undefined && limit > 0 && measured >= limit;
+  return (
+    <span className="threshold">
+      <span className="threshold__track" role="presentation">
+        <span
+          className={breached ? "threshold__fill threshold__fill--breached" : "threshold__fill"}
+          style={{ inlineSize: breached ? "100%" : "0%" }}
+        />
+      </span>
+      <span className="threshold__label">
+        {measured === undefined
+          ? `limit ${limit}${measured === undefined && breached === false ? ", no reading yet" : ""}`
+          : `${measured} against limit ${limit}${breached ? " — BREACHED" : ""}`}
+      </span>
+    </span>
+  );
+}
+
+function RuleRow({ rule, measured }: { rule: RuleSpec; measured: number | undefined }): ReactElement {
+  const scalable = rule.kind === "threshold" || rule.kind === "rate";
+  return (
+    <tr>
+      <td>
+        <code>{rule.id}</code>
+      </td>
+      <td>
+        <span className={`pill pill--${rule.severity}`}>{rule.severity}</span>
+      </td>
+      <td>{rule.kind}</td>
+      <td>{rule.message}</td>
+      <td>{describeRule(rule)}</td>
+      <td>{scalable ? <ThresholdBar rule={rule} measured={measured} /> : <span className="muted">not a scalar rule</span>}</td>
+    </tr>
+  );
+}
+
+function AgentStatusCard({ agent }: { agent: AgentDescriptor }): ReactElement {
+  return (
+    <li className="card">
+      <div className="card__head">
+        <span className={`dot dot--${agent.maturity}`} role="img" aria-label={agent.maturity} />
+        <strong>{agent.title}</strong>
+      </div>
+      <dl className="kv">
+        <dt>id</dt>
+        <dd><code>{agent.id}</code></dd>
+        <dt>domain</dt>
+        <dd>{agent.domain}</dd>
+        <dt>version</dt>
+        <dd>{agent.version}</dd>
+        <dt>capabilities</dt>
+        <dd>{agent.capabilities.length === 0 ? <span className="muted">none declared</span> : agent.capabilities.join(", ")}</dd>
+      </dl>
+    </li>
+  );
+}
+
+/**
+ * A portal widget.
+ *
+ * The portal config says what kind of widget this is and which agent feeds it.
+ * It does not carry the data, so the card states what it is waiting for rather
+ * than drawing a plausible-looking empty chart.
+ */
+function WidgetCard({ widget }: { widget: PortalWidget }): ReactElement {
+  return (
+    <li className="card">
+      <div className="card__head">
+        <span className={`pill pill--${widget.kind}`}>{widget.kind}</span>
+        <strong>{widget.title}</strong>
+      </div>
+      <p className="muted">
+        {"agentId" in widget ? (
+          <>
+            fed by <code>{widget.agentId}</code>
+            {widget.span === undefined ? "" : ` over ${widget.span}`}
+          </>
+        ) : (
+          "a static widget with no agent behind it"
+        )}
+      </p>
+    </li>
+  );
+}
+
+export function DynamicDashboard({ config, readings = [] }: DynamicDashboardProps): ReactElement {
+  const schema = config.schema;
+  const issues = config.issues;
+
+  return (
+    <section className="dashboard" aria-label="Agent dashboard">
+      <header className="dashboard__head">
+        <h2>{config.title === "" ? "Portal" : config.title}</h2>
+        <p className="muted">
+          tenant <code>{config.tenant === "" ? "—" : config.tenant}</code> · layout version{" "}
+          <code>{config.version === "" ? "—" : config.version}</code>
+          {config.derived ? " · derived from registered agents, not stored" : ""}
+        </p>
+      </header>
+
+      {/* A fault is shown, not swallowed. The store never throws, so without this
+          banner a refused payload would be indistinguishable from an empty one. */}
+      {issues.length > 0 ? (
+        <div className="banner banner--warn" role="status">
+          <strong>{issues.length} field(s) refused by the gateway.</strong> What is below is what validated.
+          <ul>
+            {issues.slice(0, 8).map((issue) => (
+              <li key={`${issue.path}:${issue.reason}`}>
+                <code>{issue.path}</code> — {issue.reason}
+              </li>
+            ))}
+            {issues.length > 8 ? <li>…and {issues.length - 8} more</li> : null}
+          </ul>
+        </div>
+      ) : null}
+
+      {config.error === null ? null : (
+        <div className="banner banner--error" role="alert">
+          <strong>{config.error.kind}</strong> — {config.error.message}
+        </div>
+      )}
+
+      <h3>Agents ({config.readyCount} ready, {config.stubCount} stub)</h3>
+      {config.agents.length === 0 ? (
+        <p className="muted">
+          No agents are registered for this tenant. Install one through the schema endpoint and it appears here.
+        </p>
+      ) : (
+        <ul className="grid">
+          {config.agents.map((agent) => (
+            <AgentStatusCard key={agent.id} agent={agent} />
+          ))}
+        </ul>
+      )}
+
+      {config.widgets.length === 0 ? null : (
+        <>
+          <h3>Widgets</h3>
+          <ul className="grid">
+            {config.widgets.map((widget) => (
+              <WidgetCard key={widget.id} widget={widget} />
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h3>{schema === null ? "Rules" : `Rules for ${schema.title}`}</h3>
+      {schema === null ? (
+        <p className="muted">
+          {config.schemaLoading ? "Loading rules…" : "No agent selected. Choose one to load its rules."}
+        </p>
+      ) : schema.rules.length === 0 ? (
+        <p className="muted">
+          <code>{schema.id}</code> declares no rules. A schema with no rules is a screen with nothing to say.
+        </p>
+      ) : (
+        <>
+          <p className="muted">
+            <code>{schema.id}</code> v{schema.version} · streams{" "}
+            {schema.streams.length === 0 ? "every stream" : schema.streams.join(", ")} ·{" "}
+            {schema.rules.length} rule{schema.rules.length === 1 ? "" : "s"}
+          </p>
+          {/* One table, grouped by rule kind. The columns are the schema's, so a
+              new rule kind needs no column and a new field needs no markup. */}
+          {RULE_ORDER.filter((kind) => schema.rules.some((rule) => rule.kind === kind)).map((kind) => (
+            <div key={kind} className="ruleset">
+              <h4>{kind}</h4>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">rule</th>
+                    <th scope="col">severity</th>
+                    <th scope="col">kind</th>
+                    <th scope="col">message</th>
+                    <th scope="col">fires when</th>
+                    <th scope="col">threshold</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schema.rules
+                    .filter((rule) => rule.kind === kind)
+                    .map((rule) => (
+                      <RuleRow key={rule.id} rule={rule} measured={readingFor(readings, rule.id)} />
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </>
+      )}
+
+      {config.forms.length === 0 ? null : (
+        <>
+          <h3>Forms</h3>
+          {config.forms.map((form) => (
+            <div key={form.id} className="ruleset">
+              <h4>{form.title}</h4>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">field</th>
+                    <th scope="col">label</th>
+                    <th scope="col">type</th>
+                    <th scope="col">required</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.fields.map((field) => (
+                    <tr key={field.name}>
+                      <td><code>{field.name}</code></td>
+                      <td>{field.label}</td>
+                      <td>{field.type}</td>
+                      <td>{field.required === true ? "yes" : "no"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </>
+      )}
+    </section>
+  );
+}
