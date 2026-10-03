@@ -99,13 +99,19 @@ class PartitionAccumulator {
   push(record: BrokerRecord): void {
     const fields = record.fields;
     this.total += 1;
+    // EVERY VALUE IS COERCED. This is the public ingress point of the whole
+    // product: a webhook or a Kafka payload may carry a number, a boolean or null
+    // where a string was expected, and calling `.trim()` on one took the broker
+    // down. A malformed event should cost the malformed event, not the stream --
+    // and coercion here is also what makes the SAME payload behave identically
+    // whether it arrived as JSON, as a CSV cell or from a typed SDK.
     for (const [column, raw] of Object.entries(fields)) {
+      const text = raw === null || raw === undefined ? "" : String(raw);
       let entry = this.numeric.get(column);
       if (entry === undefined) {
         entry = { n: 0, empty: 0, dirty: 0, sum: 0, min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY, reservoir: new Reservoir(RESERVOIR_SIZE) };
         this.numeric.set(column, entry);
       }
-      const text = raw.trim();
       if (text.length === 0) {
         entry.empty += 1;
         continue;
@@ -121,9 +127,9 @@ class PartitionAccumulator {
       if (value > entry.max) entry.max = value;
       entry.reservoir.add(value);
     }
-    if (this.keyColumn !== undefined) this.counts.add(fields[this.keyColumn] ?? "(none)");
+    if (this.keyColumn !== undefined) this.counts.add(fields[this.keyColumn] === undefined ? "(none)" : String(fields[this.keyColumn]));
     if (this.timeColumn !== undefined) {
-      const parsed = Date.parse(fields[this.timeColumn] ?? "");
+      const parsed = Date.parse(fields[this.timeColumn] === undefined ? "" : String(fields[this.timeColumn]));
       if (!Number.isNaN(parsed)) this.hours.add(new Date(parsed).toISOString().slice(0, 13), false, this.total);
     }
     // The sliding window. Bounded by COUNT, by AGE, or by both -- and the drop is
