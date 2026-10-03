@@ -1,0 +1,50 @@
+{
+  "$comment": [
+    "Type gate for the UI Command Center. INDEPENDENT of the root tsconfig.json.",
+    "",
+    "The root gate is `include: [platform/**/*.ts, .pi/extensions/*.ts]` and the root",
+    "test globs are `platform/**` only, so this workspace is invisible to the kernel's",
+    "gates by construction rather than by remembering to exclude it. That is why the",
+    "frontend carries its OWN tsconfig instead of being added to the root one.",
+    "",
+    "Two flags are ON here that the root gate relaxes, deliberately:",
+    "  noUncheckedIndexedAccess  the root relaxes this because it tripled the error",
+    "                            count (123 vs 78) across platform/**. That is a",
+    "                            migration cost on an existing codebase, not an",
+    "                            argument against the flag. New code can hold the",
+    "                            standard from line one.",
+    "  exactOptionalPropertyTypes  so `{ agentId?: string }` cannot be handed",
+    "                            `undefined` -- the difference between 'omitted' and",
+    "                            'present and null' is load-bearing in the portal",
+    "                            config, where the backend distinguishes them.",
+    "",
+    "types:[] -- `describe`/`it`/`expect` are IMPORTED from vitest in every test file",
+    "rather than injected as globals. Explicit imports are checkable by the compiler;",
+    "ambient test globals are a typo that passes silently until the suite runs."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "types": []
+  },
+  "include": ["src", "vite.config.ts"]
+}
