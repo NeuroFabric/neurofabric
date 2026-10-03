@@ -12,6 +12,9 @@ import {
   validateSchema,
   type AgentSchema,
 } from "../swarm/dynamic-registry.ts";
+import { ThroughputMeter, type ThroughputReading } from "../omniroute/throughput-meter.ts";
+import type { LiveVerdict } from "../conductor/live-anomaly.ts";
+import type { OmniRouteEvent } from "../omniroute/omniroute-gateway.ts";
 import { SECURE_JSON_HEADERS, type UiResponse } from "./ui-routes.ts";
 
 /**
@@ -348,6 +351,16 @@ export interface PortalRoutesOptions {
   readonly store: PortalStore;
   readonly vault: VaultProvider;
   readonly strictVault?: boolean;
+  /**
+   * The live gateway. Omitted means NO live surface, and `/api/portal/live`
+   * then answers 503 rather than pretending to have nothing to report.
+   *
+   * Optional rather than required because this router has a second job: it is
+   * the schema and portal surface, which is useful without any stream attached.
+   */
+  readonly live?: LiveGateway;
+  /** The provider name `/api/portal/live` reports on. Defaults to `pega`. */
+  readonly liveProvider?: string;
 }
 
 export interface PortalRouter {
@@ -363,6 +376,132 @@ export interface PortalRouter {
 const CONFIG_PATH = "/api/portal/config";
 const AGENTS_PATH = "/api/portal/agents";
 const SCHEMA_PATH = "/api/portal/schema";
+const LIVE_PATH = "/api/portal/live";
+const INGEST_PATH = "/api/portal/ingest";
+
+/**
+ * === THE TWO LIVE ROUTES, AND WHY THEY LIVE HERE ===
+ *
+ * The live surface is part of the portal, not a separate service. It shares the
+ * portal's credential, its tenant boundary and its refusal rendering, and a
+ * second owner for one surface is how two policies slowly disagree -- which is
+ * the argument this module has already made once about `ui-routes.ts`.
+ *
+ * === THROUGHPUT IS MEASURED, AND IT IS MEASURED HERE ===
+ *
+ * A rate needs two instants. The browser has one (now); the server has every
+ * instant, because it is the thing being polled. So the meter lives on this side
+ * and the reading travels with the verdict. Every earlier throughput statement
+ * in this project was a guess, and the UI refused to print one for exactly that
+ * reason.
+ */
+export interface LiveGateway {
+  /** The current verdict for a provider, or undefined before any traffic. */
+  verdict(provider: string): LiveVerdict | undefined;
+  /** Push one already-admitted event. The caller has already run the edge. */
+  push(provider: string, event: OmniRouteEvent): void;
+  /** Whether a provider is connected. Pushing to an unknown one is an error. */
+  connected(provider: string): boolean;
+}
+
+/** The shape `GET /api/portal/live` returns. Nulls are explicit, never omitted. */
+export interface LiveSnapshot {
+  readonly at: string;
+  readonly provider: string;
+  /** False when the process was started with no gateway at all. */
+  readonly enabled: boolean;
+  /** Null before the first event arrives. A UI must be able to tell "no data yet". */
+  readonly verdict: (LiveVerdict & { readonly synthetic: false }) | null;
+  /** Null until two observations exist. See ThroughputMeter. */
+  readonly throughput: ThroughputReading | null;
+}
+
+/** The body `POST /api/portal/ingest` accepts, after validation. */
+export interface IngestAccepted {
+  readonly provider: string;
+  readonly events: readonly OmniRouteEvent[];
+}
+
+/**
+ * The most events one ingest call may carry.
+ *
+ * A cap rather than a floor. Unbounded, this is a memory allocation sized by
+ * whoever sent the request, which is a denial-of-service reachable from the
+ * network by anyone holding a credential. 1000 events is a large batch and a
+ * small allocation.
+ */
+const MAX_INGEST_EVENTS = 1000;
+
+/**
+ * VALIDATE AN INGEST BODY.
+ *
+ * `fields` values are COERCED to strings rather than refused when a number
+ * arrives, because every column in this platform is a string and a producer that
+ * sends `{ elapsed_time: 1200 }` has done nothing wrong. Refusing it would teach
+ * the producer to quote its numbers, which is a workaround for a rule rather than
+ * a fix. A non-string, non-number value IS refused, because there is no
+ * reasonable reading of `{ port: {} }` as a column.
+ */
+export function validateIngest(body: unknown): { ok: true; value: IngestAccepted } | { ok: false; issues: readonly PortalIssue[] } {
+  const issues: PortalIssue[] = [];
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, issues: [{ path: "$", reason: "an ingest body must be an object" }] };
+  }
+  const root = body as Record<string, unknown>;
+
+  const provider = root.provider;
+  if (typeof provider !== "string" || provider.trim() === "") {
+    issues.push({ path: "$.provider", reason: "provider is required" });
+  }
+
+  const raw = root.events;
+  if (!Array.isArray(raw)) {
+    issues.push({ path: "$.events", reason: "events must be an array" });
+    return { ok: false, issues };
+  }
+  if (raw.length === 0) {
+    issues.push({ path: "$.events", reason: "events is empty" });
+    return { ok: false, issues };
+  }
+  if (raw.length > MAX_INGEST_EVENTS) {
+    issues.push({ path: "$.events", reason: `more than ${MAX_INGEST_EVENTS} events in one call` });
+    return { ok: false, issues };
+  }
+
+  const events: OmniRouteEvent[] = [];
+  raw.forEach((entry, i) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      issues.push({ path: `$.events[${i}]`, reason: "an event must be an object" });
+      return;
+    }
+    const event = entry as Record<string, unknown>;
+    const fieldsRaw = event.fields;
+    if (typeof fieldsRaw !== "object" || fieldsRaw === null || Array.isArray(fieldsRaw)) {
+      issues.push({ path: `$.events[${i}].fields`, reason: "fields must be an object" });
+      return;
+    }
+    const fields: Record<string, string> = {};
+    for (const [key, value] of Object.entries(fieldsRaw as Record<string, unknown>)) {
+      if (typeof value === "string") fields[key] = value;
+      else if (typeof value === "number" && Number.isFinite(value)) fields[key] = String(value);
+      else if (typeof value === "boolean") fields[key] = String(value);
+      else {
+        issues.push({
+          path: `$.events[${i}].fields.${key}`,
+          reason: "a field value must be a string, a finite number or a boolean",
+        });
+      }
+    }
+    const at = event.at;
+    if (at !== undefined && (typeof at !== "number" || !Number.isFinite(at))) {
+      issues.push({ path: `$.events[${i}].at`, reason: "at must be a finite number of milliseconds when present" });
+    }
+    events.push({ fields, ...(typeof at === "number" && Number.isFinite(at) ? { at } : {}) });
+  });
+
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, value: { provider: (provider as string).trim(), events } };
+}
 
 function json(status: number, body: unknown): UiResponse {
   return { status, body, headers: { ...SECURE_JSON_HEADERS } };
@@ -414,6 +553,23 @@ function derivePortal(tenant: string, registry: DynamicAgentRegistry): PortalCon
 export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
   const { registry, store } = options;
 
+  /**
+   * One meter per provider, created lazily.
+   *
+   * Lazily because a meter with no samples is indistinguishable from one that has
+   * been sampled once, and paying for it on a request path that never reads live
+   * telemetry would be waste. The map is bounded by the number of providers,
+   * which the caller chooses at boot, so this cannot grow without limit.
+   */
+  const meters = new Map<string, ThroughputMeter>();
+  const meter = (provider: string): ThroughputMeter => {
+    const existing = meters.get(provider);
+    if (existing !== undefined) return existing;
+    const created = new ThroughputMeter();
+    meters.set(provider, created);
+    return created;
+  };
+
   async function handle(
     method: string,
     path: string,
@@ -424,7 +580,9 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
     const verb = method.toUpperCase();
 
     const isSchemaWrite = verb === "POST" && clean === SCHEMA_PATH;
-    const known = clean === CONFIG_PATH || clean === AGENTS_PATH || clean.startsWith(`${SCHEMA_PATH}/`) || isSchemaWrite;
+    const isIngestWrite = verb === "POST" && clean === INGEST_PATH;
+    const known = clean === CONFIG_PATH || clean === AGENTS_PATH || clean === LIVE_PATH
+      || clean.startsWith(`${SCHEMA_PATH}/`) || isSchemaWrite || isIngestWrite;
     if (!known) {
       // 404 before proof, and the routes are not named in the refusal: naming
       // them hands a stranger the surface map, which is the reconnaissance this
@@ -465,7 +623,44 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
       }
     }
 
-    if (verb !== "GET") return json(405, { error: "this surface serves reads, and accepts one schema write" });
+    if (isIngestWrite) {
+      if (options.live === undefined) {
+        return json(503, { error: "no live gateway is attached to this process" });
+      }
+      const validation = validateIngest(body);
+      if (!validation.ok) return json(400, { error: "ingest refused", issues: validation.issues });
+      const { provider, events } = validation.value;
+      if (!options.live.connected(provider)) {
+        return json(404, { error: "no provider with that name is connected" });
+      }
+      // The credential was proven ABOVE, on the same token list every other
+      // portal route uses. The edge ran once; these events are admitted.
+      for (const event of events) options.live.push(provider, event);
+      return json(200, { accepted: events.length, refused: 0, provider });
+    }
+
+    if (clean === LIVE_PATH) {
+      const gateway = options.live;
+      const provider = options.liveProvider ?? "pega";
+      if (gateway === undefined) {
+        return json(503, { error: "no live gateway is attached to this process" });
+      }
+      const verdict = gateway.verdict(provider);
+      // An explicit null, not an omitted field: a dashboard must be able to say
+      // "connected but idle" rather than failing to parse the response.
+      const snapshot: LiveSnapshot = {
+        at: new Date().toISOString(),
+        provider,
+        enabled: true,
+        verdict: verdict === undefined ? null : { ...verdict, synthetic: false },
+        // Sampled HERE because this is the only place holding two instants. The
+        // meter is per router, so two readers cannot corrupt each other's rate.
+        throughput: verdict === undefined ? null : meter(provider).sample(verdict.records),
+      };
+      return json(200, snapshot);
+    }
+
+    if (verb !== "GET") return json(405, { error: "this surface serves reads, and accepts one schema write and one ingest write" });
 
     if (clean === CONFIG_PATH) {
       const stored = store.get(tenant);
@@ -515,6 +710,13 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
 
   return {
     handle,
-    routes: [`GET ${CONFIG_PATH}`, `GET ${AGENTS_PATH}`, `GET ${SCHEMA_PATH}/:id`, `POST ${SCHEMA_PATH}`],
+    routes: [
+      `GET ${CONFIG_PATH}`,
+      `GET ${AGENTS_PATH}`,
+      `GET ${LIVE_PATH}`,
+      `GET ${SCHEMA_PATH}/:id`,
+      `POST ${SCHEMA_PATH}`,
+      `POST ${INGEST_PATH}`,
+    ],
   };
 }
