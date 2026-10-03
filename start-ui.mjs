@@ -37,7 +37,14 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 function parseArgs(argv) {
   const options = {
     workspace: process.env.WEDGE_WORKSPACE ?? path.join(ROOT, "ui-workspace"),
-    port: Number(process.env.PORT ?? 3000),
+    // 8080, not 3000. The handoff declares 8080 as the wedge contract, and
+    // `frontend/vite.config.ts` proxies `/api` to it. Those two had drifted -- the
+    // proxy moved to 8080 and this default stayed at 3000 -- so a plain `npm run
+    // dev` and a plain `npm start` in `frontend/` disagreed about the address,
+    // and the disagreement surfaced as a proxy refusing a connection to nothing.
+    // One default, declared once, is what stops that recurring. `--port` still
+    // overrides it.
+    port: Number(process.env.PORT ?? 8080),
     // LOOPBACK BY DEFAULT, and the default is the security property. The
     // container is the one case that needs a wider bind, and it is an explicit
     // opt-in rather than a default that happens to suit one deployment.
@@ -68,7 +75,9 @@ function usage() {
     "",
     "  workspace   directory the tool may read CSVs from and write reports into",
     "              (default: ./ui-workspace)",
-    "  --port N    port to bind (default: 3000, or $PORT)",
+    "  --port N    port to bind (default: 8080, or $PORT). 8080 is the declared",
+    "              wedge contract and is what the Command Center's dev proxy",
+    "              targets; a different value needs the proxy changed to match.",
     "  --host H    interface to bind. DEFAULT 127.0.0.1, and the default is the",
     "              security property: this process reads your files, so a listener",
     "              on every interface turns a local tool into a remote one.",

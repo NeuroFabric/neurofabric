@@ -84,16 +84,20 @@ describe("token storage", () => {
     expect(normaliseToken("")).toBeNull();
   });
 
-  it("prefers the environment over storage", () => {
+  it("prefers a STORED credential over the environment, because a person outranks a default", () => {
+    // The order is the fix, not an incidental choice. With the environment first, a
+    // value typed into the prompt was read, stored, and then ignored -- so an
+    // operator correcting a refused credential watched the correction do nothing,
+    // which is indistinguishable from the server rejecting it.
     const storage = memoryTokenStorage("from-storage");
-    expect(initialToken("from-env", storage)).toBe("from-env");
+    expect(initialToken("from-env", storage)).toBe("from-storage");
   });
 
-  it("falls through to storage when the environment is absent or blank", () => {
-    // A variable that is present but empty must NOT become a blank-token crash.
-    expect(initialToken(undefined, memoryTokenStorage("from-storage"))).toBe("from-storage");
-    expect(initialToken("", memoryTokenStorage("from-storage"))).toBe("from-storage");
-    expect(initialToken("   ", memoryTokenStorage("from-storage"))).toBe("from-storage");
+  it("uses the environment as the default when nothing has been stored", () => {
+    // This is what keeps an unattended boot working: no human, nothing stored, and
+    // the configured value is what the client presents.
+    expect(initialToken("from-env", memoryTokenStorage(null))).toBe("from-env");
+    expect(initialToken(undefined, memoryTokenStorage(null))).toBeNull();
   });
 
   it("falls through to the prompt when neither source has one", () => {

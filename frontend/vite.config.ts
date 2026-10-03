@@ -33,10 +33,19 @@ export default defineConfig({
       // browser same-origin, so the credential header never has to survive a
       // cross-origin preflight in development.
       //
-      // Port 8080, not 3000: Omniroute is a separate product that already binds
-      // 3000 on this machine, and two services fighting over a port is a
-      // confusing failure for whoever hits it. Start the wedge with
-      // `npm run dev -- --port 8080`.
+      // Port 8080. THE PREVIOUS COMMENT HERE WAS WRONG and is worth recording,
+      // because a plausible false story is more expensive than no story: it said
+      // OmniRoute already binds 3000 on this machine, so the move to 8080 was to
+      // avoid a collision. Nothing bound 3000. The listener that had been there
+      // was this repository's own wedge, started by hand on its own default --
+      // which is the same process, so "two services fighting over a port" was not
+      // a risk that existed. The change to 8080 stands; the reason for it did not.
+      //
+      // What 8080 actually buys is one declared address. The handoff fixes the
+      // wedge contract at 8080 and `start-ui.mjs` now defaults to it, so this
+      // target and that default are the same number rather than two numbers that
+      // drifted apart -- which is exactly how a proxy ended up pointing at a port
+      // with nothing behind it.
       "/api": {
         target: "http://127.0.0.1:8080",
         changeOrigin: false,
