@@ -361,3 +361,48 @@ test("the reservoir is BOUNDED, which is the whole claim", async () => {
 
   await rm(file, { force: true });
 });
+test("THE EVENT LOOP STAYS FREE while a large file is analysed", async (t) => {
+  // The production defect Phase 13 exists to remove, asserted rather than argued.
+  //
+  // The full-file pass used to be a synchronous `readSync` loop. That is correct
+  // for a CLI and wrong for a server: the thread is held for the duration of the
+  // file, so one large export stalls every OTHER connection in the process. In a
+  // multi-tenant deployment that is not a slow request, it is a frozen service.
+  //
+  // THE ASSERTION IS TIMING, NOT CORRECTNESS. Every other test in this file checks
+  // the ANSWER, and the answer was equally right under the blocking reader -- which
+  // is exactly why nothing caught it. So this one counts timer ticks that fired
+  // DURING the analysis: if the reader yields to the event loop at all, the timer
+  // runs. Under the old driver this number was zero, every time.
+  const cwd = await makeTempWorkspace("nf-eventloop-");
+  const file = path.join(cwd, "large.csv");
+  const ROWS = 40_000;
+
+  const out = createWriteStream(file, { encoding: "utf8", highWaterMark: 1 << 20 });
+  out.write("_time,alertType,elapsed_ms\n");
+  for (let start = 0; start < ROWS; start += 5_000) {
+    let chunk = "";
+    for (let i = start; i < Math.min(start + 5_000, ROWS); i += 1) {
+      const hour = String(i % 24).padStart(2, "0");
+      chunk += `2026-09-30T${hour}:00:00Z,code-${i % 7},${100 + (i % 900)}\n`;
+    }
+    if (!out.write(chunk)) await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+  }
+  await new Promise<void>((resolve, reject) => {
+    out.end((error?: Error | null) => (error ? reject(error) : resolve()));
+  });
+
+  const csv = await csvRead({ path: file });
+
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  const analysis = await analyseBottlenecks(csv);
+  clearInterval(timer);
+
+  t.diagnostic(`${ROWS} rows analysed with ${ticks} timer tick(s) during the pass`);
+  assert.equal(analysis.totalRows, ROWS, "and the analysis still produced its answer");
+  assert.ok(ticks > 0,
+    `the event loop was never yielded to: the timer fired ${ticks} times during a ${ROWS}-row analysis. ` +
+    "A synchronous reader returns the right answer while starving every other request in the process, " +
+    "and no assertion about the ANSWER can ever catch that.");
+});
