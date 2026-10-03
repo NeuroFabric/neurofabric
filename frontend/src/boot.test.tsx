@@ -232,6 +232,15 @@ describe("CredentialPrompt", () => {
     expect(html).not.toContain("gw-");
   });
 
+  it("masks the characters in CSS while staying a plain text element", () => {
+    // The mask is presentational and that is the honest limit: `type="text"`
+    // keeps the DOM honest about the value being plain text, and
+    // `-webkit-text-security` hides the characters from a shoulder-surfer.
+    const html = render(<CredentialPrompt onSubmit={() => {}} />);
+    expect(html).toContain('type="text"');
+    expect(html).toContain("-webkit-text-security:disc");
+  });
+
   it("shows a supplied error", () => {
     expect(text(render(<CredentialPrompt onSubmit={() => {}} error="that credential could not be used" />))).toContain(
       "that credential could not be used",

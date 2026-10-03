@@ -1,4 +1,4 @@
-import type { FormEvent, ReactElement } from "react";
+import type { CSSProperties, FormEvent, ReactElement } from "react";
 import { useState } from "react";
 
 import { normaliseToken } from "../token-storage";
@@ -16,19 +16,37 @@ import { normaliseToken } from "../token-storage";
  * So the credential is collected HERE, before anything tries to build a client,
  * and the tree either has a working client or has this form. Never neither.
  *
- * === ON THE INPUT TYPE ===
+ * === ON THE INPUT TYPE, AND HOW THE MASK IS ACHIEVED ===
  *
- * This is `type="text"`, not a masked input, and that is a deliberate
- * compromise rather than an oversight. The project's vocabulary rules forbid
- * the word that the masked-input type is spelled with, so the obvious fix is
- * unavailable. A credential entry box that is not masked is shoulder-surfable,
- * which is a real and accepted cost of the naming rule -- recorded here so it is
- * a decision with an owner rather than an accident. `autoComplete="off"` and
- * `spellCheck={false}` are set so the browser neither stores nor spellchecks it.
+ * This is `type="text"`, and the masking is done in CSS. The project's
+ * vocabulary rules forbid the word that the masked-input type is spelled with,
+ * so the element keeps `type="text"` -- which is also the more honest choice,
+ * because it states plainly that the value is plain text in the DOM -- and the
+ * characters are hidden by `-webkit-text-security: disc`.
  *
- * The value is never echoed into the DOM after submission: it lives in React
- * state, which is memory, and is not written into the document.
+ * So the protection is PRESENTATIONAL, and that limitation is worth being clear
+ * about: the value is still plain text in the document, in React state, and to
+ * anything reading the DOM. Masking stops a shoulder-surfer; it does not stop a
+ * script. The real protection for the credential remains that it is never
+ * persisted beyond the tab and never logged anywhere.
+ *
+ * `autoComplete="off"` and `spellCheck={false}` keep the browser from storing or
+ * spellchecking it. The value is never echoed into the document after
+ * submission: it lives in React state, which is memory.
  */
+
+/**
+ * `-webkit-text-security` has no entry in React's `CSSProperties`, because it is
+ * a vendor-prefixed property React's types predate. Rather than widening the
+ * global type for one declaration -- which would make the cast invisible to every
+ * future reader -- the shape is declared here and used at the single call site
+ * that needs it.
+ */
+type MaskedInputStyle = CSSProperties & { readonly WebkitTextSecurity: string };
+
+/** `disc` renders one filled circle per character, like a standard masked field. */
+const MASKED: MaskedInputStyle = { WebkitTextSecurity: "disc" };
+
 export interface CredentialPromptProps {
   readonly onSubmit: (token: string) => void;
   /** Shown when the client could not be built from a credential that was entered. */
@@ -62,13 +80,12 @@ export function CredentialPrompt({ onSubmit, error }: CredentialPromptProps): Re
 
         <label className="gate__field" htmlFor="gatewayToken">
           <span>Gateway credential</span>
-          {/* Not echoed, never stored in the document, and masked by nothing --
-              see the note above about the project's vocabulary rules. */}
           <input
             id="gatewayToken"
             name="command-center-gateway-token"
             className="gate__input"
             type="text"
+            style={MASKED}
             value={value}
             autoComplete="off"
             spellCheck={false}
