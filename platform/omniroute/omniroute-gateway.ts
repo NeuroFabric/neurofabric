@@ -1,6 +1,323 @@
 import { StreamBroker, type BrokerSnapshot, type BrokerRecord } from "../conductor/stream-broker.ts";
 import { evaluateLive, liveFindings, type LiveVerdict } from "../conductor/live-anomaly.ts";
 import { guard, TokenBucket, type EdgeDecision, type EdgeRequest, type GatewayToken } from "./edge-security.ts";
+import type { DynamicAgent, DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
+import type { DiagnosticResult, TelemetryEvent } from "../swarm/diagnostic-agent.ts";
+
+/**
+ * TENANT ROUTING: from a proven credential to the customer's own agents.
+ *
+ * === THE CORRELATION IS THE WHOLE POINT, AND IT IS ONE LOOKUP ===
+ *
+ * `guard` has already proved who the caller is and returned the token's id. That
+ * id IS the tenant. So routing is a single map lookup against the live registry,
+ * and it happens AFTER proof -- never before. A router that resolved a tenant from
+ * anything in the request body or the URL would be a tenant parameter an attacker
+ * chooses, and the rest of this class would be security theatre.
+ *
+ * Agents are resolved from the registry on EVERY route rather than cached in a
+ * table. A cache would need invalidation, and an invalidation bug presents as
+ * "the customer's new rule never fired", which is the hardest failure in a product
+ * whose whole promise is that a written rule is live. A Map lookup is O(1); there
+ * is no cheaper answer than the right one.
+ *
+ * === EXCLUSIVELY, AND WHAT THAT COSTS ===
+ *
+ * A tenant's events reach that tenant's agents and no others. There is no
+ * broadcast, no shared lane, and no cross-tenant aggregate: the isolation is
+ * structural (separate lane, separate agent set) rather than a filter applied
+ * after the fact. A filter is one forgotten predicate away from a leak; a separate
+ * queue cannot leak because there is nothing shared to leak through.
+ *
+ * === WHY THERE IS A BOUNDED QUEUE PER LANE ===
+ *
+ * Because "exclusively to it" is only true while the lane keeps up. If events
+ * arrive faster than the agent evaluates them, an unbounded queue is a memory leak
+ * reachable by anyone holding a credential, and it is reached by sending ordinary
+ * traffic during an incident. So each lane has a hard depth: past it, events are
+ * DROPPED and COUNTED, the push reports that it dropped, and the lane's verdict
+ * says so. Dropping a telemetry event under sustained overload is the right failure
+ * for a diagnostic platform: the engine reports what it saw and admits what it
+ * missed, rather than growing until it is killed.
+ *
+ * === WHY VERDICTS ARE KEPT IN A RING, NOT A LIST ===
+ *
+ * Same reason, one level up. A per-tenant history is exactly the kind of unbounded
+ * array a long-lived process accumulates, and a portal asking for "the last
+ * verdict" does not need the four thousand before it.
+ */
+
+/** Events a lane will hold before it starts dropping. Per tenant. */
+const DEFAULT_LANE_DEPTH = 4096;
+/** Verdicts a lane keeps for its portal. Per tenant. */
+const DEFAULT_VERDICT_RING = 32;
+
+export interface TenantRouteOutcome {
+  readonly tenant: string;
+  readonly accepted: boolean;
+  /** The agents this event was handed to. Empty when the tenant has no agent for the stream. */
+  readonly agentIds: readonly string[];
+  readonly dropped?: boolean;
+  /** True when the tenant has no agent at all, so the caller learns why nothing happened. */
+  readonly unrouted?: boolean;
+}
+
+/** ONE TENANT'S LANE. Private because its whole job is to be a separate queue. */
+class TenantLane {
+  private queue: TelemetryEvent[] = [];
+  private agents: readonly DynamicAgent[];
+  private readonly verdicts: DiagnosticResult[] = [];
+  private readonly tenant: string;
+  private readonly depth: number;
+  private readonly ring: number;
+  private wake: (() => void) | null = null;
+  private draining = false;
+  private accepted = 0;
+  private dropped = 0;
+  private unrouted = 0;
+
+  // Not a parameter property: Node's strip-only type erasure cannot erase one.
+  constructor(tenant: string, agents: DynamicAgent[], depth: number, ring: number) {
+    this.tenant = tenant;
+    this.agents = agents;
+    this.depth = depth;
+    this.ring = ring;
+  }
+
+  get agentIds(): readonly string[] {
+    return this.agents.map((agent) => agent.id);
+  }
+
+  /** Swap in a freshly resolved agent set, so a hot-loaded schema takes effect now. */
+  reconfigure(agents: readonly DynamicAgent[]): void {
+    // Compared rather than assigned unconditionally. Every event re-resolves the
+    // agent set (that is how a hot-loaded schema is picked up with no cache to
+    // invalidate), and assigning an identical array on each one would churn the
+    // lane's agent list at the event rate for no observable difference.
+    if (this.agents.length === agents.length) {
+      let identical = true;
+      for (let i = 0; i < agents.length; i += 1) {
+        if (this.agents[i]?.id !== agents[i]?.id) { identical = false; break; }
+      }
+      if (identical) return;
+    }
+    this.agents = agents;
+  }
+
+  push(event: TelemetryEvent): boolean {
+    if (this.queue.length >= this.depth) {
+      this.dropped += 1;
+      return false;
+    }
+    this.queue.push(event);
+    this.accepted += 1;
+    const wake = this.wake;
+    this.wake = null;
+    wake?.();
+    return true;
+  }
+
+  /**
+   * Start a drain if one is not already running. Returns the in-flight promise, or
+   * undefined when a drain is already under way.
+   *
+   * The `draining` flag is the whole of the concurrency control, and it matters:
+   * two overlapping drains would each pull from the same queue and each report
+   * half the events, so a verdict would describe a fraction of what happened while
+   * claiming to describe all of it.
+   *
+   * The drain is a LOOP, not a single pass, and that is not an optimisation. An
+   * event that arrives while a drain is running lands in a fresh queue; if the
+   * drain took one batch and stopped, that event would sit there until something
+   * else happened to arrive, and the tenant would silently stop being diagnosed
+   * at exactly the moment they were busiest.
+   */
+  startDrain(): Promise<void> | undefined {
+    if (this.draining || this.queue.length === 0) return undefined;
+    this.draining = true;
+    const lane = this;
+    return (async () => {
+      try {
+        while (lane.queue.length > 0) {
+          const events = lane.queue;
+          lane.queue = [];
+          if (lane.agents.length === 0) {
+            lane.unrouted += events.length;
+            continue;
+          }
+          for (const agent of lane.agents) {
+            // One diagnose per agent over the SAME drained slice. Streaming the
+            // slice separately per agent would re-read it N times from memory.
+            const stream = (async function* () {
+              for (const event of events) yield event;
+            })();
+            lane.pushVerdict(await agent.diagnose({ prompt: "", stream }));
+          }
+        }
+      } finally {
+        lane.draining = false;
+      }
+    })();
+  }
+
+  private pushVerdict(result: DiagnosticResult): void {
+    this.verdicts.push(result);
+    while (this.verdicts.length > this.ring) this.verdicts.shift();
+  }
+
+  get pending(): number {
+    return this.queue.length;
+  }
+
+  get isDraining(): boolean {
+    return this.draining;
+  }
+
+  /** Recent verdicts, oldest first. Bounded by the ring. */
+  history(): readonly DiagnosticResult[] {
+    return [...this.verdicts];
+  }
+
+  /** The most recent verdict, or undefined before the first drain. */
+  latest(): DiagnosticResult | undefined {
+    return this.verdicts[this.verdicts.length - 1];
+  }
+
+  stats(): Record<string, number> {
+    return {
+      accepted: this.accepted,
+      dropped: this.dropped,
+      unrouted: this.unrouted,
+      pending: this.queue.length,
+      agents: this.agents.length,
+      verdictsRetained: this.verdicts.length,
+    };
+  }
+}
+
+export interface TenantRouterOptions {
+  readonly laneDepth?: number;
+  readonly verdictRing?: number;
+}
+
+/**
+ * THE ROUTING MAP. Credential to customer to agents.
+ *
+ * Resolves a tenant's agents from the registry on every route, so a schema created
+ * a moment ago is already reachable and no invalidation can forget it.
+ */
+export class TenantRouter {
+  private readonly lanes = new Map<string, TenantLane>();
+  private readonly inFlight = new Set<Promise<void>>();
+  private readonly registry: DynamicAgentRegistry;
+  private readonly depth: number;
+  private readonly ring: number;
+  private routed = 0;
+
+  // Not a parameter property: Node's strip-only type erasure cannot erase one, and
+  // this repository has now been reminded of that several times over.
+  constructor(registry: DynamicAgentRegistry, options: TenantRouterOptions = {}) {
+    this.registry = registry;
+    this.depth = options.laneDepth ?? DEFAULT_LANE_DEPTH;
+    this.ring = options.verdictRing ?? DEFAULT_VERDICT_RING;
+  }
+
+  /** The agents a tenant owns that declare interest in `stream`, or every agent if none declare any. */
+  agentsFor(tenant: string, stream?: string): readonly DynamicAgent[] {
+    const owned = this.registry.ids(tenant)
+      .map((composite) => this.registry.getByCompositeId(composite))
+      .filter((agent): agent is DynamicAgent => agent !== undefined);
+    if (owned.length === 0) return [];
+    if (stream === undefined || stream === "") return owned;
+    // A schema that declared no streams consumes everything; one that declared some
+    // consumes only those. The registry's own rule, reused rather than restated,
+    // because two implementations of "which streams is this agent for" would
+    // disagree at exactly the moment it mattered.
+    const interested = owned.filter((agent) => agent.schema.streams.length === 0
+      || agent.schema.streams.includes(stream));
+    return interested;
+  }
+
+  /** Route one PROVEN tenant's event to that tenant's agents, and nothing else. */
+  route(tenant: string, event: TelemetryEvent): TenantRouteOutcome {
+    const stream = event.partition ?? event.fields.stream ?? event.fields.partition;
+    const agents = this.agentsFor(tenant, stream);
+
+    const lane = this.laneFor(tenant);
+    lane.reconfigure(agents);
+
+    if (agents.length === 0) {
+      // Counted and reported. Swallowing an event for a tenant with no agent is how
+      // "the platform received nothing" becomes indistinguishable from "the
+      // platform received nothing because it dropped it".
+      return { tenant, accepted: false, agentIds: [], unrouted: true };
+    }
+
+    const accepted = lane.push(event);
+    this.routed += 1;
+    this.track(lane.startDrain());
+    return {
+      tenant,
+      accepted,
+      agentIds: lane.agentIds,
+      ...(accepted ? {} : { dropped: true }),
+    };
+  }
+
+  private laneFor(tenant: string): TenantLane {
+    const existing = this.lanes.get(tenant);
+    if (existing !== undefined) return existing;
+    const lane = new TenantLane(tenant, [], this.depth, this.ring);
+    this.lanes.set(tenant, lane);
+    return lane;
+  }
+
+  private track(promise: Promise<void> | undefined): void {
+    if (promise === undefined) return;
+    this.inFlight.add(promise);
+    void promise.finally(() => { this.inFlight.delete(promise); });
+  }
+
+  /**
+   * Await every drain, including drains started by one.
+   *
+   * Loops because a drain can finish and leave events queued behind it -- an event
+   * that arrived while the previous drain was running. Awaiting the first pass
+   * only would return before those were judged, and a caller would read a verdict
+   * that does not describe what it just pushed.
+   */
+  async settled(): Promise<void> {
+    while (this.inFlight.size > 0) {
+      await Promise.all([...this.inFlight]);
+    }
+  }
+
+  /** The most recent verdict for a tenant, or undefined before the first drain. */
+  latest(tenant: string): DiagnosticResult | undefined {
+    return this.lanes.get(tenant)?.latest();
+  }
+
+  history(tenant: string): readonly DiagnosticResult[] {
+    return this.lanes.get(tenant)?.history() ?? [];
+  }
+
+  stats(tenant?: string): Record<string, number> {
+    if (tenant !== undefined) {
+      return this.lanes.get(tenant)?.stats() ?? { accepted: 0, dropped: 0, unrouted: 0, pending: 0, agents: 0, verdictsRetained: 0 };
+    }
+    let accepted = 0;
+    let dropped = 0;
+    let unrouted = 0;
+    for (const lane of this.lanes.values()) {
+      const stats = lane.stats();
+      accepted += stats.accepted ?? 0;
+      dropped += stats.dropped ?? 0;
+      unrouted += stats.unrouted ?? 0;
+    }
+    return { tenants: this.lanes.size, routed: this.routed, accepted, dropped, unrouted };
+  }
+}
+
 
 /**
  * OMNIROUTE: the universal ingress for live events, and the single door every
@@ -142,6 +459,17 @@ export class OmniRouteGateway {
   /** How many bulk streams each provider has opened, so each gets its own partition. */
   private readonly streams = new Map<string, number>();
 
+  /**
+   * THE TENANT ROUTER, when one is attached.
+   *
+   * Attaching one REDIRECTS admitted pushes: they go to the proven tenant's own
+   * agents instead of to that provider's legacy broker. Stated as a behaviour
+   * change rather than buried, because the alternative -- running both paths
+   * silently -- would mean every tenant's events sat in two places, one of them
+   * with no tenant boundary at all.
+   */
+  private tenantRouter: TenantRouter | undefined;
+
   // Not a parameter property: Node's strip-only type erasure cannot erase them,
   // which this repository has now learned four times over.
   constructor(options: GatewayOptions = {}) {
@@ -184,6 +512,40 @@ export class OmniRouteGateway {
   }
 
   /**
+   * ATTACH A TENANT ROUTER.
+   *
+   * Separate from the constructor because the router needs a registry, and a
+   * gateway that knows about a registry is a gateway that knows about agents. The
+   * wiring is explicit so the dependency is visible at the call site rather than
+   * inferred from a configuration object.
+   */
+  attachTenantRouter(router: TenantRouter): () => void {
+    this.tenantRouter = router;
+    return () => {
+      if (this.tenantRouter === router) this.tenantRouter = undefined;
+    };
+  }
+
+  /**
+   * ROUTE AN EVENT TO A PROVEN TENANT, WITHOUT THE PROVIDER BROKER.
+   *
+   * Takes the same `EdgeRequest` the ingress does, so the proof happens here
+   * exactly once and by exactly the same function. The decision is returned rather
+   * than thrown, for the same reason `pushAdmitted` does: a refused push is an
+   * ordinary outcome of a public ingress.
+   */
+  pushToTenant(request: EdgeRequest, event: OmniRouteEvent): EdgeDecision & {
+    readonly routing?: TenantRouteOutcome;
+  } {
+    const decision = guard(request, this.options.tokens ?? [], this.options.limiter);
+    if (!decision.ok) return decision;
+    const tenant = decision.tokenId;
+    if (tenant === undefined || this.tenantRouter === undefined) return decision;
+    const routing = this.tenantRouter.route(tenant, toTelemetryEvent(event));
+    return { ...decision, routing };
+  }
+
+  /**
    * THE EDGE CALL. Prove the caller, then push its event.
    *
    * The decision is RETURNED rather than thrown. A refused push is an ordinary
@@ -194,10 +556,17 @@ export class OmniRouteGateway {
    * The check runs BEFORE the push, so a refused event never reaches the broker
    * and never costs the engine anything. That ordering is the entire point of an
    * edge: the maths is the expensive part, and it must not run for strangers.
+   *
+   * With a tenant router attached the event goes to the proven TENANT's agents and
+   * to nothing else; without one it goes to the provider broker as it always has.
    */
   pushAdmitted(request: EdgeRequest, event: OmniRouteEvent): EdgeDecision {
     const decision = guard(request, this.options.tokens ?? [], this.options.limiter);
     if (!decision.ok) return decision;
+    if (this.tenantRouter !== undefined && decision.tokenId !== undefined) {
+      this.tenantRouter.route(decision.tokenId, toTelemetryEvent(event));
+      return decision;
+    }
     this.push(request.provider, event);
     return decision;
   }
@@ -340,4 +709,24 @@ export class OmniRouteGateway {
 
 export function createGateway(options: GatewayOptions = {}): OmniRouteGateway {
   return new OmniRouteGateway(options);
+}
+
+/**
+ * ADAPT A GATEWAY EVENT TO THE SWARM'S EVENT SHAPE.
+ *
+ * Structural, not a translation: the two types were declared to be the same shape,
+ * which is what lets a provider adapter be a widening rather than a mapper.
+ *
+ * The stream name is lifted onto `partition` when the event carries one, because
+ * that is what a tenant's schema declares interest in. Lifting it here rather than
+ * leaving the agent to dig into `fields` means the routing decision and the
+ * evaluation decision read the stream from the same place.
+ */
+function toTelemetryEvent(event: OmniRouteEvent): TelemetryEvent {
+  const stream = event.fields.stream ?? event.fields.partition;
+  return {
+    fields: event.fields,
+    ...(event.at === undefined ? {} : { at: event.at }),
+    ...(stream === undefined ? {} : { partition: stream }),
+  };
 }
