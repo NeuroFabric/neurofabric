@@ -69,10 +69,13 @@ export function severityFromSarifLevel(level: unknown): Severity | undefined {
 export function severityFromRiskCode(code: unknown): Severity | undefined {
   const value = Number.parseInt(String(code ?? "").trim(), 10);
   if (Number.isNaN(value)) return undefined;
+  // ZAP: 3 high, 2 medium, 1 low, 0 informational. Low maps to warning rather
+  // than to info because a confirmed low is still a confirmed finding, and
+  // reserving "info" for informational keeps "no findings" unambiguous.
   if (value >= 3) return "critical";
-  if (value === 2) return "warning";
-  if (value <= 1) return "warning";
-  return "info";
+  if (value >= 1) return "warning";
+  if (value === 0) return "info";
+  return undefined;
 }
 
 /**
@@ -175,11 +178,20 @@ function readSarifLocation(locations: unknown): string | undefined {
 export class ZapXmlScanner {
   private current: Record<string, string> | undefined;
   private inAlert = false;
-  private depth = 0;
+  /**
+   * The open element names, innermost last.
+   *
+   * A stack rather than a counter, and the reason is ZAP's own shape: `<alert>` is
+   * BOTH the container element AND one of its fields, so a report reads
+   * `<alert>...<alert>SQL Injection</alert>...</alert>`. A scanner that watches
+   * for the tag name alone emits on the INNER close and every finding it produces
+   * is a fragment. Depth cannot disambiguate that; the nesting can.
+   */
+  private stack: string[] = [];
   private dropped = 0;
   private alerts = 0;
 
-  /** Alerts whose depth exceeded the cap, and were therefore not parsed. */
+  /** Alerts abandoned because their depth exceeded the cap, and not parsed. */
   get droppedAlerts(): number {
     return this.dropped;
   }
@@ -188,43 +200,55 @@ export class ZapXmlScanner {
     return this.alerts;
   }
 
-  /** Feed one line. Returns a finding when the line CLOSED an alert. */
+  /**
+   * Feed one line. Returns a finding when the line CLOSED an alert.
+   *
+   * Every tag in the line is walked in document order, not just the first of each
+   * kind: a ZAP alert is normally written on ONE line with eight tags in it, and
+   * a scanner that looked only at the first open and the first close tag would
+   * read one field per alert.
+   */
   push(line: string): ParsedFinding | undefined {
     // Tag extraction without an XML parser: this is not general XML, it is one
     // known report shape, and a general parser would need a dependency the
     // platform does not have (D-018) or a hand-rolled one that is worse.
-    const open = /<([a-zA-Z][\w-]*)(?:\s[^>]*)?>/.exec(line);
-    const close = /<\/([a-zA-Z][\w-]*)>/.exec(line);
-    const selfClosing = /<([a-zA-Z][\w-]*)[^>]*\/>/.exec(line);
+    const tags = /<(\/?)([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+    let match: RegExpExecArray | null;
 
-    if (open !== null && open.index < (close?.index ?? Number.MAX_SAFE_INTEGER)) {
-      this.depth += 1;
-      if (this.depth > MAX_OPEN_ELEMENTS) {
-        this.dropped += 1;
-        this.current = undefined;
-        return undefined;
-      }
-      const tag = open[1]!.toLowerCase();
-      if (tag === "alert") {
-        this.inAlert = true;
-        this.current = {};
-      }
-    }
+    while ((match = tags.exec(line)) !== null) {
+      const closing = match[1] === "/";
+      const name = match[2]!.toLowerCase();
+      if (match[4] === "/") continue; // self-closing: no value, no children
 
-    if (close !== null) {
-      this.depth = Math.max(0, this.depth - 1);
-      const tag = close[1]!.toLowerCase();
-      if (tag === "alert" && this.inAlert) {
-        const emitted = this.emit();
+      if (!closing) {
+        if (this.stack.length >= MAX_OPEN_ELEMENTS) {
+          // Bounded depth. Dropping the alert and resynchronising is better than
+          // growing a stack for a malformed document, and the drop is counted.
+          this.dropped += 1;
+          this.reset();
+          return undefined;
+        }
+        // A leaf value is the text between this tag and its own closing tag.
+        this.capture(name, line, match.index + match[0].length);
+        if (name === "alert" && !this.inAlert) {
+          this.inAlert = true;
+          this.current = {};
+        }
+        this.stack.push(name);
+        continue;
+      }
+
+      const at = this.stack.lastIndexOf(name);
+      if (at === -1) continue; // a stray close tag: ignore rather than desync
+      this.stack.length = at;
+      // Emit only when the alert CONTAINER closes, which is the close that leaves
+      // no `alert` still open. The inner field's close leaves one behind.
+      if (name === "alert" && this.inAlert && !this.stack.includes("alert")) {
+        const finding = this.emit();
         this.inAlert = false;
         this.current = undefined;
-        return emitted;
+        return finding;
       }
-    }
-
-    if (this.current !== undefined && selfClosing !== null) {
-      this.depth = Math.max(0, this.depth - 1);
-      this.capture(selfClosing[1]!.toLowerCase(), line);
     }
     return undefined;
   }
@@ -232,17 +256,36 @@ export class ZapXmlScanner {
   /** Call at end of stream, for a report whose last `</alert>` was never written. */
   flush(): ParsedFinding | undefined {
     if (!this.inAlert || this.current === undefined) return undefined;
-    const emitted = this.emit();
-    this.inAlert = false;
-    this.current = undefined;
-    return emitted;
+    const finding = this.emit();
+    this.reset();
+    return finding;
   }
 
-  private capture(tag: string, line: string): void {
-    if (this.current === undefined || this.current[tag] !== undefined) return;
-    const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "i").exec(line);
-    if (m === null) return;
-    this.current[tag] = truncate(m[1]!.trim());
+  private reset(): void {
+    this.inAlert = false;
+    this.current = undefined;
+    this.stack = [];
+  }
+
+  /**
+   * Record a leaf value, if this element is one.
+   *
+   * "Leaf" means the very next tag in the line closes it. A container's text is
+   * markup, not a value, and storing it would put `<pluginid>10021</pluginid>` in
+   * a field called `alert`.
+   */
+  private capture(name: string, line: string, from: number): void {
+    if (this.current === undefined || this.current[name] !== undefined) return;
+    const next = line.indexOf("<", from);
+    if (next === -1) return; // no closing tag on this line
+    const between = line.slice(from, next);
+    // The next tag must be THIS element's close. Anything else means the element
+    // is a container and its "value" is markup, which must not be stored: putting
+    // `<pluginid>10021</pluginid>` into a field called `alert` is how a scanner
+    // produces findings nobody can read.
+    const closer = new RegExp(`^</${name}\\s*>`).exec(line.slice(next));
+    if (closer === null) return;
+    this.current[name] = truncate(between.trim());
   }
 
   private emit(): ParsedFinding | undefined {

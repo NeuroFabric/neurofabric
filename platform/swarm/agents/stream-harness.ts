@@ -1,3 +1,5 @@
+import type { DiagnosticFinding, FindingSeverity } from "../diagnostic-agent.ts";
+
 /**
  * THE STREAMING SUBSTRATE. Shared by every hydrated agent, because three copies
  * of it would be three different definitions of O(1).
@@ -353,5 +355,157 @@ export async function* fieldsToLines(
 ): AsyncGenerator<string> {
   for await (const event of events) {
     yield format(event.fields);
+  }
+}
+
+/**
+ * A FIXED-LIST FINDING COLLECTOR THAT DISPLACES BY SEVERITY.
+ *
+ * Shared because every hydrated agent needs one, and three implementations of
+ * "keep the important ones" will disagree about which ones are important.
+ *
+ * The cap is a hard bound on the returned array, which is what makes a verdict
+ * safe to serialise into an HTTP response. What was displaced is COUNTED and the
+ * count is published, because a silently truncated finding list reads as a
+ * complete one -- and a reader who acts on "no critical findings" when the cap
+ * hid one has been harmed by the memory optimisation, not helped by it.
+ */
+export class FindingSink {
+  private readonly kept: DiagnosticFinding[] = [];
+  private readonly rank: Record<FindingSeverity, number>;
+  private readonly cap: number;
+  private droppedCount = 0;
+
+  constructor(cap = 200) {
+    this.cap = Math.max(1, Math.floor(cap));
+    this.rank = { critical: 0, warning: 1, info: 2 };
+  }
+
+  /**
+   * Offer a finding. Once full, a finding displaces the LEAST severe retained one
+   * and only if it outranks it.
+   *
+   * Displacing rather than first-wins is deliberate: a flood of info-level noise
+   * must not push a critical finding out of the report, which is precisely what a
+   * plain "first N wins" cap does on a noisy stream.
+   */
+  offer(finding: DiagnosticFinding): void {
+    if (this.kept.length < this.cap) {
+      this.kept.push(finding);
+      return;
+    }
+    this.droppedCount += 1;
+    let worstAt = -1;
+    for (let i = 0; i < this.kept.length; i += 1) {
+      if (worstAt === -1 || this.rank[this.kept[i]!.severity] > this.rank[this.kept[worstAt]!.severity]) {
+        worstAt = i;
+      }
+    }
+    if (worstAt !== -1 && this.rank[finding.severity] < this.rank[this.kept[worstAt]!.severity]) {
+      this.kept[worstAt] = finding;
+    }
+  }
+
+  /** The retained findings. Bounded by `cap`, always. */
+  get findings(): readonly DiagnosticFinding[] {
+    return this.kept;
+  }
+
+  /** How many offers were not retained. Zero means the list is complete. */
+  get omitted(): number {
+    return this.droppedCount;
+  }
+
+  get retained(): number {
+    return this.kept.length;
+  }
+
+  countAt(severity: FindingSeverity): number {
+    let n = 0;
+    for (const finding of this.kept) if (finding.severity === severity) n += 1;
+    return n;
+  }
+}
+
+/**
+ * A RATE WINDOW IN A FIXED RING OF BUCKETS.
+ *
+ * The alternative -- an array of event timestamps, or a Map of window key to
+ * count -- is O(events in the window), which is the one thing a stream cannot
+ * afford. A ring of `ceil(windowMs / bucketMs)` integers is O(windowMs/bucketMs)
+ * regardless of throughput: a million events a second and ten events a second
+ * cost the same memory.
+ *
+ * The trade is stated rather than hidden: the count is exact to BUCKET
+ * RESOLUTION, not to the millisecond, so a rule that fires exactly at the
+ * boundary can be off by one bucket's worth of events. The window's resolution is
+ * published in the agent's stats, because a rate limit whose accuracy nobody can
+ * name is not a rate limit.
+ */
+export class RateWindow {
+  private readonly buckets: Int32Array;
+  private readonly bucketMs: number;
+  private readonly bucketCount: number;
+  /**
+   * The UNMODDED index of the last bucket written to.
+   *
+   * Tracked unmodded because a modulo alone cannot detect the passage of time when
+   * `bucketCount` is 1 -- and a one-bucket window is a legitimate configuration.
+   * With a modulo, every instant maps to slot 0, `count()` sees its own slot and
+   * reports a stale figure for ever. Comparing absolute indices makes the
+   * elapsed-bucket arithmetic correct for any ring size.
+   */
+  private lastIndex = -1;
+  private total = 0;
+
+  constructor(windowMs: number, bucketMs = 1000) {
+    this.bucketMs = Math.max(1, Math.floor(bucketMs));
+    // At least one bucket, and never more than a fixed ceiling: an unbounded
+    // bucket count would reintroduce the very growth the ring exists to prevent.
+    this.bucketCount = Math.max(1, Math.min(1024, Math.ceil(windowMs / this.bucketMs)));
+    this.buckets = new Int32Array(this.bucketCount);
+  }
+
+  private slotOf(index: number): number {
+    return ((index % this.bucketCount) + this.bucketCount) % this.bucketCount;
+  }
+
+  /** Record one occurrence at `now` (epoch ms, injectable so tests need no waiting). */
+  hit(now: number): void {
+    const index = Math.floor(now / this.bucketMs);
+    if (this.lastIndex !== -1 && index !== this.lastIndex) {
+      const elapsed = index - this.lastIndex;
+      if (elapsed >= this.bucketCount) {
+        // More than a full window has passed: everything held is stale.
+        this.buckets.fill(0);
+      } else if (elapsed > 0) {
+        // Zero exactly the buckets the clock moved across, so a slow trickle does
+        // not clear buckets that are still inside the window.
+        for (let step = 1; step <= elapsed; step += 1) this.buckets[this.slotOf(this.lastIndex + step)] = 0;
+      }
+    }
+    this.lastIndex = index;
+    const slot = this.slotOf(index);
+    this.buckets[slot] = (this.buckets[slot] ?? 0) + 1;
+    this.total += 1;
+  }
+
+  /** Occurrences inside the window ending at `now`. Exact to bucket resolution. */
+  count(now: number): number {
+    const index = Math.floor(now / this.bucketMs);
+    if (this.lastIndex !== -1 && index - this.lastIndex >= this.bucketCount) return 0;
+    let sum = 0;
+    for (const value of this.buckets) sum += value;
+    return sum;
+  }
+
+  /** The true window this ring covers. */
+  get resolutionMs(): number {
+    return this.bucketMs * this.bucketCount;
+  }
+
+  /** Exact: every hit ever recorded. */
+  get seen(): number {
+    return this.total;
   }
 }
