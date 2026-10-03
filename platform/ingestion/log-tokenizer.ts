@@ -197,6 +197,15 @@ export function parseLogLine(raw: string): LogLine {
 export interface LogReadOptions {
   readonly retain?: number;
   readonly problems?: string[];
+  /**
+   * CALLED FOR EVERY LINE, as it is read.
+   *
+   * Parity with the CSV reader again: the profile is fed during the read, so it
+   * sees every line in the file rather than the ten thousand that fit in the
+   * retention window. The header list grows as new key=value fields appear,
+   * because a log has no header row to declare them.
+   */
+  readonly onRecord?: (fields: Record<string, string>, headers: readonly string[]) => void;
 }
 
 export interface LogReadResult {
@@ -236,15 +245,22 @@ export async function readLog(file: string, options: LogReadOptions = {}): Promi
     records += 1;
     byFormat[parsed.format] = (byFormat[parsed.format] ?? 0) + 1;
     if (parsed.format === "unstructured") unstructured += 1;
-    for (const key of Object.keys(parsed.extra)) {
-      if (!extraHeaders.includes(key) && extraHeaders.length < MAX_EXTRA_LOG_FIELDS) extraHeaders.push(key);
-    }
     // Extras are FLATTENED onto the record rather than nested, because the
     // pipeline reads columns by name and a nested object would be one opaque cell.
-    if (rows.length < retain) {
-      const { extra, ...rest } = parsed;
-      rows.push({ ...rest, ...extra });
+    const { extra, format, ...rest } = parsed;
+    const row: Record<string, string> = { ...rest, ...extra };
+    // `format` is metadata ABOUT the line, not a value IN it, so it is not a
+    // column. The normalised names are already columns, and re-adding them here
+    // produced a header list containing all eight twice -- which is how a log
+    // ended up with duplicate columns and a profile counting every field twice.
+    const BASE = new Set<string>([...LOG_COLUMNS]);
+    for (const key of Object.keys(row)) {
+      if (BASE.has(key)) continue;
+      if (!extraHeaders.includes(key) && extraHeaders.length < MAX_EXTRA_LOG_FIELDS) extraHeaders.push(key);
     }
+    // The profile is fed HERE, during the read, not after it.
+    options.onRecord?.(row, [...LOG_COLUMNS, ...extraHeaders]);
+    if (rows.length < retain) rows.push(row);
   }
 
   if (records === 0 && problems.length < 5) problems.push("the log holds no lines");

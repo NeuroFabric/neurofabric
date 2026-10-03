@@ -54,6 +54,19 @@ export interface JsonlOptions {
   /** Bounded retention, matching the CSV reader's window. */
   readonly retain?: number;
   readonly problems?: string[];
+  /**
+   * CALLED FOR EVERY RECORD, as it is read.
+   *
+   * This is what brings JSONL to PARITY with CSV. Without it the reader has to
+   * build its rows first and profile them afterwards, so a file larger than the
+   * retention window was profiled over the first ten thousand events and nothing
+   * said so. A profile fed here sees every record in the file, exactly as a
+   * delimited file's does.
+   *
+   * `headers` is the field set as discovered SO FAR and grows during the read,
+   * which is why the caller must append rather than reset.
+   */
+  readonly onRecord?: (fields: Record<string, string>, headers: readonly string[]) => void;
 }
 
 /**
@@ -165,6 +178,8 @@ export async function readJsonl(file: string, options: JsonlOptions = {}): Promi
       }
       row[OVERFLOW_FIELD] = JSON.stringify(overflow);
     }
+    // The profile is fed HERE, during the read, not after it.
+    options.onRecord?.(row, headers);
     if (rows.length < retain) rows.push(row);
   }
 

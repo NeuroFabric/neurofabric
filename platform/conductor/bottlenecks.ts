@@ -1,4 +1,5 @@
 import type { CsvReadResult } from "./capabilities.ts";
+import { streamDocument } from "./capabilities.ts";
 import {
   fencesFromQuartiles,
   outliersFromSorted,
@@ -1287,24 +1288,14 @@ export async function analyseBottlenecks(
       takeRow((column) => String(row[column] ?? ""), index + 2);
     });
   } else {
-    // The column positions, resolved ONCE rather than per row: a Map lookup per
-    // column beats an indexOf scan per column, and this runs half a million times.
-    const position = new Map(csv.headers.map((header, index) => [header, index]));
-    let seenHeader = false;
-    // THE ASYNC READER. This is the line that keeps the event loop free: the
-    // stream is consumed across event-loop turns, so a second request arriving
-    // mid-file is served while this one is still reading.
-    await streamCsvRecords(csv.path, (cells, line) => {
-      if (!seenHeader) {
-        seenHeader = true;
-        return;
-      }
-      takeRow((column) => {
-        const index = position.get(column);
-        return index === undefined ? "" : cells[index] ?? "";
-      }, line);
+    // THE RE-READ IS FORMAT-AWARE. It used to assume a delimited file, so a log
+    // or a JSONL feed was parsed a second time by the CSV parser: no header row to
+    // map columns from, every ranking empty, and a timeline that rendered blank
+    // while reporting success. See `streamDocument`.
+    categorisedRows = await streamDocument(csv.path, (fields, rowNumber) => {
+      takeRow((column) => fields[column] ?? "", rowNumber);
     });
-    categorisedRows = csv.profile?.rowCount ?? csv.rows.length;
+    if (categorisedRows === 0 && csv.profile !== undefined) categorisedRows = csv.profile.rowCount;
   }
 
   // `rows`, NEVER `sample`. The sample is capped for charting; analysing it

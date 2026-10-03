@@ -1,7 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDescriptor } from "../core/types.ts";
-import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords } from "./stream-profile.ts";
+import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords, streamCsvRecordsSync } from "./stream-profile.ts";
 import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
 import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
 import { open, readFile } from "node:fs/promises";
@@ -307,6 +307,57 @@ export function parseCsv(text: string): { headers: string[]; rows: string[][]; p
  * answers about the same file.
  */
 
+/**
+ * RE-READ A FILE, IN WHATEVER FORMAT IT ACTUALLY IS.
+ *
+ * The analyser needs a second pass over the file to rank every row rather than the
+ * retained window -- and that pass used to assume a delimited file. A JSONL feed
+ * or a log therefore got parsed a second time BY THE CSV PARSER, which produced
+ * nonsense: no header row to map columns from, so every ranking came back empty
+ * and the timeline was blank.
+ *
+ * That is a silent wrong answer of the worst kind: the analysis succeeded, the
+ * charts rendered, and the log simply appeared to have no traffic pattern. The
+ * re-read therefore dispatches on the same detection the front door uses, and
+ * both routes agree about what a file is by construction.
+ *
+ * Row numbers: for a delimited file these are FILE lines, so a citation points at
+ * the line a person sees. A headerless format has no such line, so records are
+ * numbered from 1 -- stated rather than faked, because a citation that points at
+ * the wrong line is worse than one that points at no line.
+ */
+export async function streamDocument(
+  target: string,
+  onRow: (fields: Record<string, string>, rowNumber: number) => void,
+): Promise<number> {
+  const format = await detectFormat(target);
+  let rows = 0;
+  if (format === "csv") {
+    const position = new Map<string, number>();
+    let seenHeader = false;
+    streamCsvRecordsSync(target, (cells, line) => {
+      if (!seenHeader) {
+        seenHeader = true;
+        cells.forEach((cell, index) => position.set(cell.trim(), index));
+        return;
+      }
+      rows += 1;
+      const fields: Record<string, string> = {};
+      for (const [name, index] of position) fields[name] = cells[index] ?? "";
+      onRow(fields, line);
+    });
+    return rows;
+  }
+  const problems: string[] = [];
+  const sink = (fields: Record<string, string>): void => {
+    rows += 1;
+    onRow(fields, rows);
+  };
+  if (format === "jsonl") await readJsonl(target, { retain: 0, problems, onRecord: sink });
+  else await readLog(target, { retain: 0, problems, onRecord: sink });
+  return rows;
+}
+
 export async function csvRead(input: { path: string }, boundary?: { boundary?: { check(p: string): { allowed: boolean } } }): Promise<CsvReadResult> {
   const target = String(input.path ?? "");
   if (boundary?.boundary) {
@@ -325,20 +376,28 @@ export async function csvRead(input: { path: string }, boundary?: { boundary?: {
   const note = (message: string): void => {
     if (problems.length < MAX_PROBLEMS) problems.push(message);
   };
+
+  // THE PROFILE IS FED DURING THE READ, exactly as it is for a delimited file.
+  //
+  // This is the parity. Before, the tokenisers built a bounded row window and the
+  // profile was assembled from it afterwards -- so a 500,000-event telemetry feed
+  // was profiled over the first 10,000 events, and nothing anywhere said so. The
+  // statistics a JSONL or log feed produces now describe the WHOLE file, which is
+  // the only thing "omnivorous" can mean if it is to mean anything at all.
+  const profile = new FileProfile(target, { retain: RETAINED_ROWS });
+  const onRecord = (fields: Record<string, string>, headers: readonly string[]): void => {
+    profile.ensureHeaders(headers);
+    profile.push(headers.map((header) => fields[header] ?? ""));
+  };
+
   const parsed = format === "jsonl"
-    ? await readJsonl(target, { retain: RETAINED_ROWS, problems })
-    : await readLog(target, { retain: RETAINED_ROWS, problems });
+    ? await readJsonl(target, { retain: RETAINED_ROWS, problems, onRecord })
+    : await readLog(target, { retain: RETAINED_ROWS, problems, onRecord });
 
   if (parsed.headers.length === 0) {
     return { path: target, headers: [], rowCount: 0, columns: [], sample: [], rows: [], problems: [...problems, "the file has no rows"] };
   }
 
-  // The same profile, built from the tokenised window. The accumulators downstream
-  // cannot tell a JSONL feed from a CSV export, which is the point: the anomaly
-  // agent answers the same questions about both.
-  const profile = new FileProfile(target, { retain: RETAINED_ROWS });
-  profile.setHeaders(parsed.headers);
-  for (const row of parsed.rows) profile.push(parsed.headers.map((header) => row[header] ?? ""));
   const snapshot = profile.snapshot();
   snapshot.outliers = await resolveOutliers(target, snapshot);
 
