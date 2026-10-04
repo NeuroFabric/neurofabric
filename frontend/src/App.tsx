@@ -6,6 +6,7 @@ import { AlertCenter } from "./components/AlertCenter";
 import { DynamicDashboard } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
 import { AGE_TICK_MS, LivenessStrip, livenessOf } from "./components/LivenessStrip";
+import { StartDemo, hasDemoTransport } from "./components/StartDemo";
 import { RefusalScreen } from "./components/RefusalScreen";
 import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
 import { SchemaStore, type PortalSource, type StoreStatus } from "./store/SchemaStore";
@@ -142,6 +143,20 @@ export function App({
     void store.load(source);
   }, [store, source]);
 
+  // THE FRONT DOOR, and only when the transport can keep the promise.
+  //
+  // Declared AFTER `reload`, because it closes over it. The first version had it
+  // above, which the type gate caught immediately -- and it was a real defect, not
+  // a type nit: `reload` would have been read before it was assigned.
+  //
+  // A runtime CHECK rather than a cast: `PortalSource` is the store's narrower
+  // interface and does not declare `ingest`, so without it a component could be
+  // handed a source with no way to push and would offer a button that cannot work.
+  const demo =
+    hasDemoTransport(source) && liveSource !== undefined ? (
+      <StartDemo source={source} onAgentRegistered={reload} />
+    ) : null;
+
   const select = useCallback(
     (agentId: string | null) => {
       store.select(agentId);
@@ -241,7 +256,104 @@ export function App({
             error={live.error ?? undefined}
             loading={live.loading}
             idle={live.snapshot !== null && live.snapshot.verdict !== null && live.snapshot.verdict.records === 0}
-            provider={live.snapshot?.provider ?? "pega"}
+            demo={demo}
+          />
+          <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
+        </aside>
+      </main>
+    </div>
+  );
+
+  /**
+   * THE REFUSAL SCREEN, TAKEN BEFORE THE DASHBOARD.
+   *
+   * A refused credential is not a degraded dashboard. It is a question only a
+   * person can answer, and it is asked ONCE, in place of the screen whose data
+   * could never arrive. Returning early here is what makes the two states visibly
+   * distinct rather than merely differently bad: without it the operator gets a
+   * shell with refused-field panels and a live panel that can only ever say
+   * "unreachable", which is precisely the screenshot this replaces.
+   *
+   * Both variants live in `RefusalScreen`, reachable without an effect, so what
+   * is asserted about them is what an operator would actually see.
+   */
+  if (live.credentialRequired) {
+    return (
+      <RefusalScreen
+        state={live.state}
+        {...(onCredentialRequired === undefined ? {} : { onCredentialRequired })}
+        onRetry={reload}
+      />
+    );
+  }
+
+  return (
+    <div className="app">
+      {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
+          *
+          "Visible without scrolling" is the requirement, and putting it here
+          * rather than in the side panel is what satisfies it. A fault you have
+          * to scroll to find is a fault an operator misses, and the state that
+          * must never be ambiguous is the one that costs the most to reach. */}
+      <LivenessStrip
+        liveness={livenessOf({
+          credentialRequired: live.credentialRequired,
+          lastUpdated: live.snapshot?.at ?? null,
+          now,
+          loading: live.loading,
+          records: live.snapshot?.verdict?.records ?? null,
+        })}
+        lastUpdated={live.snapshot?.at ?? null}
+        now={now}
+        credentialState={live.state}
+        fault={live.error}
+        records={live.snapshot?.verdict?.records ?? null}
+      />
+
+      <header className="app__bar">
+        {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
+            gutter, which is a description of a component rather than a product
+            -- and the word "Neurofebric" appeared nowhere on screen at all. The
+            class carries the centring so the change is one line of CSS rather
+            than a layout rewrite. */}
+        <div className="app__identity">
+          <h1 className="app__wordmark">Neurofebric</h1>
+        </div>
+        <div className="app__meta">
+          <p className="muted">
+            {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
+            {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
+          </p>
+          <div className="app__actions">
+            {/* The CLASS still carries the machine state, for styling and for the
+                test that asserts on it. Only the word a person reads changes. */}
+            <span className={`pill pill--${state.status}`} data-status={state.status}>
+              {statusWord(state.status)}
+            </span>
+            <button type="button" onClick={reload}>
+              Reload
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <nav className="app__select" aria-label="Agent selection">
+        <AgentSelector
+          agents={state.agents}
+          selectedAgentId={state.selectedAgentId}
+          loading={state.schemaLoading}
+          onSelect={select}
+        />
+      </nav>
+
+      <main className="app__main">
+        <DynamicDashboard config={state} />
+        <aside className="app__side">
+          <LiveStreamView
+            verdict={live.snapshot?.verdict ?? null}
+            throughput={live.snapshot?.throughput ?? null}
+            error={live.error ?? undefined}
+            demo={demo}
           />
           <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
         </aside>

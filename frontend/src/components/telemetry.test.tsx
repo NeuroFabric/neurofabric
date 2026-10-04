@@ -104,8 +104,18 @@ it("says 'no reading yet' rather than a zero rate when no window exists", () => 
 it("reports connected but idle, which is healthy rather than broken", () => {
   const idle = { ...simulateVerdict(1, 0), synthetic: false, records: 0, columns: [] };
   const html = text(render(<LiveStreamView verdict={idle} />));
-  expect(html).toContain("Connected but idle");
-  expect(html).toContain("pega");
+  expect(html).toContain("No activity yet");
+
+  // INVERTED, AND THIS IS THE POINT. This assertion used to be
+  // `expect(html).toContain("pega")` -- the empty state named the provider, which
+  // is internal vocabulary on a screen a stranger is looking at. It is the same
+  // text the operator reported as "provider greg": a provider identifier rendered
+  // as customer copy.
+  //
+  // So the empty state now says what is TRUE in a sentence a non-engineer can
+  // act on, and the provider name is asserted ABSENT rather than present. A test
+  // that pins jargon is a test that defends jargon.
+  expect(html).not.toContain("pega");
 });
 
   it("banners a simulated sample so it cannot be read as measured", () => {
