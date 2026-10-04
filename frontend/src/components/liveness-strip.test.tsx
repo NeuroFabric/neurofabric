@@ -162,19 +162,19 @@ describe("the rendered strip -- MACHINE claims, asserted on RAW markup", () => {
     const rendered = cases.map(({ liveness }) => markup({ ...base, liveness, records: 1 }));
     expect(new Set(rendered).size).toBe(cases.length);
     for (const { liveness } of cases) {
-      expect(markup({ ...base, liveness, records: 1 })).toContain(`live--${liveness}`);
+      expect(markup({ ...base, liveness, records: 1 })).toContain(`liveness--${liveness}`);
     }
   });
 
   it("puts the fault in the DOM when one exists, and out of it when none does", () => {
     const withFault = markup({ ...base, liveness: "live", fault: "the roster was refused" });
-    expect(withFault).toContain("live__fault");
+    expect(withFault).toContain("liveness__fault");
     expect(withFault).toContain("the roster was refused");
-    expect(markup({ ...base, liveness: "live" })).not.toContain("live__fault");
+    expect(markup({ ...base, liveness: "live" })).not.toContain("liveness__fault");
   });
 
   it("omits the record count when there is none rather than printing zero", () => {
-    expect(markup({ ...base, liveness: "connecting", records: null })).not.toContain("live__records");
+    expect(markup({ ...base, liveness: "connecting", records: null })).not.toContain("liveness__records");
     expect(markup({ ...base, liveness: "live", records: 262 })).toContain("262");
   });
 });
