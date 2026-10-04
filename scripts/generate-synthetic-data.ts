@@ -83,6 +83,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_PROVIDER } from "./dev-endpoints.ts";
+import { parseFloodArgs, type FloodOptions } from "./flood-args.ts";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(HERE, "..", "test-fixtures", "synthetic");
 
@@ -584,71 +587,9 @@ const PEGA_SERVICES: readonly string[] = [
   "checkout", "payments", "onboarding", "claims", "dispatch", "returns",
 ];
 
-interface FloodOptions {
-  readonly url: string;
-  readonly gatewayToken: string;
-  readonly provider: string;
-  readonly events: number;
-  readonly batch: number;
-  readonly concurrency: number;
-  readonly anomalyEvery: number;
-  readonly seconds: number;
-}
-
 interface SyntheticEvent {
   readonly fields: Readonly<Record<string, string>>;
   readonly at: number;
-}
-
-/** Parsed by hand and defensively, like every other argument reader here. */
-function parseFloodArgs(argv: readonly string[]): FloodOptions {
-  let url = "http://127.0.0.1:3000";
-  let gatewayToken = process.env.WEDGE_GATEWAY_TOKEN ?? "";
-  let provider = "pega";
-  let events = 20_000;
-  let batch = 250;
-  let concurrency = 4;
-  let anomalyEvery = 97;
-  let seconds = 0;
-
-  for (const raw of argv) {
-    const [key, ...rest] = raw.split("=");
-    const value = rest.join("=");
-    switch (key) {
-      case "--url": url = value; break;
-      case "--token": gatewayToken = value; break;
-      case "--provider": provider = value; break;
-      case "--events": events = num(value, events); break;
-      case "--batch": batch = num(value, batch); break;
-      case "--concurrency": concurrency = num(value, concurrency); break;
-      case "--anomaly-every": anomalyEvery = num(value, anomalyEvery); break;
-      case "--seconds": seconds = num(value, seconds); break;
-      default:
-        if (raw.startsWith("-")) throw new Error(`unknown option: ${raw}`);
-    }
-  }
-
-  // A cap rather than a floor. An uncapped batch is a single multi-megabyte body,
-  // and the server's own ceiling would refuse it -- which would look like a
-  // server fault rather than a client one.
-  batch = Math.min(1000, Math.max(1, Math.floor(batch)));
-  concurrency = Math.min(32, Math.max(1, Math.floor(concurrency)));
-  events = Math.max(1, Math.floor(events));
-  anomalyEvery = Math.max(0, Math.floor(anomalyEvery));
-
-  if (url.trim() === "") throw new Error("--url needs a base address");
-  if (provider.trim() === "") throw new Error("--provider needs a name");
-  if (gatewayToken.trim() === "") {
-    // Named here rather than discovered as a wall of 401s, and never defaulted:
-    // a default credential is a credential everybody shares.
-    throw new Error("--token (or $WEDGE_GATEWAY_TOKEN) is required: the ingress is credentialed");
-  }
-  return { url: url.replace(/\/+$/, ""), gatewayToken, provider, events, batch, concurrency, anomalyEvery, seconds };
-}
-
-function num(raw: string, fallback: number): number {
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 /** One batch of events, shaped to the columns the default schema matches on. */
@@ -722,11 +663,22 @@ async function pushBatch(options: FloodOptions, events: SyntheticEvent[]): Promi
       firstError: null,
     };
   } catch (error) {
+    // === THE URL GOES IN THE ERROR LINE, NOT A PARAGRAPH BELOW IT ===
+    //
+    // "fetch failed" names a symptom and nothing else. It has at least four
+    // causes -- the wedge is not running, it is running on another port, the
+    // address is wrong, or something else owns the port -- and a person cannot
+    // choose between them from the word "failed". This exact line is what a live
+    // demo printed against a dead 3000 while the wedge served happily on 8080.
+    //
+    // So the address that was actually dialled is in the sentence. The wedge
+    // being healthy elsewhere is now checkable by eye.
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     return {
       accepted: 0,
       refused: events.length,
       failed: events.length,
-      firstError: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      firstError: `fetch failed against ${options.url} - is the wedge running there? (${detail})`,
     };
   }
 }
@@ -795,9 +747,67 @@ async function flood(argv: readonly string[]): Promise<void> {
   if (firstError !== null) {
     console.log(`\nfirst refusal: ${firstError}`);
     console.log("A refusal here is the edge doing its job. Check the gateway credential");
-    console.log("and that the wedge is running; the ingress refuses everything by default.");
+    console.log("and that the wedge is running at the target above; the ingress refuses");
+    console.log("everything by default.");
   }
-  if (accepted === 0) process.exitCode = 1;
+  if (accepted === 0) {
+    process.exitCode = 1;
+    return;
+  }
+
+  // === THE PROVIDER IS CHECKED AGAINST WHAT THE SERVER ACTUALLY REPORTS ===
+  //
+  // `--provider` is the only thing that decides which column the events land in,
+  // and nothing in the transport can catch a mismatch: an event pushed to a
+  // provider the live route does not report is accepted, counted, and then
+  // invisible on the dashboard. A flood that says 20,000 accepted while the UI
+  // shows nothing is exactly the "is it broken?" demo -- and the two numbers are
+  // both true.
+  //
+  // So after the run, the live route is read and compared. A mismatch fails
+  // VISIBLY rather than quietly producing an empty dashboard.
+  await assertProviderVisible(options);
+}
+
+/**
+ * Read the live route and confirm the provider we pushed to is the one it reports.
+ *
+ * A missing live route is NOT this check failing: the flood succeeded and the
+ * ingest route exists, so a failure here is a different problem worth its own
+ * message rather than a false alarm about the provider.
+ */
+async function assertProviderVisible(options: FloodOptions): Promise<void> {
+  try {
+    const response = await fetch(`${options.url}/api/portal/live`, {
+      headers: { "x-gateway-token": options.gatewayToken, accept: "application/json" },
+    });
+    if (!response.ok) {
+      console.log(`\nprovider check  skipped: the live route answered HTTP ${response.status}`);
+      return;
+    }
+    const parsed = (await response.json()) as { provider?: unknown; verdict?: { records?: unknown } | null };
+    const reported = typeof parsed.provider === "string" ? parsed.provider : "";
+    const records = parsed.verdict !== null && parsed.verdict !== undefined && typeof parsed.verdict.records === "number"
+      ? parsed.verdict.records
+      : null;
+
+    if (reported !== options.provider) {
+      console.log(`\nPROVIDER MISMATCH`);
+      console.log(`  pushed to     ${options.provider}`);
+      console.log(`  server reports ${reported}`);
+      console.log(`  The events were ACCEPTED and are invisible on the dashboard. Re-run with`);
+      console.log(`  --provider=${reported} (both syntaxes work) or point the wedge at ${options.provider}.`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`\nprovider check  ${reported}, ${records === null ? "no verdict yet" : `${records.toLocaleString("en-GB")} records visible`}`);
+  } catch (error) {
+    // The flood itself succeeded, so an unreadable live route is a second,
+    // separate fact. Reported, not fatal, and not dressed up as the provider
+    // check passing.
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.log(`\nprovider check  could not read ${options.url}/api/portal/live (${detail})`);
+  }
 }
 
 function main(): void {
