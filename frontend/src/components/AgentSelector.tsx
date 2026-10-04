@@ -23,9 +23,22 @@ export interface AgentSelectorProps {
   readonly onSelect: (agentId: string | null) => void;
 }
 
-/** `ready` reads as healthy, `stub` as not-built-yet. Never as an error. */
+/**
+ * What a person reads in the agent list.
+ *
+ * === WHY MATURITY IS NOT SHOWN ===
+ *
+ * It used to append the raw maturity (`-- ready`, `-- stub`), and the operator
+ * enumerated "1 ready, 0 stub" among the things that made this read as a debug
+ * tool. `stub` in particular is an internal classification with no meaning
+ * outside this codebase -- someone seeing it cannot tell whether it means
+ * "placeholder" or "failed to build".
+ *
+ * The classification is still computed and still available behind the
+ * diagnostics flag. What is gone is a word in a dropdown nobody could act on.
+ */
 function optionLabel(agent: AgentDescriptor): string {
-  return `${agent.title} — ${agent.maturity}`;
+  return agent.title;
 }
 
 export function AgentSelector({ agents, selectedAgentId, loading, onSelect }: AgentSelectorProps): ReactElement {

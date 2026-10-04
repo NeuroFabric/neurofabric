@@ -267,9 +267,11 @@ describe("AlertCenter", () => {
     expect(text(html)).toContain("No column breached in this snapshot.");
   });
 
-  it("falls back to the verdict, and labels that it is not a dispatched alert", () => {
+  it("falls back to the verdict, and says where the number came from", () => {
     const html = render(<AlertCenter alerts={[]} verdict={verdictWithBreach()} />);
-    expect(html).toContain("From the live verdict, not a dispatched alert");
+    expect(html).toContain("Measured directly from the data in view.");
+    // The old sentence named a mechanism that does not exist on this screen.
+    expect(html).not.toContain("dispatched alert");
     expect(html).toContain("SIMULATED");
   });
 

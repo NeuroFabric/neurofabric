@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
 import { AgentSelector } from "./components/AgentSelector";
 import { AlertCenter } from "./components/AlertCenter";
-import { DynamicDashboard } from "./components/DynamicDashboard";
+import { DynamicDashboard, type RuleReading } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
 import { AGE_TICK_MS, LivenessStrip, livenessOf } from "./components/LivenessStrip";
 import { StartDemo, hasDemoTransport } from "./components/StartDemo";
@@ -135,6 +135,36 @@ export function App({
   const live = useLiveTelemetry(liveSource ?? IDLE_SOURCE, pollMs);
   const now = useNow();
 
+  /**
+   * THE READINGS THE RULE PANEL NEEDS, DERIVED FROM THE LIVE VERDICT.
+   *
+   * `DynamicDashboard` takes `readings` and defaulted it to an empty array, and
+   * `App` never passed one — so `measured` was ALWAYS undefined and every rule
+   * rendered "limit 1000, no reading yet" directly beneath a panel showing a
+   * critical breach. Two surfaces, two answers, both true-looking.
+   *
+   * The join is by COLUMN NAME, not by rule id: the verdict reports
+   * `elapsed_time`, the rule declares `field: "elapsed_time"`, and nothing in
+   * the pipeline gives a rule an id the verdict knows about.
+   *
+   * `useMemo` because this runs on every poll and would otherwise allocate a
+   * fresh array each time, re-rendering every rule row for a list that is almost
+   * always identical to the last one.
+   */
+  const readings = useMemo<RuleReading[]>(() => {
+    const columns = live.snapshot?.verdict?.columns ?? [];
+    if (columns.length === 0) return [];
+    const out: RuleReading[] = [];
+    for (const rule of state.schema?.rules ?? []) {
+      const field = "field" in rule && typeof rule.field === "string" ? rule.field : null;
+      if (field === null) continue;
+      const column = columns.find((candidate) => candidate.column === field);
+      if (column === undefined) continue;
+      out.push({ ruleId: rule.id, value: column.measured });
+    }
+    return out;
+  }, [live.snapshot, state.schema]);
+
   useEffect(() => {
     void store.load(source);
   }, [store, source]);
@@ -248,7 +278,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} />
+        <DynamicDashboard config={state} readings={readings} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}
@@ -347,7 +377,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} />
+        <DynamicDashboard config={state} readings={readings} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}
