@@ -87,7 +87,7 @@ export function LiveStreamView({
     // An explicit absence, not a spinner. A spinner that never resolves is
     // indistinguishable from a working pipeline.
     return (
-      <section className="live" aria-label="Live telemetry">
+      <section className="live" aria-label="Live telemetry" data-surface="live">
         <h3>Live telemetry</h3>
         <p className="muted">
           {loading ? "Connecting…" : "Nothing has arrived yet."}
@@ -109,7 +109,7 @@ export function LiveStreamView({
   }
 
   return (
-    <section className="live" aria-label="Live telemetry">
+    <section className="live" aria-label="Live telemetry" data-surface="live">
       <h3>Live telemetry</h3>
 
       {verdict.synthetic ? (
@@ -183,8 +183,8 @@ export function LiveStreamView({
             <dd>
               <p>
                 Nothing new has arrived in the last {throughput.windowMs.toLocaleString("en-GB")}ms. The{" "}
-                {verdict.records.toLocaleString("en-GB")} above are the records this window is still holding, and a window
-                does not empty itself -- so the two figures measure different things and are expected to disagree.
+                {verdict.records.toLocaleString("en-GB")} above are records still held from earlier, and nothing here
+                clears them out on its own -- so the two figures measure different things and are expected to disagree.
               </p>
               <p className="muted">
                 This is a quiet feed, which is a condition. If the feed were <em>stopped</em> rather than quiet, the{" "}

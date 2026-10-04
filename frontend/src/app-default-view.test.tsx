@@ -116,11 +116,18 @@ describe("the assembled page, default", () => {
 
   it("shows the composite id as a VALUE but never as text", async () => {
     // The distinction is deliberate and the guard would be wrong to demand more.
-    // An `<option value="dev/sla-monitor">` MUST carry the real id or selecting
-    // the agent breaks — that is a bug, not jargon. What must not happen is the
-    // id being VISIBLE, because a reader cannot act on "dev/sla-monitor".
+    // A row MUST carry the real composite id or selecting the agent addresses the
+    // wrong thing -- that is a bug, not jargon. What must not happen is the id
+    // being VISIBLE, because a reader cannot act on "dev/sla-monitor".
+    //
+    // The attribute CHANGED with Slice 4 and that is the point of pinning it:
+    // the `<select>` carried it as `option value`, and when the control was
+    // replaced this test went red, which is how a reviewer learned that the
+    // property had been dropped along with the `<option>`. It is now a
+    // `data-agent-id`, still invisible, still inspectable.
     const html = await page();
-    expect(html).toContain('value="dev/sla-monitor"');
+    expect(html).toContain('data-agent-id="dev/sla-monitor"');
+    expect(html).not.toContain('value="dev/sla-monitor"');
     expect(spoken(html)).not.toContain("dev/sla-monitor");
     expect(spoken(html)).toContain("SLA monitor");
   });

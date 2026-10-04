@@ -146,7 +146,6 @@ p { margin: 0 0 0.5rem; }
 
 .app__actions { display: flex; align-items: center; gap: 0.6rem; }
 
-.app__select { padding: 0.9rem 1.4rem; border-bottom: 1px solid var(--line); background: var(--panel); }
 
 .app__main {
   display: grid;
@@ -354,14 +353,15 @@ button:hover { border-color: var(--accent); }
 .threshold__fill--breached { background: var(--bad); }
 .threshold__label { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 
-/* ---- SELECTOR ---- */
-
-.selector { display: inline-flex; align-items: center; gap: 0.6rem; }
-.selector__label { font-size: 0.85rem; color: var(--muted); }
-.selector__input {
-  font: inherit; color: var(--ink); background: var(--panel-2);
-  border: 1px solid var(--line); border-radius: 8px; padding: 0.35rem 0.6rem; min-width: 260px;
-}
+/* ---- SELECTOR: REMOVED WITH THE CONTROL ----
+ *
+ * These three rules styled the dropdown that Slice 4 replaced with the agent
+ * list. They are gone rather than left behind, because orphaned CSS is the same
+ * trap as orphaned code: unreachable, passing every assertion, and the next
+ * person to add a control of this name inherits a layout nobody chose.
+ * `.agentlist` is now the only selector styling in this file, so if it is wrong
+ * it is wrong visibly.
+ */
 
 .topkeys { margin: 0; padding-left: 1.2rem; font-size: 0.875rem; }
 .topkeys li { margin-bottom: 0.15rem; }
@@ -680,4 +680,186 @@ button:hover { border-color: var(--accent); }
 .record__agent {
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   color: var(--ink);
+}
+
+/* ===================================================================== *
+ * THE AGENT LIST. Slice 4 (F6c).
+ * ===================================================================== *
+ *
+ * The rows are BUTTONS, so they inherit the browser's focus ring, Tab order and
+ * Enter/Space handling. The rules below therefore say nothing about focus -- and
+ * that is deliberate. Writing a custom focus style here would be re-implementing
+ * something that already works, and the usual result is a control that is
+ * reachable by mouse only.
+ *
+ * The only thing these rules add is the SELECTION MARKER, and it is a shape
+ * rather than a colour, because the selected row also carries `aria-current` and
+ * a weight change: a reader who cannot distinguish the accent is not left with
+ * nothing to go on.
+ */
+
+.agentlist {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.agentlist__label {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.agentlist__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.agentlist__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.agentlist__row:hover {
+  background: var(--panel-2);
+}
+
+/* THE MARKER. Empty by default and FILLED when the row is current -- a filled
+ * pill rather than a coloured border, so the distinction survives a reader who
+ * cannot see colour and a screenshot printed in greyscale. */
+.agentlist__mark {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+  flex: none;
+}
+
+.agentlist__row[aria-current="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.agentlist__row[aria-current="true"] .agentlist__mark {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.agentlist__row--none {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* THE NULL ROW IS SELECTABLE AND MUST LOOK IT. Without this it reads as a
+ * caption sitting among the controls, and an operator looking for "how do I
+ * close this agent" finds something that does not invite a click. */
+.agentlist__row--none[aria-current="true"] {
+  color: var(--ink);
+}
+
+.agentlist__name {
+  white-space: nowrap;
+}
+
+/* ===================================================================== *
+ * THE QUIET-FEED EXPLANATION. Slice 5 (F6a).
+ * ===================================================================== *
+ *
+ * It lives INSIDE the readout it explains, because that is where the
+ * contradiction is. A banner above the panel would separate the two figures from
+ * the sentence that reconciles them, and the reader would have to remember.
+ *
+ * Deliberately NOT the bad-ink treatment. The whole claim of this block is that a
+ * quiet feed is a CONDITION and not a fault -- painting it in alarm colour would
+ * say the opposite in the same breath the text says it.
+ */
+.quiet {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.15rem 0.8rem;
+  margin: 0.6rem 0 0.2rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.quiet dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.quiet dd {
+  margin: 0;
+}
+
+.quiet p {
+  margin: 0 0 0.4rem;
+}
+
+.quiet p:last-child {
+  margin-bottom: 0;
+}
+
+/* ===================================================================== *
+ * SLICE 6 (F6b). SURFACE SEPARATION, LIVE FROM RECORDED.
+ * ===================================================================== *
+ *
+ * `.live` HAD NO RULE AT ALL in this stylesheet before this block. The live panel
+ * rendered with whatever its container happened to give it, while the record
+ * panel -- added in !105 -- arrived with its own ground, its own border and its
+ * own header. The two-truths contract was therefore true in MARKUP and false on
+ * SCREEN: a reader scanning for "which of these numbers is now?" was being asked
+ * to tell two panels apart by their contents.
+ *
+ * So both surfaces are now given a ground and an edge that differ, and the rule
+ * is a constraint for whoever edits this next:
+ *
+ *   **A FIGURE'S SURFACE IS DECIDED BY WHERE IT IS RENDERED, NOT BY ITS VALUE.**
+ *
+ * A recorded number lives on `.record` and carries its age; a live number lives
+ * on `.live` and carries a pulse. Neither surface may style the other's figures,
+ * because a recorded breach drawn with the live pulse is precisely the dishonesty
+ * ADR-005 section 9 rule 3 exists to prevent.
+ */
+
+.live {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 0 0 var(--gap);
+}
+
+/* The two surfaces differ in GROUND as well as edge, so the distinction survives
+ * a greyscale screenshot and a reader who cannot see the accent. */
+.record {
+  background: var(--panel-2);
+}
+
+/* Anything inside `.live` that reports a recorded value would be a rule 3
+ * violation, and this makes it visible: a live surface draws in the panel ground,
+ * and the record surface draws in the raised one. Nothing here may cross. */
+.live .kv dt {
+  color: var(--muted);
 }

@@ -238,50 +238,98 @@ describe("DynamicDashboard renders from data alone", () => {
 });
 
 describe("AgentList", () => {
+  const one = descriptor("a");
+
   it("says so when there are no agents, rather than rendering an empty control", () => {
     const html = render(<AgentList agents={[]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
     expect(html).toContain("No agents registered");
   });
 
-  it("offers every agent in the roster with its maturity", () => {
+  it("is a NAVIGATION landmark, not a form control", () => {
+    // Slice 4 (F6c). The claim is that a product's primary navigation stopped
+    // rendering as a `<select>`, and this is the assertion that holds it: a
+    // `<select>` appearing here again would be a regression nobody would notice
+    // without asking, because it still compiles and still works.
+    const html = render(<AgentList agents={[one]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
+    expect(html).toContain('<nav class="agentlist" aria-label="Agents">');
+    expect(html).not.toContain("<select");
+    expect(html).not.toContain("<option");
+    // Every row is a real button, so focus, Tab and Enter come from the browser.
+    // Re-implementing any of that is how a control ends up mouse-only.
+    expect(html).toContain("<button");
+  });
+
+  it("offers every agent in the roster, by title and never by maturity", () => {
     const html = render(
-      <AgentSelector
-        agents={[descriptor("a"), descriptor("b", "stub")]}
-        selectedAgentId={null}
-        loading={false}
-        onSelect={() => {}}
-      />,
+      <AgentList agents={[descriptor("a"), descriptor("b", "stub")]} selectedAgentId={null} loading={false} onSelect={() => {}} />,
     );
-    // Maturity is no longer appended to the agent title: "stub" is this
-    // codebase's classification, not something a customer can act on.
     expect(html).toContain("a title");
-    expect(html).not.toContain("— ready");
     expect(html).toContain("b title");
+    // PROJECT LAW 1: a test that pins jargon defends jargon. `stub` is this
+    // codebase's internal classification, so it must be ABSENT here -- and the
+    // negative assertion is the only thing that keeps it out.
     expect(html).not.toContain("— stub");
+    expect(html).not.toContain("— ready");
+    expect(html).not.toContain("stub");
   });
 
-  it("always offers a none option so a null selection is representable", () => {
-    // Without it, a select with a null value shows its first option, which reads
-    // as "the first agent is selected" when no agent is.
-    const html = render(<AgentList agents={[descriptor("a")]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
-    expect(html).toContain("— none —");
-  });
-
-  it("falls back to none when the selection names an agent that is gone", () => {
+  it("carries the composite id invisibly, so a selection cannot address the wrong agent", () => {
+    // The `<select>` carried the id in `option value`; replacing the control must
+    // not quietly move it somewhere uncheckable. It is a data attribute, NOT
+    // text, because a reader cannot act on `dev/sla-monitor`.
     const html = render(
-      <AgentList agents={[descriptor("a")]} selectedAgentId="vanished" loading={false} onSelect={() => {}} />,
+      <AgentList agents={[{ ...descriptor("a"), id: "acme/log-anomaly" }]} selectedAgentId={null} loading={false} onSelect={() => {}} />,
     );
-    // The none option is the selected one, because the named agent is not here.
-    expect(html).toContain('value="" selected=""');
-    expect(html).not.toContain('value="a" selected');
+    expect(html).toContain('data-agent-id="acme/log-anomaly"');
+    expect(html.replace(/<[^>]*>/g, " ")).not.toContain("acme/log-anomaly");
   });
 
-  it("reflects the current selection", () => {
-    const html = render(<AgentList agents={[descriptor("a")]} selectedAgentId="a" loading={false} onSelect={() => {}} />);
-    expect(html).toContain('value="a" selected');
+  it("always offers a real control for no selection, so a null selection is representable", () => {
+    // A `<select>` with a null value shows its first option, which reads as "the
+    // first agent is selected" when no agent is. The null row is a BUTTON, not a
+    // label, so it is reachable the same way every other row is.
+    const html = render(<AgentList agents={[one]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
+    expect(html).toContain("No agent open");
+    expect(html).toContain('class="agentlist__row agentlist__row--none"');
+  });
+
+  it("marks the selection with a SHAPE and with aria-current, not with colour alone", () => {
+    const html = render(<AgentList agents={[one]} selectedAgentId="a" loading={false} onSelect={() => {}} />);
+    // Two independent signals. A reader who cannot distinguish the accent is not
+    // left with nothing -- which is also why there is no per-agent status dot
+    // here: nothing in the roster could honestly fill one.
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('class="agentlist__mark"');
+  });
+
+  it("reflects the current selection, and ONLY the current one", () => {
+    const html = render(<AgentList agents={[descriptor("a"), descriptor("b")]} selectedAgentId="a" loading={false} onSelect={() => {}} />);
+    const current = html.match(/aria-current="true"/g) ?? [];
+    // Exactly one row is current, or the reader cannot tell where they are.
+    expect(current.length).toBe(1);
+    expect(html).toContain('data-agent-id="a"');
+  });
+
+  it("falls back to no-selection when the selection names an agent that is gone", () => {
+    // The named agent is not in the roster, so no row may claim to be selected
+    // except the null row. A stale id that kept its highlight would show an
+    // operator an agent they had already lost.
+    const html = render(<AgentList agents={[one]} selectedAgentId="vanished" loading={false} onSelect={() => {}} />);
+    expect(html).toContain('class="agentlist__row agentlist__row--none" aria-current="true"');
+    expect(html).not.toContain('data-agent-id="a" aria-current');
   });
 
   it("shows that rules are loading", () => {
-    expect(render(<AgentList agents={[descriptor("a")]} selectedAgentId="a" loading onSelect={() => {}} />)).toContain("loading rules");
+    expect(render(<AgentList agents={[one]} selectedAgentId="a" loading onSelect={() => {}} />)).toContain("loading rules");
+  });
+
+  it("does NOT render a per-agent status dot", () => {
+    // ANTI-SWING, and the reason is a product one. A dot would need per-agent
+    // breach data, `AgentDescriptor` carries none, and an indicator that cannot
+    // mean anything teaches an operator to glance and be right by accident. This
+    // test exists so that adding one requires removing it deliberately.
+    const html = render(<AgentList agents={[one, descriptor("b")]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
+    expect(html).not.toContain("agentlist__dot");
+    expect(html).not.toContain("data-status");
   });
 });
