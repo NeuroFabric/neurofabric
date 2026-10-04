@@ -70,11 +70,78 @@ p { margin: 0 0 0.5rem; }
 
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 
+/* === THE BAR: three regions, not two ================================
+ *
+ * It was `space-between` over two children, which put the title hard left and
+ * the controls hard right -- the shape of a debug toolbar. The product's name
+ * now occupies the CENTRE region, with the descriptive line and controls
+ * sharing a right region. `grid-template-columns: 1fr auto 1fr` is what puts
+ * something in the middle at all: `space-between` never can, because it only
+ * distributes what is already there.
+ */
 .app__bar {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--gap);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--gap);
   padding: 0.9rem 1.4rem;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+}
+
+/* The wordmark is the product's face, so it is set larger and tracked out from
+   the letters rather than bolded -- tracking reads as identity at a glance in a
+   way weight alone does not. */
+.app__identity { text-align: center; }
+
+.app__wordmark {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.app__meta { display: flex; align-items: center; gap: var(--gap); }
+.app__meta .muted { margin: 0; }
+.app__meta .app__actions { justify-content: flex-end; }
+
+/* Below the point where three regions fit, the name goes back to the top of the
+   bar rather than being squeezed to nothing. Centred still, because the word is
+   the product. */
+@media (max-width: 720px) {
+  .app__bar { grid-template-columns: 1fr; }
+  .app__identity { text-align: left; }
+  .app__meta { flex-wrap: wrap; }
+}
+
+/* === REDUCED MOTION IS HONOURED, AND IT WAS MISSING ======================
+ *
+ * The mandate lists `prefers-reduced-motion` among the acceptance criteria and
+ * the stylesheet had never mentioned it. Found by a test asserting the criterion
+ * rather than by looking for it, which is the argument for writing the criterion
+ * down as something executable.
+ *
+ * The rule is narrow on purpose. There are no keyframes in this stylesheet yet,
+ * so there is nothing looping to stop; what IS worth neutralising is any
+ * transition that would otherwise run while someone is reading a number that
+ * changes on its own. A dashboard that updates every 500ms and eases each change
+ * is motion no one chose, and for some readers it is genuinely uncomfortable.
+ *
+ * When the sparkline lands this block becomes load-bearing rather than
+ * precautionary, because that will redraw on every poll. Written now, while it
+ * costs three lines, so it is not written under deadline.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .app__actions { display: flex; align-items: center; gap: 0.6rem; }
@@ -147,10 +214,59 @@ button:hover { border-color: var(--accent); }
   padding: 0.1rem 0.45rem; border-radius: 999px;
   border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
 }
-.pill--ready, .pill--info, .pill--idle { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
-.pill--stub, .pill--warning, .pill--loading, .pill--degraded { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
-.pill--critical, .pill--server, .pill--refused { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, var(--line)); }
+/* `server` and `refused` are transport faults, not severities, and they keep the
+   old hue-only treatment deliberately. The three SEVERITIES were removed from
+   these groups on purpose: a severity that can be styled by colour alone is not
+   a severity, and leaving `--critical` here would mean the rule below silently
+   loses a specificity battle the next time someone adds one. See F2. */
+.pill--server, .pill--refused { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, var(--line)); }
+.pill--stub, .pill--loading, .pill--degraded { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
 .pill--metric, .pill--table, .pill--chart, .pill--feed { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+/* === SEVERITY AS A SIGNAL, NOT A HUE ====================================
+ *
+ * These four rules existed as two: colour and border-colour. Every severity was
+ * therefore the same shape at the same size, differing only in a thin stroke --
+ * indistinguishable on a projector at eight metres, or in a screenshot in a
+ * slide deck, or to a viewer with a colour-vision difference.
+ *
+ * Hue is the weakest channel available and it was the only one in use. So each
+ * severity now also carries a channel that survives projection and greyscale:
+ *
+ *   critical  solid fill, largest weight, uppercase   -- shout
+ *   warning   solid fill, medium weight              -- speak
+ *   info      outline only, normal weight             -- glance
+ *
+ * That is redundant encoding, and redundancy is the point: it does not ask one
+ * sense to do the work of three. See docs/ux-overhaul-design-log.md F2.
+ */
+.pill--critical {
+  /* A fill, not a stroke: the only severity with enough ink to read as an
+     event rather than a label. */
+  background: color-mix(in srgb, var(--critical) 22%, transparent);
+  border-color: var(--critical);
+  border-width: 2px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pill--warning {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border-color: var(--warn);
+  border-width: 2px;
+  font-weight: 600;
+}
+
+.pill--info,
+.pill--idle,
+.pill--ready {
+  /* Outline only, and normal weight. Visibly quieter than the two above, which
+     is what "info" has to mean when a critical is on the same screen. */
+  background: transparent;
+  border-width: 1px;
+  font-weight: 400;
+}
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot--ready { background: var(--good); }
