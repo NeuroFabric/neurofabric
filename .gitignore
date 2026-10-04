@@ -78,6 +78,15 @@ verification/.tmp-*
 # deliverable: anything that matters is moved into platform/ and committed.
 .scratch/
 
+# Local vitest transcripts. A full run prints thousands of TAP lines and piping
+# one to a file is the natural thing to do while debugging -- which left
+# vitest-out.txt, vitest-out3.txt and vitest-full.txt sitting in the repository
+# root as untracked noise. A paste is better than a file, and a file that
+# outlives the bug it recorded is worse than no file at all.
+vitest-*.txt
+# Ad-hoc build output from a frontend run. Same reasoning: nobody reads it twice.
+builds/
+
 data/
 
 # The wedge launcher workspace: the owner drops CSVs in here and reports are
