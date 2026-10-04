@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { startWedgeServer } from "./platform/web/server.ts";
 import { MemoryStore, MINIMUM_NODE } from "./platform/memory/store.ts";
+import { environmentVault, loadTokens } from "./platform/omniroute/edge-security.ts";
 import { WEDGE_PORT } from "./scripts/dev-endpoints.ts";
 import { describePort, inspectPort } from "./platform/core/port-probe.ts";
 
@@ -187,6 +188,45 @@ function openRecord() {
 const record = openRecord();
 
 /**
+ * THE TENANT A BREACH BELONGS TO, OR NOTHING.
+ *
+ * The record's namespace is `tokenId` (ADR-005 §10.1) -- the credential's ID,
+ * not its value, so rotating a credential changes nothing. That makes the vault
+ * the ONLY thing in this process that knows a tenant, which is why the decision
+ * to assign one is made here and printed here rather than inside the server
+ * factory.
+ *
+ * **EXACTLY ONE PROVISIONED TENANT, OR NONE.** This is the case where a choice
+ * would be a fabrication: with two tenants provisioned, picking one attributes a
+ * breach to whichever happened to be listed first, and writes another customer's
+ * audit trail under their name. The two rejected alternatives are recorded so the
+ * refusal is legible:
+ *
+ *  - a sentinel tenant such as `"local"` -- rows no credential can ever
+ *    authenticate as, so invisible to every read, forever;
+ *  - the first of several -- the same misattribution with extra steps.
+ *
+ * So: one tenant, resolved. Several, or a vault that cannot be read, resolved to
+ * nothing -- and the wedge still serves reports, with the decision path silent
+ * and SAYING SO.
+ */
+const provisioned = await (async () => {
+  try {
+    return await loadTokens(environmentVault());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("");
+    console.error("  The credential vault could not be read:");
+    console.error(`    ${message}`);
+    console.error("  The wedge will still serve reports, and nothing will be recorded.");
+    console.error("");
+    return [];
+  }
+})();
+
+const liveTenant = provisioned.length === 1 ? provisioned[0]?.id : undefined;
+
+/**
  * THE PORT, BEFORE THE BIND.
  *
  * Every session in this project's history has lost time to `EADDRINUSE`, and
@@ -228,7 +268,7 @@ const server = await startWedgeServer({
   // server would have to check. With no store mounted the diff routes do not
   // exist and answer 404, so a caller cannot mistake "nothing is kept" for
   // "everything agrees".
-  ...(record === null ? {} : { memory: { store: record } }),
+  ...(record === null ? {} : { memory: { store: record, ...(liveTenant === undefined ? {} : { tenant: liveTenant }) } }),
 });
 
 // A widened bind is announced, not silent. The default prints a URL; the
@@ -276,6 +316,16 @@ if (record !== null) {
   console.log(`    schema version ${schemas}. First run is not an error; a restart is a colleague coming back.`);
   console.log(`    The SQLite warning above is deliberate. node:sqlite is experimental, and we do not hide that.`);
   console.log(`    Where the record and this process disagree: GET /api/memory/diff, with your credential.`);
+  if (liveTenant === undefined) {
+    console.log("");
+    console.log("    DECISIONS ARE NOT BEING RECORDED. " +
+      (provisioned.length === 0
+        ? "No credential is provisioned, so no tenant owns a breach and nothing is attributed to nobody."
+        : `${provisioned.length} tenants are provisioned, so a breach cannot honestly be attributed to one of them.`));
+    console.log("    Provision exactly one credential and restart, and this line will say what it resolved.");
+  } else {
+    console.log(`    Decisions are recorded under tenant "${liveTenant}", from the credential that proved it.`);
+  }
   console.log("");
 }
 

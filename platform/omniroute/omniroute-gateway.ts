@@ -421,6 +421,34 @@ export interface GatewayOptions {
    * on demand rather than being told what to look at.
    */
   readonly onAlert?: (alert: SwarmAlert) => void;
+  /**
+   * THE RECORD, CALLED BEFORE ANYBODY IS TOLD. The write boundary, as a hook.
+   *
+   * === WHY THIS IS NOT `onAlert` ===
+   *
+   * Because `onAlert` IS a subscriber. `subscribe()` adds it to the same
+   * subscriber set as everyone else and calls it from the same loop, which means
+   * its position relative to a dispatch is whatever `Set` iteration order
+   * happens to be. ADR-005 §5 rule 3 -- **the subscription is not the record** --
+   * is a statement about ORDER, so a hook whose order is undefined cannot
+   * express it. This one is called, synchronously, before the dispatch loop is
+   * entered.
+   *
+   * === A THROW HERE PREVENTS THE DISPATCH, AND THAT IS THE POINT ===
+   *
+   * If the record cannot be written, the alert is NOT pushed. The alternative --
+   * push anyway and report the failure afterwards -- produces an alert on an
+   * operator's screen that has no verdict behind it, which is precisely the
+   * corruption ADR-005 §7.3 makes an alarm. A product whose thesis is that
+   * anything acted on is durable cannot tell someone to act on something it
+   * failed to keep.
+   *
+   * The failure is not swallowed: it is collected on `decisionFailures()` and the
+   * alert is left out of the returned list, so a caller polling `evaluate()` sees
+   * that fewer alerts came back than conditions were found. Silence would have
+   * been the failure mode here.
+   */
+  readonly onDecision?: (alert: SwarmAlert) => void;
 }
 
 /**
@@ -469,6 +497,13 @@ export class OmniRouteGateway {
    * with no tenant boundary at all.
    */
   private tenantRouter: TenantRouter | undefined;
+
+  /**
+   * EVERY DECISION THE RECORD REFUSED. Bounded by the alert policy rather than
+   * by time: `fingerprint()` re-announces only what is NEW, so this grows with
+   * distinct breaches and not with how often anyone polls.
+   */
+  private readonly decisionFailures: { readonly provider: string; readonly at: string; readonly reason: string }[] = [];
 
   // Not a parameter property: Node's strip-only type erasure cannot erase them,
   // which this repository has now learned four times over.
@@ -693,11 +728,53 @@ export class OmniRouteGateway {
         };
         alerts.push(alert);
         if (firstObservation) {
+          /**
+           * THE RECORD, THEN THE TELLING. In that order, and the order is the
+           * entire guarantee (ADR-005 §7.1).
+           *
+           * `node:sqlite` is synchronous, so this call blocks the event loop --
+           * and that is the cost the boundary is paying, deliberately, for facts
+           * that change what a person does next. It is paid here rather than at
+           * the subscriber, because the subscriber is the thing that reaches a
+           * person.
+           *
+           * A healthy reading writes NOTHING. There is no verdict to keep, because
+           * nothing breached and nothing is owed to anybody; writing one per poll
+           * would be the 120-rows-a-minute table ADR-005 §1.1 refuses, and it
+           * would pay a blocking cost to store a fact that changed no decision.
+           */
+          let persisted = true;
+          if (this.options.onDecision !== undefined) {
+            try {
+              this.options.onDecision(alert);
+            } catch (error) {
+              persisted = false;
+              const reason = error instanceof Error ? error.message : String(error);
+              this.decisionFailures.push({ provider: alert.provider, at: alert.at, reason });
+            }
+          }
+          // The alert is NOT returned either, so a caller counting what it was
+          // told cannot discover a breach that exists only in a window.
+          if (!persisted) {
+            alerts.pop();
+            continue;
+          }
           for (const subscriber of this.subscribers) subscriber(alert);
         }
       }
     }
     return alerts;
+  }
+
+  /**
+   * THE DECISIONS THE RECORD REFUSED, since the process started.
+   *
+   * A read, because a failure the operator cannot see is a failure that will be
+   * diagnosed as "alerts are unreliable" -- which is worse than the original
+   * fault, because it is a wrong answer rather than no answer.
+   */
+  refusedDecisions(): readonly { readonly provider: string; readonly at: string; readonly reason: string }[] {
+    return [...this.decisionFailures];
   }
 
   /** The verdict for a provider, without the alert policy. */
