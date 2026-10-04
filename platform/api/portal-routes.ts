@@ -420,6 +420,20 @@ export interface LiveGateway {
   push(provider: string, event: OmniRouteEvent): void;
   /** Whether a provider is connected. Pushing to an unknown one is an error. */
   connected(provider: string): boolean;
+  /**
+   * RUN THE ALERT POLICY. Optional, and absent means this read path shows a
+   * verdict without raising anything.
+   *
+   * `verdict` and `evaluate` are deliberately different methods. `verdict` is
+   * arithmetic over the window, which is what a dashboard needs on every poll.
+   * `evaluate` is the DECISION: it decides whether a condition is NEW, and it is
+   * the only path that persists a verdict and dispatches an alert.
+   *
+   * So this is the seam where the write boundary is entered, and it is a
+   * parameter rather than a gateway import so this file stays a decision table
+   * and a read of who is who.
+   */
+  evaluate?(provider: string): void;
 }
 
 /** The shape `GET /api/portal/live` returns. Nulls are explicit, never omitted. */
@@ -672,6 +686,29 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
       if (gateway === undefined) {
         return json(503, { error: "no live gateway is attached to this process" });
       }
+
+      /**
+       * THE EVALUATION LOOP, AND THIS IS THE ONLY PLACE IT RUNS.
+       *
+       * It runs HERE, on the read path, and the consequence is stated rather than
+       * left to be discovered: **an alert is raised when something asks how the
+       * stream is doing.** A deployment where nobody polls raises no alerts, which
+       * is honest and wrong for a monitoring product at the same time -- and the
+       * fix is a scheduler this platform does not have, not a trick hidden in a
+       * request handler. It is named here so whoever adds one knows this line is
+       * already taken.
+       *
+       * A timer in the server factory was rejected for a specific reason: it
+       * would be a handle outliving the object that owns it in every test that
+       * builds a server without `startWedgeServer`, and this repository has been
+       * hung by exactly that shape. A read path cannot leak, because it exists
+       * only while a request does.
+       *
+       * It runs AFTER nothing, and before `verdict` is read, so the decision and
+       * the numbers a dashboard draws come from the same window.
+       */
+      gateway.evaluate?.(provider);
+
       const verdict = gateway.verdict(provider);
       // An explicit null, not an omitted field: a dashboard must be able to say
       // "connected but idle" rather than failing to parse the response.

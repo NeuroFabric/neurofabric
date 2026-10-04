@@ -7,9 +7,12 @@ import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { createPortalRoutes, InMemoryPortalStore, type PortalRouter } from "../api/portal-routes.ts";
-import { createMemoryRoutes, type MemoryRouter } from "../memory/memory-routes.ts";
+import { createMemoryRoutes, MEMORY_ALERTS_PATH, type MemoryRouter } from "../memory/memory-routes.ts";
 import { validateSchema, type AgentSchema } from "../swarm/dynamic-registry.ts";
+import { buildAlertPayload } from "../egress/webhook-dispatcher.ts";
+import { frame } from "../memory/alert-hub.ts";
 import type { MemoryStore } from "../memory/store.ts";
+import type { SwarmAlert } from "../omniroute/omniroute-gateway.ts";
 import { environmentVault, type VaultProvider } from "../omniroute/edge-security.ts";
 import { OmniRouteGateway } from "../omniroute/omniroute-gateway.ts";
 import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
@@ -141,6 +144,24 @@ export interface WedgeOptions {
    */
   memory?: {
     readonly store: MemoryStore;
+    /**
+     * WHICH TENANT THE LIVE PATH BELONGS TO.
+     *
+     * **REQUIRED to record a decision, and absent means decisions are not
+     * recorded.** A verdict is namespaced by `tokenId` (ADR-005 §10.1), the live
+     * gateway carries no tenant of its own, and the boot process has no
+     * credential. So somebody has to say which tenant a breach belongs to, and
+     * every alternative was rejected:
+     *
+     *  - a sentinel like `"local"` writes rows under a tenant no credential can
+     *    ever authenticate as, so they are invisible to every read forever;
+     *  - taking the first of several provisioned tokens picks one at random and
+     *    attributes another customer's breach to them.
+     *
+     * So it is declared, and `start-ui.mjs` resolves it from the vault and says
+     * so on the boot line. No tenant, no recording -- stated, not silent.
+     */
+    readonly tenant?: string;
     /**
      * Newest live reading per composite agent id. Computed by the CALLER because
      * only the caller knows which of its ingresses a producer actually used --
@@ -434,7 +455,129 @@ export function createWedgeServer(options: WedgeOptions): Server {
    * gateway admits nothing, which is the safe direction: an ingress that admits
    * by default is an ingress nobody notices is open until someone reads a log.
    */
-  const gateway = new OmniRouteGateway();
+  /**
+   * THE TENANT THE LIVE PATH BELONGS TO.
+   *
+   * Read from the option and nothing else. This factory is synchronous and stays
+   * that way -- an earlier version read the vault here with `await`, which would
+   * have made the whole server factory async and pushed the change onto every
+   * test that builds one. **The boot script resolves the tenant and passes it**,
+   * because the boot script is a person-facing process that already prints what
+   * it decided, and a decision that cannot be printed should not be made inside a
+   * factory.
+   *
+   * Absent means decisions are NOT recorded, and `/api/memory/alerts` has no
+   * tenant to scope a subscription to. Stated on the boot line rather than
+   * silently skipped.
+   */
+  const liveTenant = options.memory?.tenant;
+
+  /**
+   * THE ROUTES, REFERENCED BEFORE THEY EXIST.
+   *
+   * `onDecision` needs the hub to publish into, and the hub is owned by the
+   * routes -- but the routes need the gateway for the live half of a diff. So
+   * the dependency is genuinely circular, and this is the smallest honest way to
+   * express it: a name the decision path reads at CALL time, assigned once the
+   * routes exist.
+   *
+   * The alternative -- publishing from a gateway subscriber instead -- would
+   * avoid the reference and be worse, because it would spread "record, then
+   * publish" across two registration points where a later edit could move them
+   * apart. Keeping both halves in one function body is the point.
+   */
+  let routes: MemoryRouter | undefined;
+
+  const gateway = new OmniRouteGateway({
+    /**
+     * THE DECISION PATH. The verdict, the alert and the audit trace, in ONE
+     * transaction, before anyone is told -- which is the whole of ADR-005 §7.1
+     * expressed as a call.
+     *
+     * Attached only when both a record AND a tenant exist. `node:sqlite` is
+     * synchronous, so this blocks the event loop, and the boundary exists to pay
+     * that cost for facts that change what a person does next. A breach qualifies.
+     * A healthy reading is not written at all.
+     */
+    ...(options.memory === undefined || liveTenant === undefined
+      ? {}
+      : {
+          onDecision: (alert: SwarmAlert) => {
+            /**
+             * THE PAYLOAD THE WEBHOOK ALREADY SENDS, reused.
+             *
+             * Not a convenience. `buildAlertPayload` is where this platform's
+             * severity policy LIVES -- "critical" means every partition breached,
+             * and the reason is that attaching it to a single sick replica is how
+             * an on-call rotation learns to ignore the word. It also produces the
+             * deterministic alert id, which makes a redelivery after a timeout the
+             * SAME incident instead of a new one.
+             *
+             * So the record and the webhook say the same thing about the same
+             * event by construction. A second severity function here would be a
+             * second policy free to disagree with the first, and the one that
+             * disagrees is the one an operator reads at 3am.
+             */
+            const payload = buildAlertPayload(alert);
+            options.memory?.store.recordDecision({
+              tenant: liveTenant,
+              agentId: `${liveTenant}/${alert.provider}`,
+              verdict: {
+                at: alert.at,
+                provider: alert.provider,
+                records: alert.verdict.records,
+                breached: payload.summary.breachedColumns,
+                document: {
+                  open: payload.summary.open,
+                  partitions: payload.summary.partitions,
+                  columns: payload.columns,
+                  busiestHour: alert.verdict.busiestHour,
+                  topKeys: alert.verdict.topKeys,
+                },
+              },
+              alert: {
+                // The SAME id the webhook carries, so a receiver and the record
+                // can be joined on it without a second naming scheme.
+                id: payload.id,
+                severity: payload.severity,
+                document: { title: payload.title, body: payload.body, firstObservation: alert.firstObservation },
+              },
+              audit: {
+                actor: "system",
+                action: "raise-alert",
+                document: { provider: alert.provider, firstObservation: alert.firstObservation },
+              },
+            });
+
+            /**
+             * AND ONLY NOW, THE NOTIFICATION. This is ADR-005 §5 rule 3 in one
+             * ordering: the alert is durable before anybody is told.
+             *
+             * **STRICTLY AFTER `recordDecision`, AND THE THROW PROPAGATES.** If
+             * the write above throws, this line is never reached -- which is the
+             * whole point. A subscriber that pushed first and wrote afterwards
+             * would put an alert on a screen with nothing behind it, which §7.3
+             * classifies as corruption rather than as a difference.
+             *
+             * The frame carries the SAME id the record stored, so a consumer that
+             * reconnects with `Last-Event-ID` can tell what it already has.
+             */
+            routes?.hub.publish(
+              liveTenant,
+              frame(payload.id, "alert", {
+                id: payload.id,
+                title: payload.title,
+                body: payload.body,
+                severity: payload.severity,
+                source: payload.source,
+                at: payload.at,
+                summary: payload.summary,
+                columns: payload.columns,
+              }),
+            );
+          },
+        }),
+  });
   const liveProviders = options.liveProviders ?? ["pega", "webhook"];
   const bindings = new Map<string, boolean>();
   for (const name of liveProviders) {
@@ -472,6 +615,19 @@ export function createWedgeServer(options: WedgeOptions): Server {
         }),
     live: {
       verdict: (provider) => gateway.verdict(provider),
+      /**
+       * THE DECISION, ENTERED FROM THE READ PATH.
+       *
+       * This is what makes `onDecision` -- and therefore `recordDecision` and the
+       * SSE publish -- actually REACHABLE. Before this line existed,
+       * `gateway.evaluate()` had no caller outside tests: the record was wired,
+       * the ordering was proved, and nothing ever asked for an alert. A write
+       * boundary that is never entered is indistinguishable from no boundary, and
+       * the test suite was the only thing exercising it.
+       */
+      evaluate: (provider) => {
+        gateway.evaluate(provider);
+      },
       push: (provider, event) => {
         // THE NEWEST LIVE READING, TAKEN AT THE INGRESS.
         //
@@ -548,11 +704,41 @@ export function createWedgeServer(options: WedgeOptions): Server {
           },
           vault: options.portalVault ?? environmentVault(),
         });
+  // The reference the decision path reads, now that it exists. Assigned once, at
+  // boot, and never reassigned -- so there is one hub for the life of the process
+  // rather than one per request.
+  routes = memoryRoutes;
 
   return createServer((request, response) => {
     void (async () => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+        /**
+         * THE EVENT STREAM, BEFORE THE GENERAL MEMORY BRANCH.
+         *
+         * Order matters and the reason is narrow: the branch below matches every
+         * `/api/memory/*` path, so a stream routed through it would be answered
+         * with a JSON 404 -- the stream would "work" and deliver nothing, which
+         * is the `a 200 that installs nothing` shape in its purest form.
+         *
+         * It cannot go through `handle` at all, which answers with a body and
+         * returns: a stream has no body to return and its promise never settles.
+         *
+         * **THE STREAM OWNS THE SOCKET FROM HERE.** When `openStream` returns
+         * true it has already written headers and will write until it closes, so
+         * nothing after this call may touch `response`. The branch returns in both
+         * cases: `false` means a refusal was already written, `true` means the
+         * response belongs to the stream.
+         */
+        if (memoryRoutes !== undefined && url.pathname === MEMORY_ALERTS_PATH) {
+          const streamHeaders: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(request.headers)) {
+            streamHeaders[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
+          }
+          await memoryRoutes.openStream(request.method ?? "GET", url.pathname, streamHeaders, response, request);
+          return;
+        }
 
         /**
          * THE DIFF SURFACE, BEFORE ANY PORTAL ROUTE.

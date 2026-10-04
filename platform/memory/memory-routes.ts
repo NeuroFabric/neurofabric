@@ -6,8 +6,17 @@ import {
   type EdgeRequest,
   type VaultProvider,
 } from "../omniroute/edge-security.ts";
+import type { ServerResponse } from "node:http";
 import { differenceKey, reconcile, summarise, type LiveState } from "./reconcile.ts";
 import { TARGET_VERSION, type MemoryStore } from "./store.ts";
+import {
+  AlertHub,
+  MAX_CONSUMER_BACKLOG_BYTES,
+  SSE_HEADERS,
+  bytesOf,
+  frame,
+  keepAliveFrame,
+} from "./alert-hub.ts";
 import type { UiResponse } from "../api/ui-routes.ts";
 
 /**
@@ -48,6 +57,8 @@ import type { UiResponse } from "../api/ui-routes.ts";
 
 export const MEMORY_DIFF_PATH = "/api/memory/diff";
 export const MEMORY_ACK_PATH = "/api/memory/ack";
+/** The live alert stream. One direction, one credential, one tenant. */
+export const MEMORY_ALERTS_PATH = "/api/memory/alerts";
 
 /** The provider name these routes guard under. Matches the portal's own space. */
 export const MEMORY_PROVIDER = "memory";
@@ -96,8 +107,19 @@ export interface MemoryRoutesOptions {
   readonly strictVault?: boolean;
   /** Who the operator is in the audit trail. The credential's id, not a name. */
   readonly actorOf?: (tenant: string) => string;
+  /**
+   * HOW OFTEN A STREAM SAYS "STILL HERE".
+   *
+   * An option so a test can make it long rather than being a constant a test has
+   * to wait out. Not a detail: this is what stops an idle connection being closed
+   * by something in the middle, which an operator would experience as a feed that
+   * is merely quiet -- the exact blur ADR-005 §6 forbids.
+   */
+  readonly keepAliveMs?: number;
 }
 
+/** 15s. Long enough to be free, short enough to notice a dead middlebox. */
+const DEFAULT_KEEP_ALIVE_MS = 15_000;
 function json(status: number, body: unknown): UiResponse {
   return { status, body, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } };
 }
@@ -114,10 +136,72 @@ export interface MemoryRouter {
     headers?: Readonly<Record<string, string | undefined>>,
     body?: unknown,
   ) => Promise<UiResponse>;
+  /**
+   * OPEN AN EVENT STREAM.
+   *
+   * Separate from `handle` because it does not return a response body -- it
+   * TAKES OVER the socket and keeps writing to it. Folding that into `handle`
+   * would mean a `UiResponse` that is never sent and a `Promise` that never
+   * settles, and the caller would have to know which of the two it got.
+   *
+   * Returns true when the stream was opened, false when it was refused. A refusal
+   * has already been written, so the caller must not write anything else.
+   *
+   * `request` is optional and carries only `on`. A stream the client has abandoned
+   * is still subscribed until the socket times out, so the caller passes the
+   * request to let the stream hear the client leaving. It is typed as a shape with
+   * one optional method rather than as `IncomingMessage` so this file keeps no
+   * dependency on the transport it happens to be mounted in.
+   */
+  openStream: (
+    method: string,
+    path: string,
+    headers: Readonly<Record<string, string | undefined>>,
+    response: ServerResponse,
+    request?: { on?: (event: string, fn: () => void) => void },
+  ) => Promise<boolean>;
+  /**
+   * THE HUB, so the decision path can publish into it.
+   *
+   * Exposed rather than wrapped because publishing is the decision path's job and
+   * wrapping it in a method would only move the ordering guarantee somewhere it
+   * could not be asserted -- `publish` is called strictly AFTER `recordDecision`,
+   * and that is the whole of ADR-005 §5 rule 3.
+   */
+  readonly hub: AlertHub;
 }
 
 export function createMemoryRoutes(options: MemoryRoutesOptions): MemoryRouter {
   const { store, live } = options;
+  const hub = new AlertHub({
+    onSlowConsumer: (tenant) => {
+      // Named on the console rather than swallowed: a consumer being dropped is a
+      // fact an operator needs, because the next question they will ask is "why
+      // did the stream stop".
+      console.warn(`  a live alert subscriber for "${tenant}" fell behind and was disconnected.`);
+    },
+  });
+
+  /**
+   * THE GUARD, AND THE PROVEN TENANT.
+   *
+   * Extracted so the stream and the two ordinary routes prove the caller in
+   * EXACTLY ONE PLACE. A stream that authenticated itself by a second path would
+   * be a second control plane free to drift from the first -- and the first is
+   * the one under attack. This is also the "one door" property, made a single
+   * function so the audit is a read rather than an argument.
+   */
+  const prove = async (headers: Readonly<Record<string, string | undefined>>): Promise<{ ok: true; tenant: string } | { ok: false; response: UiResponse }> => {
+    const tokens = await loadTokens(options.vault, {
+      ...(options.strictVault === false ? {} : { strict: true }),
+    });
+    const request: EdgeRequest = { headers, provider: MEMORY_PROVIDER, events: 1 };
+    const decision = guard(request, tokens);
+    if (!decision.ok) return { ok: false, response: refused(decision) };
+    const tenant = decision.tokenId;
+    if (tenant === undefined) return { ok: false, response: refused({ ok: false, status: 401, reason: "no credential was proven" }) };
+    return { ok: true, tenant };
+  };
 
   async function handle(
     method: string,
@@ -136,16 +220,9 @@ export function createMemoryRoutes(options: MemoryRoutesOptions): MemoryRouter {
       return json(404, { error: "no such resource" });
     }
 
-    const tokens = await loadTokens(options.vault, {
-      ...(options.strictVault === false ? {} : { strict: true }),
-    });
-
-    const request: EdgeRequest = { headers, provider: MEMORY_PROVIDER, events: 1 };
-    const decision = guard(request, tokens);
-    if (!decision.ok) return refused(decision);
-
-    const tenant = decision.tokenId;
-    if (tenant === undefined) return refused({ ok: false, status: 401, reason: "no credential was proven" });
+    const proven = await prove(headers);
+    if (!proven.ok) return proven.response;
+    const { tenant } = proven;
 
     /**
      * THE LIVE STATE, BUILT ONCE PER REQUEST AND USED BY BOTH ROUTES.
@@ -299,5 +376,155 @@ export function createMemoryRoutes(options: MemoryRoutesOptions): MemoryRouter {
     });
   }
 
-  return { handle };
+  /**
+   * OPEN THE STREAM. Authenticated exactly like everything else.
+   *
+   * === WHY THE GUARD IS FIRST, BEFORE ANY HEADER IS WRITTEN ===
+   *
+   * Because the first byte is the whole answer. A stream that writes `200 OK` and
+   * then refuses is a surface that reports success to a scanner and delivers
+   * nothing to the operator -- the "a 200 that installs nothing" shape
+   * `portal-routes.ts` calls worse than an error, because it is a success the
+   * caller has to disbelieve. So the credential is proven first, and a refusal is
+   * an ordinary JSON error carrying the same status every other route returns.
+   *
+   * === BACK-PRESSURE IS A REFUSAL, NOT A QUEUE ===
+   *
+   * The socket's own writable buffer is the measurement, and
+   * `MAX_CONSUMER_BACKLOG_BYTES` is the ceiling. A consumer further behind than
+   * that is disconnected with a final frame explaining why, and its keep-alive
+   * timer is cleared in the same breath -- a timer that outlives its consumer is a
+   * handle that keeps this process alive, and this repository has been hung by
+   * exactly that shape.
+   *
+   * What it loses is a NOTIFICATION, never an alert: `onDecision` persisted the
+   * alert before this file was reached, so the consumer's recovery is to reconnect
+   * and read `/api/memory/diff`.
+   */
+  async function openStream(
+    method: string,
+    path: string,
+    headers: Readonly<Record<string, string | undefined>>,
+    response: ServerResponse,
+    request?: { on?: (event: string, fn: () => void) => void },
+  ): Promise<boolean> {
+    const clean = path.split("?")[0] ?? path;
+    if (clean !== MEMORY_ALERTS_PATH) return write(response, json(404, { error: "no such resource" }));
+
+    // The verb is proved, not guessed. An event stream is a read, and answering a
+    // POST with a stream would be a surface nobody could reason about.
+    if (method.toUpperCase() !== "GET") {
+      const verbProof = await prove(headers);
+      if (!verbProof.ok) return write(response, verbProof.response);
+      return write(response, json(405, { error: "an event stream is read with GET" }));
+    }
+
+    const proven = await prove(headers);
+    if (!proven.ok) return write(response, proven.response);
+    const { tenant } = proven;
+
+    response.writeHead(200, SSE_HEADERS);
+    /**
+     * AN OPENING COMMENT, with no payload.
+     *
+     * So the client's `open` event fires immediately rather than on the first
+     * alert. Without it, "connected" and "something has happened" are
+     * indistinguishable, and the liveness strip cannot tell a quiet feed from a
+     * dead one -- which is the blur ADR-005 §6 forbids.
+     */
+    response.write(": connected\n\n");
+
+    let closed = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * ONE CLOSE, THREE CAUSES, ONE SET OF HANDLES CLEARED.
+     *
+     * Guarded by `closed` because all three can fire for the same disconnection,
+     * and closing a subscription twice would decrement nothing and read as though
+     * something had been removed that was not.
+     */
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (timer !== undefined) clearInterval(timer);
+      unsubscribe();
+    };
+
+    /**
+     * ONE WRITE, OR A DISCONNECT.
+     *
+     * `write()` returning false does not mean the data was lost -- it means the
+     * socket's buffer is full. The ceiling on how full is the whole policy: past
+     * it, this consumer is not slow, it is gone.
+     */
+    const send = (payload: string): void => {
+      if (closed) return;
+      if (response.write(payload)) return;
+      if (response.writableLength <= MAX_CONSUMER_BACKLOG_BYTES) return;
+      // THE DISCONNECT. Explained, then closed -- a bare socket close looks to the
+      // operator like a server fault, and "you fell behind" is a fact they can act
+      // on by reconnecting.
+      try {
+        response.write(
+          frame("slow-consumer", "slow-consumer", {
+            reason: `this connection fell more than ${MAX_CONSUMER_BACKLOG_BYTES} bytes behind`,
+            whatToDo: "Reconnect, then read /api/memory/diff. The alert is in the record; only the notification was lost.",
+          }),
+        );
+      } catch {
+        // The socket is already unusable. Closing below is still correct.
+      }
+      close();
+      response.end();
+    };
+
+    const unsubscribe = hub.open(tenant, send);
+
+    timer = setInterval(() => {
+      if (closed) return;
+      try {
+        response.write(keepAliveFrame());
+      } catch {
+        close();
+        response.end();
+      }
+    }, options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS);
+    // A timer that outlives its consumer keeps the process alive for a connection
+    // nobody has. Not optional, and not something a test can notice.
+    timer.unref?.();
+
+    // THREE WAYS A STREAM ENDS, all of them clearing the same handles.
+    response.on("close", close);
+    response.on("error", close);
+    /**
+     * THE CLIENT GOING AWAY.
+     *
+     * Without this, a consumer whose browser has closed the tab stays subscribed
+     * until the socket times out, and every alert in the meantime is written to a
+     * dead consumer. Not a leak anybody would notice, and exactly the "a handle
+     * that outlived the thing that owned it" shape this repository has been bitten
+     * by once already.
+     */
+    request?.on?.("close", close);
+
+    return true;
+  }
+
+  return { handle, hub, openStream };
+}
+/**
+ * WRITE A REFUSAL AND REPORT THAT THIS CALL HAS ALREADY ANSWERED.
+ *
+ * Returns false rather than a `UiResponse`, because every caller of `openStream`
+ * has exactly one job left when this returns: do not write anything else. A
+ * helper that handed back a response would invite a second `writeHead`, and a
+ * second `writeHead` on a live socket is the failure this shape exists to make
+ * impossible.
+ */
+function write(response: ServerResponse, result: UiResponse): boolean {
+  const text = JSON.stringify(result.body ?? null);
+  response.writeHead(result.status, { ...result.headers, "content-length": Buffer.byteLength(text) });
+  response.end(text);
+  return false;
 }
