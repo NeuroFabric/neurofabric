@@ -372,12 +372,28 @@ export function App({
           decides what to draw. Passing `null` renders nothing -- see the prop
           comment for why that is not the same as "no differences".
         */}
-        <ReconciliationPanel
-          diff={reconciliation ?? null}
-          {...(onAcknowledge === undefined ? {} : { onAcknowledge })}
-          now={now}
-        />
-        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        {/* TWO COLUMNS, TWO CHILDREN. THIS WRAPPER IS THE FIX.
+          *
+          * `.app__main` is `grid-template-columns: minmax(0, 2fr) minmax(0, 1fr)`
+          * -- exactly two tracks. It was handed THREE children (the record panel,
+          * the dashboard, the live column), so the third was auto-placed into an
+          * implicit THIRD ROW and the whole primary column collapsed to the height
+          * of its tallest child. A grid does not complain about this: the layout
+          * renders, just wrongly.
+          *
+          * The wrapper makes the count explicit. `.app__main` now has precisely
+          * two direct children -- `.app__primary` and `.app__side` -- so "a third
+          * thing was added here" is a visible extra child rather than a silent
+          * reflow, and the next panel dropped into the primary column lands in
+          * the primary column. */}
+        <div className="app__primary">
+          <ReconciliationPanel
+            diff={reconciliation ?? null}
+            {...(onAcknowledge === undefined ? {} : { onAcknowledge })}
+            now={now}
+          />
+          <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        </div>
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}

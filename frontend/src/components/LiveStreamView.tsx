@@ -158,41 +158,6 @@ export function LiveStreamView({
           <span className="muted"> (a count, not a rate)</span>
         </dt>
         <dd>{verdict.records.toLocaleString("en-GB")}</dd>
-        {/*
-            F6a -- THE COUNT AND THE RATE, EXPLAINED RATHER THAN DISPLAYED.
-
-            The runbook's strongest beat is throughput reading `0 events/sec` while
-            the record count holds at 20,000. Displayed side by side, those two
-            numbers look like a contradiction, and an operator who believes one of
-            them is broken stops reading the panel.
-
-            They are not in conflict. One is how much the window HOLDS -- everything
-            that has arrived since it was opened. The other is how much ARRIVED in
-            the last moment measured. Zero arriving per second with twenty thousand
-            held is the ordinary shape of a stream that has stopped being busy.
-
-            So this says it in a sentence, in the product's own register, and it
-            says what the difference would look like if something WERE wrong --
-            because "0/sec" is only reassuring when the reader knows what a fault
-            would say instead. A quiet feed is a condition; a stopped feed is a
-            fault, and the two must never render the same way (ADR-005 §6).
-        */}
-        {throughput !== null && throughput.eventsPerSecond === 0 && verdict.records > 0 ? (
-          <div className="quiet" data-condition="quiet">
-            <dt>why the rate is zero</dt>
-            <dd>
-              <p>
-                Nothing new has arrived in the last {throughput.windowMs.toLocaleString("en-GB")}ms. The{" "}
-                {verdict.records.toLocaleString("en-GB")} above are records still held from earlier, and nothing here
-                clears them out on its own -- so the two figures measure different things and are expected to disagree.
-              </p>
-              <p className="muted">
-                This is a quiet feed, which is a condition. If the feed were <em>stopped</em> rather than quiet, the{" "}
-                <strong>last answer</strong> at the top of this screen would be growing old instead.
-              </p>
-            </dd>
-          </div>
-        ) : null}
         <dt>columns past the outer fence</dt>
         <dd className={verdict.breachedColumns > 0 ? "bad" : "good"}>{verdict.breachedColumns}</dd>
         <dt>busiest hour</dt>
@@ -206,6 +171,49 @@ export function LiveStreamView({
           )}
         </dd>
       </dl>
+
+      {/*
+          F6a -- THE COUNT AND THE RATE, EXPLAINED RATHER THAN DISPLAYED.
+
+          The runbook's strongest beat is throughput reading `0 events/sec` while
+          the record count holds at 20,000. Displayed side by side, those two
+          numbers look like a contradiction, and an operator who believes one of
+          them is broken stops reading the panel.
+
+          They are not in conflict. One is how much the window HOLDS -- everything
+          that has arrived since it was opened. The other is how much ARRIVED in
+          the last moment measured. Zero arriving per second with twenty thousand
+          held is the ordinary shape of a stream that has stopped being busy.
+
+          So this says it in a sentence, in the product's own register, and it
+          says what the difference would look like if something WERE wrong --
+          because "0/sec" is only reassuring when the reader knows what a fault
+          would say instead. A quiet feed is a condition; a stopped feed is a
+          fault, and the two must never render the same way (ADR-005 §6).
+
+          === WHY IT LIVES OUTSIDE THE `<dl>` NOW ===
+          It was a `<div>` holding `<dt>`/`<dd>` INSIDE the key/value grid, so the
+          grid auto-placed a bare `<div>` into column 1 -- which is a `max-content`
+          track -- squeezing two paragraphs of explanation into the width of a
+          label. Invalid HTML (a `<dl>` may only contain `<dt>`/`<dd>`/`<div>`
+          wrapping them) and unreadable output at the same time. It is prose about
+          the figures above it, not a figure, so it now sits BELOW the grid at full
+          width. `data-condition` is unchanged: `quiet-feed.test.tsx` asserts on it.
+      */}
+      {throughput !== null && throughput.eventsPerSecond === 0 && verdict.records > 0 ? (
+        <div className="quiet" data-condition="quiet">
+          <h4>Why the rate is zero</h4>
+          <p>
+            Nothing new has arrived in the last {throughput.windowMs.toLocaleString("en-GB")}ms. The{" "}
+            {verdict.records.toLocaleString("en-GB")} above are records still held from earlier, and nothing here
+            clears them out on its own -- so the two figures measure different things and are expected to disagree.
+          </p>
+          <p className="muted">
+            This is a quiet feed, which is a condition. If the feed were <em>stopped</em> rather than quiet, the{" "}
+            <strong>last answer</strong> at the top of this screen would be growing old instead.
+          </p>
+        </div>
+      ) : null}
 
       <h4>Columns ({verdict.columns.length})</h4>
       {verdict.columns.length === 0 ? (

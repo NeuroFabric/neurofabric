@@ -15,13 +15,69 @@
  */
 
 :root {
-  --ground: #0d0f13;
-  --panel: #151920;
-  --panel-2: #1c212a;
-  --line: #262c37;
-  --ink: #e7eaee;
-  --muted: #8b93a1;
+  /* === CANVAS AND SURFACES ==================================================
+   *
+   * Extracted from the ui-ux-pro-max skill, `colors.csv`, Product Type
+   * "Developer Tool / IDE": Background #0F172A, Card #1E293B, Muted #1A1E2F,
+   * Border #475569, Foreground #F8FAFC, Muted Foreground #94A3B8.
+   *
+   * HIGH-DENSITY DARK, THREE STEPS ONLY. Canvas, surface, raised surface: a
+   * panel is separated from the page by a step of FILL, never by a thick edge.
+   * The borders are 1px and near-invisible; they exist to catch a boundary in
+   * peripheral vision, not to draw a box. This is what `surface-separation`
+   * requires -- the two surfaces differ in GROUND so the distinction survives
+   * greyscale -- and it is why the three steps must stay three steps.
+   */
+  --ground: #0b1220;   /* canvas: the page behind every panel */
+  --panel: #131c2e;    /* a surface sitting on the canvas */
+  --panel-2: #1a2438;  /* a raised surface, for the second surface family */
+  --line: #24314a;     /* ultra-thin hairline: separation, not decoration */
+
+  --ink: #e8edf5;
+  --muted: #94a3b8;    /* >= 4.5:1 on --ground and on --panel */
   --accent: #5aa9ff;
+  --ring: #7cc4ff;     /* focus ring: 3:1 against every surface it lands on */
+
+  /* === TWO INKS, NOT FOURTY-ONE INKS ======================================
+   *
+   * The skill's "Dashboard Data" pairing is Fira Code for figures and Fira Sans
+   * for labels, and the rule underneath it is the transferable part: **code for
+   * data, sans for labels.** A label is prose and is read in phrases; a reading
+   * is scanned vertically and compared against its neighbours.
+   *
+   * The pairing is taken, the WEBSITES ARE NOT. This is an operator's console
+   * that may be running on a locked-down host with no egress, and a webfont that
+   * silently fails to load is the worst possible failure for a density-critical
+   * panel -- every column width shifts at once. So both roles are satisfied by
+   * fonts the OS already has, which is the same division of labour.
+   */
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* INK ON THE ACCENT FILL, and it is dark, which surprises people.
+   *
+   * The skill pairs every fill with an "On <fill>" ink, and this accent is a
+   * LIGHT blue, so a white label on it measures 2.46:1 and fails. Dark ink
+   * measures 7.63:1. A button is the one place this file is tempted to reach
+   * for white by reflex.
+   */
+  --on-accent: #0b1220;
+
+  /* === TWO WEIGHTS OF BORDER, BECAUSE THEY DO DIFFERENT JOBS ===============
+   *
+   * The skill's contrast rules separate two things that "a border" conflates:
+   * a DIVIDER, which only has to be perceptible, and a CONTROL BOUNDARY, which
+   * is the only thing telling a keyboard user where the input box is and so must
+   * clear 3:1 against its own ground.
+   *
+   * `--line` at 1.44:1 is the divider. It is deliberately near-invisible: a
+   * panel edge is not a box to be drawn, and a hairline is what keeps a
+   * high-density screen from turning into a ruled page. `--line-strong` at
+   * 3.46:1 is the control boundary. Splitting them is the whole point -- one
+   * weight for both would mean the dividers are too loud or the fields are
+   * invisible, and there is no value that is both.
+   */
+  --line-strong: #5a6b85;
 
   /* Severity. Named, not numbered, so a colour is never chosen by index. */
   --bad: #ff6b6b;
@@ -45,12 +101,12 @@ body {
   margin: 0;
   background: var(--ground);
   color: var(--ink);
-  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 
 code {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--mono);
   font-size: 0.9em;
   color: var(--accent);
 }
@@ -100,7 +156,7 @@ p { margin: 0 0 0.5rem; }
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .app__meta { display: flex; align-items: center; gap: var(--gap); }
@@ -172,7 +228,25 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* === THE FOCUS RING, MEASURED RATHER THAN ASSUMED ==========================
+ *
+ * The skill's Focus Appearance rule is specific: an indicator at least as large
+ * as a 2 CSS px perimeter, at 3:1 contrast, and the named anti-pattern is a
+ * "thin low-contrast outline". Two pixels is the floor and this is on it, with
+ * an offset so the ring never lands on the control's own edge and is therefore
+ * never mistaken for one.
+ *
+ * `--ring` rather than `--accent` is not a colour change -- both clear 3:1
+ * comfortably -- it is so that the focus colour is ONE token. A second
+ * accent-like value would drift, and the first thing to drift in a focus style is
+ * the contrast, which is the one thing nobody can check by eye until they cannot.
+ *
+ * Two later rules re-state this with their own offsets. They are redundant and
+ * they are left in place: a focus ring that is correct only when the global rule
+ * happens to survive is not a focus ring, it is a coincidence.
+ */
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* ---- SURFACES ---- */
 
@@ -192,8 +266,37 @@ button:hover { border-color: var(--accent); }
 
 /* ---- KEY/VALUE ---- */
 
-.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.15rem 0.8rem; margin: 0; font-size: 0.9rem; }
-.kv dt { color: var(--muted); }
+/* === THE TELEMETRY READOUT, AND WHY IT IS A GRID AND NOT A LIST =============
+ *
+ * The skill's rule for this class of screen is "code for data, sans for labels",
+ * and the `.kv` grid is the reason that rule is enforceable rather than
+ * aspirational. It is a real two-column grid with a `max-content` label track
+ * and a `1fr` value track, so:
+ *
+ *   - Every label starts at the SAME x, because the label track is sized to its
+ *     content and the value track begins where that ends. Prose in a sans face
+ *     has ragged widths; a grid is what turns that raggedness into a ruler.
+ *   - Every value starts at the SAME x, which is what makes the values scannable
+ *     DOWN rather than one at a time.
+ *
+ * `align-items: baseline` is the part that is easy to leave out and impossible to
+ * un-notice. Without it a `1fr`-tall row aligns a number's box to a label's box
+ * and the two sit on different optical lines, so the panel looks aligned and is
+ * not. Baseline aligns the two typefaces on the line they actually share.
+ */
+.kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.35rem 0.8rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* Labels are PROSE and stay in the sans. The one exception is a parenthetical
+ * that is itself a figure -- "(a count, not a rate)" reads as a label, but
+ * "(sampled)" is a qualifier and inherits the value's face. */
+.kv dt { color: var(--muted); font-family: var(--sans); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .kv--wide { margin: 0.5rem 0 1rem; }
 
@@ -201,9 +304,21 @@ button:hover { border-color: var(--accent); }
 
 .table { width: 100%; border-collapse: collapse; font-size: 0.875rem; margin-bottom: 0.75rem; }
 .table th, .table td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-.table th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.table th { color: var(--muted); font-family: var(--sans); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .table tbody tr:hover { background: var(--panel); }
 .table td code { overflow-wrap: anywhere; }
+
+/* THE COLUMN TABLE IS THE ONE PLACE A READER COMPARES VALUES DOWN A COLUMN.
+ *
+ * `min`, `measured` and `max` in a row are read against each other, and the
+ * alignment that makes that comparison is `text-align: right` on a fixed-advance
+ * face. Left-aligned proportional digits put the units digit in a different place
+ * on every row, which is the single most common way a data table stops being
+ * scannable. `--align-numeric` is a token rather than a literal because the same
+ * three declarations are needed for the right-aligned column in any figure list.
+ */
+.table td { text-align: left; }
+.table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---- INDICATORS ---- */
 
@@ -241,7 +356,7 @@ button:hover { border-color: var(--accent); }
 }
 
 .liveness__word { font-weight: 600; }
-.liveness--ok .liveness__word { color: var(--text); }
+.liveness--ok .liveness__word { color: var(--ink); }
 .liveness--fault .liveness__word { color: var(--warn); }
 .liveness--hard .liveness__word { color: var(--critical); }
 
@@ -393,11 +508,11 @@ button:hover { border-color: var(--accent); }
   font: inherit;
   color: var(--ink);
   background: var(--ground);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 0.55rem 0.7rem;
   /* The credential is never spellchecked or autocapitalised. */
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--mono);
 }
 
 .gate__submit { width: 100%; padding: 0.55rem; }
@@ -421,6 +536,25 @@ button:hover { border-color: var(--accent); }
  * width exceeds its track. Every line below targets that one mechanism.
  */
 .app__side { min-width: 0; }
+
+/* === THE PRIMARY COLUMN ==================================================
+ *
+ * `.app__main` declares TWO tracks. Every direct child therefore consumes one,
+ * and a third child does not fail loudly -- it is auto-placed into an implicit
+ * row and the primary column collapses. `.app__primary` exists so the count is
+ * two by construction: the workspace stack is ONE grid item, however many
+ * panels it holds.
+ *
+ * It is a grid rather than a plain div so the panels inside it keep the same
+ * vertical rhythm the page uses, without a margin that has to be cancelled on
+ * the last child.
+ */
+.app__primary {
+  min-width: 0;
+  display: grid;
+  gap: 1.4rem;
+  align-content: start;
+}
 
 .app__main > * { min-width: 0; }
 
@@ -453,7 +587,7 @@ button:hover { border-color: var(--accent); }
   font-weight: 600;
   border-radius: 8px;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
   border-color: var(--accent);
   cursor: pointer;
   transition: filter 120ms ease;
@@ -484,10 +618,10 @@ button:hover { border-color: var(--accent); }
 .install__field span { font-size: 0.9rem; color: var(--muted); }
 .install__field input {
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--ground);
+  color: var(--ink);
 }
 .install__field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .install__button {
@@ -496,7 +630,7 @@ button:hover { border-color: var(--accent); }
   font-weight: 600;
   border-radius: 8px;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
   border-color: var(--accent);
   cursor: pointer;
 }
@@ -514,9 +648,9 @@ button:hover { border-color: var(--accent); }
 .install__again {
   margin-left: 0.8rem;
   background: transparent;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
-  color: var(--text);
+  color: var(--ink);
   cursor: pointer;
 }
 
@@ -678,7 +812,7 @@ button:hover { border-color: var(--accent); }
 }
 
 .record__agent {
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: var(--mono);
   color: var(--ink);
 }
 
@@ -728,17 +862,36 @@ button:hover { border-color: var(--accent); }
   align-items: center;
   gap: 0.45rem;
   padding: 0.35rem 0.7rem;
-  border: 1px solid var(--line);
+  /* TRANSPARENT, not a fill. A strip of agent rows is navigation, and a filled
+   * pill per row is forty-odd filled shapes competing with the panels below --
+   * the strip was reading as a toolbar of buttons rather than a place to choose
+   * an agent. The row takes the strip's own ground until it is hovered or
+   * selected, which is exactly the number of states an operator needs. */
+  border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
   color: var(--ink);
   font: inherit;
+  font-family: var(--sans);
   font-size: 0.9rem;
   cursor: pointer;
+  /* Hover, selection and focus are all transitions, and the skill's animation
+   * rule is that one duration serves a state change of a given kind -- not one
+   * duration for everything. 120ms is the "settle" band: long enough not to
+   * strobe under a moving cursor, short enough that the row does not feel like
+   * it is being fetched. `prefers-reduced-motion` is handled globally below. */
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
+/* THE HOVER SHIFT IS SOFT ON PURPOSE. A full `var(--panel-2)` fill on hover is
+ * louder than the selection it is hinting at, so a row under the pointer would
+ * out-shout the row that is actually chosen. This is a small step of the strip's
+ * own ground: enough to say "this one is under the cursor", not enough to say
+ * "this one is selected". The two are different claims and they now look like
+ * different claims. */
 .agentlist__row:hover {
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-color: var(--line);
 }
 
 /* THE MARKER. Empty by default and FILLED when the row is current -- a filled
@@ -748,13 +901,41 @@ button:hover { border-color: var(--accent); }
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 50%;
-  border: 1px solid var(--muted);
+  border: 1px solid var(--line-strong);
   flex: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
+/* === SELECTION: A SHARP ACCENT, AND THREE SIGNALS RATHER THAN ONE ==========
+ *
+ * The operator's brief is a "sharp accent" for `aria-current`, and "sharp" is
+ * the operative word: the selection is the ONE thing on this strip that is
+ * allowed to be crisp, because it is the only thing that is a decision rather
+ * than a surface.
+ *
+ * Three signals, because the skill's rule is "never rely on colour alone" and a
+ * single accent border is exactly that reliance:
+ *
+ *   1. a fully ACCENTED border, at full contrast rather than a mix toward the
+ *      strip -- the crispness the brief asks for;
+ *   2. a FILLED marker, so there is a SHAPE where an unselected row has an
+ *      outline, which is legible in greyscale and to a reader who cannot
+ *      separate the accent from the ink;
+ *   3. a WEIGHT change, because weight is legible when nothing else is.
+ *
+ * `aria-current` is the selector, not a class. The attribute is what a screen
+ * reader announces, so styling it means the visual state and the announced state
+ * cannot come apart -- there is no way for a row to LOOK chosen without being
+ * chosen.
+ */
 .agentlist__row[aria-current="true"] {
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   font-weight: 600;
+}
+
+.agentlist__row[aria-current="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .agentlist__row[aria-current="true"] .agentlist__mark {
@@ -792,8 +973,23 @@ button:hover { border-color: var(--accent); }
  */
 .quiet {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.15rem 0.8rem;
+  /* ONE COLUMN, and it is here because of what this block used to be.
+   *
+   * This was a `<dt>`/`<dd>` pair inside the readout's `<dl>`, so it inherited
+   * the key/value grid: `max-content` label track, `1fr` value track. Two
+   * paragraphs of explanation were then auto-placed into the `max-content`
+   * track -- a track sized to the width of a WORD -- which squeezed the prose to
+   * a column about as wide as "throughput" and stacked it into a hundred lines.
+   *
+   * Moving the block out of the `<dl>` fixed the invalid HTML, and this
+   * declaration is the other half: the two-column grid had to be undone as well,
+   * or the prose would be in a table cell wearing a paragraph's words. The
+   * `grid-template-columns` is a single explicit `1fr` rather than a removal,
+   * because inheriting a two-column grid from anywhere above this block would
+   * otherwise re-narrow the prose silently. */
+  grid-template-columns: minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.4rem;
   margin: 0.6rem 0 0.2rem;
   padding: 0.6rem 0.8rem;
   border-left: 3px solid var(--muted);
@@ -801,19 +997,20 @@ button:hover { border-color: var(--accent); }
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 
-.quiet dt {
+.quiet h4 {
+  margin: 0;
   color: var(--muted);
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-}
-
-.quiet dd {
-  margin: 0;
+  /* A heading is a label. It stays in the sans even though its siblings in the
+   * panel are figures. */
+  font-family: var(--sans);
 }
 
 .quiet p {
   margin: 0 0 0.4rem;
+  max-width: 62ch;
 }
 
 .quiet p:last-child {
@@ -862,4 +1059,85 @@ button:hover { border-color: var(--accent); }
  * and the record surface draws in the raised one. Nothing here may cross. */
 .live .kv dt {
   color: var(--muted);
+}
+
+/* ===================================================================== *
+ * ENTERPRISE TELEMETRY UX. Task 3.
+ * ===================================================================== *
+ *
+ * One section, and it is at the END of the file on purpose. Every rule above
+ * was written for a screen that is mostly panels with some numbers in them. This
+ * one is for the opposite: a screen whose panels are mostly numbers.
+ *
+ * The skill's constraint, applied literally, is "code for data, sans for labels".
+ * Three declarations do the whole job --
+ *
+ *     font-family: var(--mono);
+ *     font-variant-numeric: tabular-nums;
+ *     font-feature-settings: "tnum" 1, "zero" 1;
+ *
+ * -- and all three are stated together because dropping any ONE of them produces
+ * a panel that looks nearly right, which is the failure mode worth guarding.
+ *
+ *   - `--mono` alone gives a fixed advance width. The digits line up.
+ *   - `tabular-nums` alone does nothing in a monospace face that has no
+ *     proportional-figure variant, and does very little in most sans faces whose
+ *     default figures are ALREADY tabular -- so it is stated for the faces that
+ *     need it rather than because it is decorative.
+ *   - `"zero" 1` is the slashed zero. In this product it is not decoration: a
+ *     `0` and an `O` both appear on this screen (a breached column named
+ *     `order_id` beside a measurement of `0`), and this is a console for a reader
+ *     who scans a column of digits for a shape that is not right.
+ *
+ * THE RULE FOR WHOEVER EDITS THIS NEXT:
+ * **A FIGURE GETS THE MONO. PROSE GETS THE SANS. NEVER BOTH, NEVER NEITHER.**
+ */
+
+/* --- THE READOUT VALUES --- */
+.kv dd,
+.table td,
+.liveness__age,
+.liveness__records,
+.threshold__label,
+.chip,
+.record__verdict {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Prose INSIDE a figure slot is still prose. This is the exception that keeps the
+ * rule above from turning "(a count, not a rate)" and "no reading yet -- one
+ * observation cannot produce a rate" into unreadable monospace, and it is scoped
+ * to the two INLINE roles rather than to `.muted` globally: `.muted` is also a
+ * block-level caption class used outside any figure, where the mono must not
+ * reach. */
+.kv dd .muted,
+.table td .muted {
+  font-family: var(--sans);
+  font-variant-numeric: normal;
+  font-feature-settings: normal;
+}
+
+/* The `<strong>` inside a `<dd>` is the FIGURE and the surrounding text is its
+ * unit. A 12-character reading in a monospace face looks like one 12-character
+ * token unless the unit beside it is set in the sans, so the strong is pinned to
+ * the mono explicitly rather than inheriting it from `.kv dd`. */
+.kv dd strong {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* --- THE RULE BAR, WHICH IS A FIGURE IN DISGUISE --- */
+.threshold__label { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+
+/* --- THE LIVE STRIP'S CHANGING VALUES ---
+ * Tabular figures on BOTH changing values. A counter and a timestamp that jitter
+ * in width are unreadable, and the jitter is worst exactly when you are watching
+ * for movement -- which is the only time anyone is watching. */
+.liveness__age,
+.liveness__records {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
