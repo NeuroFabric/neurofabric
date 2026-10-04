@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
 import { AgentSelector } from "./components/AgentSelector";
 import { AlertCenter } from "./components/AlertCenter";
 import { DynamicDashboard } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
+import { AGE_TICK_MS, LivenessStrip, livenessOf } from "./components/LivenessStrip";
 import { RefusalScreen } from "./components/RefusalScreen";
 import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
 import { SchemaStore, type PortalSource, type StoreStatus } from "./store/SchemaStore";
@@ -51,6 +52,33 @@ const STATUS_WORDS: Record<StoreStatus, string> = {
 
 export function statusWord(status: string): string {
   return STATUS_WORDS[status as StoreStatus] ?? status;
+}
+
+/**
+ * A wall clock that ticks, for showing how old something is.
+ *
+ * === WHY THIS IS A HOOK AND NOT A VALUE PASSED AROUND ===
+ *
+ * "Last answer: 43s ago" is only true if something re-reads the clock. Without
+ * it the age is frozen at whatever it was when the panel rendered, and a frozen
+ * age is worse than none -- it looks live and is not.
+ *
+ * The tick is deliberately coarser than the 500ms poll. The age is the ONLY thing
+ * that changes without new data, so re-rendering it at the poll rate would double
+ * the render count for a number that only moves once a second. One second reads
+ * as live; a fifth of a second reads as a machine with nothing better to do.
+ *
+ * Cleared on unmount for the reason every timer here is cleared: a timer that
+ * outlives its component keeps the event loop alive, and this repository has been
+ * hung by exactly that shape once.
+ */
+function useNow(intervalMs: number = AGE_TICK_MS): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
 }
 
 export interface AppProps {
@@ -104,6 +132,7 @@ export function App({
   // Polling only runs when a live transport was supplied, so a static render --
   // and every integration test -- creates no interval and leaves no timer.
   const live = useLiveTelemetry(liveSource ?? IDLE_SOURCE, pollMs);
+  const now = useNow();
 
   useEffect(() => {
     void store.load(source);
@@ -146,6 +175,27 @@ export function App({
 
   return (
     <div className="app">
+      {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
+          *
+          "Visible without scrolling" is the requirement, and putting it here
+          * rather than in the side panel is what satisfies it. A fault you have
+          * to scroll to find is a fault an operator misses, and the state that
+          * must never be ambiguous is the one that costs the most to reach. */}
+      <LivenessStrip
+        liveness={livenessOf({
+          credentialRequired: live.credentialRequired,
+          lastUpdated: live.snapshot?.at ?? null,
+          now,
+          loading: live.loading,
+          records: live.snapshot?.verdict?.records ?? null,
+        })}
+        lastUpdated={live.snapshot?.at ?? null}
+        now={now}
+        credentialState={live.state}
+        fault={live.error}
+        records={live.snapshot?.verdict?.records ?? null}
+      />
+
       <header className="app__bar">
         {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
             gutter, which is a description of a component rather than a product
