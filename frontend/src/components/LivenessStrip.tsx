@@ -95,7 +95,15 @@ export interface LivenessStripProps {
  *    that will never ask again is a lie that looks like patience.
  * 2. No successful read at all is `connecting` -- but only while there is no
  *    error. A failed first attempt is a fault, not patience.
- * 3. A read that is too old is `stalled`, whatever the counter says. A counter
+ * 3. **A RATE OF ZERO IS NOT LIVE.** This is ADR-003 and it is the condition the
+ *    operator caught in the browser: the strip said "Live, just now" while the
+ *    throughput panel said "0 events/sec", because the demo burst had ended and
+ *    the snapshot was still under a second old.
+ *
+ *    Both readings were true and the screen made them look like a contradiction.
+ *    "Live" is a promise about the FEED, not a description of the last packet. A
+ *    feed that delivered one burst and went quiet is not live.
+ * 4. A read that is too old is `stalled`, whatever the counter says. A counter
  *    holding a number while the feed dies is the exact failure this strip exists
  *    to catch.
  */
@@ -105,6 +113,8 @@ export function livenessOf(input: {
   readonly now: number;
   readonly loading: boolean;
   readonly records: number | null;
+  /** Events per second over the meter's own window. Null before two readings. */
+  readonly rate: number | null;
 }): Liveness {
   if (input.credentialRequired) return "halted";
   if (input.lastUpdated === null) return input.loading ? "connecting" : "empty";
@@ -112,6 +122,10 @@ export function livenessOf(input: {
   // A future-dated instant is a clock problem somewhere else. Treat it as fresh
   // rather than as stalled: "negative age" is not a thing a viewer can act on.
   if (age > STALL_AFTER_MS) return "stalled";
+  // A rate of zero, or no rate at all, means nothing is arriving NOW. That is
+  // `empty`, which is a different and more honest word than `live` -- and it is
+  // the state a demo burst lands in, which is exactly when a viewer looks.
+  if (input.rate === null || input.rate <= 0) return input.records === 0 ? "empty" : "empty";
   if (input.records === 0) return "empty";
   return "live";
 }
@@ -133,7 +147,10 @@ const LIVENESS_WORDS: Record<Liveness, string> = {
   live: "Live",
   stalled: "Feed stalled",
   halted: "Polling stopped",
-  empty: "Connected, nothing arriving",
+  // "Arrived, nothing since" rather than "connected, nothing arriving" -- the
+  // latter describes a feed that has never said anything, and this state is what
+  // a finished demo burst lands in. ADR-003.
+  empty: "Arrived, nothing since",
 };
 
 /** The word a person reads. Kept beside the decision so the two cannot drift. */
