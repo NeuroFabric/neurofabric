@@ -11,24 +11,34 @@ import type { AgentDescriptor, AgentSchema, PortalConfig } from "./api/contracts
 /**
  * THE STRANGER TEST, AS AN ASSERTION.
  *
+ * === PROJECT LAW, ratified 2026-10-04 ===
+ *
+ * **A test that pins jargon defends jargon.**
+ *
+ * Every one of the seven lines the operator enumerated on a customer screen was
+ * asserted PRESENT by a test in this repository. They did not survive by
+ * accident and they did not appear because nobody looked: they were protected.
+ * Seven fixes would have fixed seven lines and found an eighth the following week.
+ *
+ * So when internal vocabulary is removed from a surface, the test that covered it
+ * is INVERTED rather than deleted. Deleting it leaves the door open; inverting it
+ * makes the removal permanent and the reintroduction loud.
+ *
  * === WHY THIS FILE EXISTS ===
  *
- * The operator enumerated seven lines of internal vocabulary on a screen a
- * stranger was looking at: a dev-diagnostics block, "layout version
- * 0.0.0.dev+derived", "(1 READY, 0 STUB)", "tenant dev", "fed by dev/sla-monitor",
- * "recs 240", and "from the live verdict, not a dispatched alert".
+ * The census is now a test, over the whole default view, against a list kept in
+ * ONE place. A copy of the list is a second thing to forget, and this list exists
+ * precisely because these strings were forgotten once.
  *
- * **Seven fixes would have fixed seven lines and found an eighth next week.**
- * Every one of them was a test asserting the jargon was PRESENT — a test that
- * defends what it should be eliminating. So the census is now a test, over the
- * whole default view, against a list kept in ONE place.
+ * === WHAT IT DOES NOT COVER, STATED RATHER THAN IMPLIED ===
  *
- * === WHAT IT DOES NOT COVER ===
+ * It renders components in isolation. **The assembled page is a separate test**
+ * (`app-default-view.test.tsx`), added because this file's own limit was called
+ * out: a string added to a component this file forgets would otherwise ship. Two
+ * tests, neither pretending to be the other.
  *
- * It renders components in isolation, not the assembled application. That is a
- * real gap: a string added to a component this file forgets would ship. The
- * honest claim is that the default view of the **panels** is clean, and the
- * operator's screenshot is still the check that the assembled page is.
+ * And neither settles whether the page *looks* like a product. That is the
+ * operator's eyes and it is marked unverified, never claimed.
  */
 
 const descriptor: AgentDescriptor = {

@@ -233,6 +233,9 @@ export function App({
           now,
           loading: live.loading,
           records: live.snapshot?.verdict?.records ?? null,
+          // ADR-003: the rate decides whether the feed is LIVE. Without this the
+          // strip said "Live, just now" beside "0 events/sec" after a burst.
+          rate: live.snapshot?.throughput?.eventsPerSecond ?? null,
         })}
         lastUpdated={live.snapshot?.at ?? null}
         now={now}
@@ -332,6 +335,10 @@ export function App({
           now,
           loading: live.loading,
           records: live.snapshot?.verdict?.records ?? null,
+          // ADR-003: the RATE decides whether the feed is live. Without this the
+          // strip said "Live, just now" directly beside "0 events/sec" once a
+          // burst ended, and both readings were true.
+          rate: live.snapshot?.throughput?.eventsPerSecond ?? null,
         })}
         lastUpdated={live.snapshot?.at ?? null}
         now={now}

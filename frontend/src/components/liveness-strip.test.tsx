@@ -58,51 +58,51 @@ describe("livenessOf -- the decision, as a pure function", () => {
   it("says HALTED when the credential was refused, before anything else", () => {
     // FIRST, deliberately. A poller that stopped asking is not "connecting", and
     // calling it that is a lie that looks like patience.
-    const verdict = livenessOf({ credentialRequired: true, lastUpdated: null, now: AT, loading: true, records: null });
+    const verdict = livenessOf({ credentialRequired: true, lastUpdated: null, now: AT, loading: true, records: null, rate: null });
     expect(verdict).toBe("halted");
   });
 
   it("says HALTED even when a perfectly good reading exists", () => {
     // A stale-but-valid snapshot must not paper over a stopped poller.
     expect(
-      livenessOf({ credentialRequired: true, lastUpdated: new Date(AT - 100).toISOString(), now: AT, loading: false, records: 500 }),
+      livenessOf({ credentialRequired: true, lastUpdated: new Date(AT - 100).toISOString(), now: AT, loading: false, records: 500, rate: 5 }),
     ).toBe("halted");
   });
 
   it("says CONNECTING before the first answer arrives", () => {
-    expect(livenessOf({ credentialRequired: false, lastUpdated: null, now: AT, loading: true, records: null })).toBe("connecting");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: null, now: AT, loading: true, records: null, rate: null })).toBe("connecting");
   });
 
   it("says LIVE when an answer is fresh", () => {
-    expect(livenessOf({ credentialRequired: false, lastUpdated: new Date(AT - 200).toISOString(), now: AT, loading: false, records: 42 })).toBe("live");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: new Date(AT - 200).toISOString(), now: AT, loading: false, records: 42, rate: 12 })).toBe("live");
   });
 
   it("says EMPTY when connected, answering, and there is genuinely nothing", () => {
     // Distinct from stalled, and the distinction is the whole point: "idle" and
     // "broken" look identical from outside.
-    expect(livenessOf({ credentialRequired: false, lastUpdated: new Date(AT - 200).toISOString(), now: AT, loading: false, records: 0 })).toBe("empty");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: new Date(AT - 200).toISOString(), now: AT, loading: false, records: 0, rate: null })).toBe("empty");
   });
 
   it("says STALLED when the last answer is too old, WHATEVER the counter says", () => {
     // THE CASE THIS STRIP EXISTS FOR: a count holding steady while the feed dies.
     const old = new Date(AT - STALL_AFTER_MS - 1).toISOString();
-    expect(livenessOf({ credentialRequired: false, lastUpdated: old, now: AT, loading: false, records: 262 })).toBe("stalled");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: old, now: AT, loading: false, records: 262, rate: 0 })).toBe("stalled");
     // And with no records at all, it is still stalled rather than empty.
-    expect(livenessOf({ credentialRequired: false, lastUpdated: old, now: AT, loading: false, records: 0 })).toBe("stalled");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: old, now: AT, loading: false, records: 0, rate: 0 })).toBe("stalled");
   });
 
   it("treats a future-dated instant as fresh rather than as stalled", () => {
     // "Negative age" is not a thing a viewer can act on, and calling it stalled
     // would raise an alarm about nothing.
     const future = new Date(AT + 5_000).toISOString();
-    expect(livenessOf({ credentialRequired: false, lastUpdated: future, now: AT, loading: false, records: 10 })).toBe("live");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: future, now: AT, loading: false, records: 10, rate: 3 })).toBe("live");
   });
 
   it("puts the stall boundary exactly where it is stated", () => {
     const at = new Date(AT - STALL_AFTER_MS).toISOString();
-    expect(livenessOf({ credentialRequired: false, lastUpdated: at, now: AT, loading: false, records: 1 })).toBe("live");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: at, now: AT, loading: false, records: 1, rate: 4 })).toBe("live");
     const past = new Date(AT - STALL_AFTER_MS - 1).toISOString();
-    expect(livenessOf({ credentialRequired: false, lastUpdated: past, now: AT, loading: false, records: 1 })).toBe("stalled");
+    expect(livenessOf({ credentialRequired: false, lastUpdated: past, now: AT, loading: false, records: 1, rate: 4 })).toBe("stalled");
   });
 });
 
@@ -200,7 +200,10 @@ describe("the rendered strip -- HUMAN claims, asserted through text()", () => {
     // they have not already read in the source.
     expect(words({ ...base, liveness: "halted" })).toContain("Polling stopped");
     expect(words({ ...base, liveness: "stalled" })).toContain("Feed stalled");
-    expect(words({ ...base, liveness: "empty" })).toContain("nothing arriving");
+    // ADR-003: the word changed, because the MEANING changed. This state is what a
+    // finished burst lands in -- answers arrived, and none since -- and "connected,
+    // nothing arriving" described a feed that had never said anything.
+    expect(words({ ...base, liveness: "empty" })).toContain("Arrived, nothing since");
   });
 
   it("names the credential fault rather than echoing a code", () => {
@@ -248,5 +251,74 @@ describe("the numbers the product shows are all changing", () => {
     // does not double the render count.
     expect(AGE_TICK_MS).toBeGreaterThanOrEqual(1_000);
     expect(AGE_TICK_MS).toBeLessThanOrEqual(2_000);
+  });
+});
+describe("ADR-003 — a burst that has ended is NOT live", () => {
+  // THE CASE THE OPERATOR CAUGHT IN THE BROWSER. The strip read "Live — just now"
+  // while the throughput panel read "0 events/sec over 510ms". Both readings were
+  // true: the snapshot was under a second old AND nothing was arriving.
+  //
+  // "Live" is a promise about the FEED, not a description of the last packet. This
+  // is that promise, asserted, so the two surfaces can never disagree again.
+
+  it("says so when the rate is zero and the snapshot is fresh", () => {
+    const verdict = livenessOf({
+      credentialRequired: false,
+      lastUpdated: new Date(AT - 400).toISOString(), // fresh: 400ms old
+      now: AT,
+      loading: false,
+      records: 240, // the count holds
+      rate: 0, // and nothing is arriving
+    });
+    expect(verdict).toBe("empty");
+    expect(verdict).not.toBe("live");
+  });
+
+  it("says LIVE only when the rate says something is arriving", () => {
+    expect(
+      livenessOf({
+        credentialRequired: false,
+        lastUpdated: new Date(AT - 200).toISOString(),
+        now: AT,
+        loading: false,
+        records: 240,
+        rate: 12,
+      }),
+    ).toBe("live");
+  });
+
+  it("treats a missing rate as NOT live, because one observation cannot make a rate", () => {
+    // Null means "we have not measured a rate yet". Claiming Live on a null rate
+    // is the same error as claiming it on a zero one.
+    expect(
+      livenessOf({
+        credentialRequired: false,
+        lastUpdated: new Date(AT - 200).toISOString(),
+        now: AT,
+        loading: false,
+        records: 240,
+        rate: null,
+      }),
+    ).not.toBe("live");
+  });
+
+  it("does NOT call a genuinely live feed empty", () => {
+    // The guard on the guard: the fix must not make "Live" so rare it is wrong.
+    expect(
+      livenessOf({
+        credentialRequired: false,
+        lastUpdated: new Date(AT - 300).toISOString(),
+        now: AT,
+        loading: false,
+        records: 5000,
+        rate: 250,
+      }),
+    ).toBe("live");
+  });
+
+  it("names the state in words a person can act on", () => {
+    expect(words({ ...base, liveness: "empty" })).toContain("Arrived, nothing since");
+    // And says nothing about "connected", which described a feed that never spoke.
+    expect(words({ ...base, liveness: "empty" }).toLowerCase()).not.toContain("connected");
   });
 });

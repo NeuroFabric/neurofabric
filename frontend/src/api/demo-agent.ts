@@ -51,7 +51,13 @@ export const DEMO_AGENT = {
   domain: "anomaly",
   version: "1.0.0",
   capabilities: ["Flags a breached service level", "Names the service that missed it"],
-  streams: ["pega_time", "elapsed_time", "threshold", "alert_code"],
+  // STREAMS ARE WHAT THE AGENT MEASURES, and a measurement must be numeric.
+  // The previous list carried `pega_time` and `alert_code`, which are real
+  // fields on every event but are a timestamp and a label. The verdict computes
+  // fences over numbers, so neither can EVER appear in the columns table -- the
+  // agent advertised two streams it could never evaluate. The operator spotted
+  // this as "pega_time in the stream list" and was right: it is a phantom.
+  streams: ["elapsed_time", "threshold"],
   rules: [
     {
       // The rule grammar is the REGISTRY's, not mine. The first version of this
@@ -81,7 +87,7 @@ const SERVICES = ["checkout", "payments", "onboarding", "claims", "dispatch", "r
  *
  * **Deterministic MEASUREMENTS, live timestamps.** The rule is a small LCG -- not
  * for anything cryptographic, only so the numbers a click produces are the same
- * numbers every time. The `at` values and `pega_time` are deliberately NOT
+ * numbers every time. The `at` values and `observed_at` are deliberately NOT
  * frozen: they are real instants, and a demo whose events are stamped with a
  * past date is a demo that is quietly lying about when things happened.
  *
@@ -126,7 +132,9 @@ export function demoEvents(count: number = DEMO_EVENT_COUNT, seed = 20261004): {
         elapsed_time: String(elapsed),
         threshold: String(agreed),
         alert_code: breaching ? "SLA_BREACH" : "OK",
-        pega_time: new Date(base - (count - i) * 50).toISOString(),
+        // Renamed from `pega_time`, which was the platform's name for this field
+        // and means nothing to a person reading the agent.
+        observed_at: new Date(base - (count - i) * 50).toISOString(),
       },
     });
   }

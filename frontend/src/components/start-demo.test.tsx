@@ -94,7 +94,13 @@ describe("the demo agent is a document, not a guess", () => {
     // measurement; a name like `rule_3_predicate` does not.
     expect(DEMO_AGENT.streams).toContain("elapsed_time");
     expect(DEMO_AGENT.streams).toContain("threshold");
-    expect(DEMO_AGENT.streams).toContain("alert_code");
+    // F2:  is a real field on every event but it is a LABEL, not a
+    // measurement -- the verdict computes fences over numbers, so it can never
+    // appear in the columns table. Advertising it as a stream was advertising a
+    // phantom. It is still sent, and it is simply not a measurement.
+    expect(DEMO_AGENT.streams).not.toContain("alert_code");
+    expect(DEMO_AGENT.streams).not.toContain("pega_time");
+    expect(DEMO_AGENT.streams).toEqual(["elapsed_time", "threshold"]);
   });
 
   it("produces the columns the agent watches, in every event", () => {
