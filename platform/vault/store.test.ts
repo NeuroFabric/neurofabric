@@ -59,14 +59,27 @@ function harness(): Harness {
     source: {
       async load(tenant: string) {
         loaded.push(tenant);
-        if (tenant !== TENANT_A && tenant !== TENANT_B) return undefined;
-        return {
-          tenant,
-          secrets: [
-            { name: "payments/api-key", value: SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
-            { name: "payments/secret-key", value: "shh-" + SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
-          ],
-        };
+        if (tenant === TENANT_A) {
+          return {
+            tenant,
+            secrets: [
+              { name: "payments/api-key", value: SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
+              { name: "payments/secret-key", value: "shh-" + SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
+            ],
+          };
+        }
+        if (tenant === TENANT_B) {
+          // A name that exists ONLY here, so a test can ask for a secret that is
+          // genuinely real, genuinely reachable by its owner, and genuinely out of
+          // reach for anyone else. A name shared by both tenants cannot show
+          // isolation, because "the name matched" and "the value came from the
+          // other tenant" are indistinguishable at the boundary.
+          return {
+            tenant,
+            secrets: [{ name: "globex/only-here", value: "globex-" + SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }],
+          };
+        }
+        return undefined;
       },
     },
     audit: (event) => events.push(event),
@@ -100,17 +113,44 @@ test("AN ENTITLED CAPABILITY READS ITS OWN SECRET", async () => {
   if (outcome.ok) assert.equal(outcome.value, SECRET_VALUE);
 });
 
-test("A CAPABILITY CANNOT REACH ANOTHER TENANT, AND THE STORE NEVER LOADS THAT TENANT", async () => {
+test("A CAPABILITY CANNOT REACH ANOTHER TENANT'S OWN SECRET, AND THAT TENANT IS NEVER LOADED", async () => {
   const { retrieve, loadedTenants } = harness();
 
-  // The capability names tenant A and asks for a secret name that also exists in
-  // tenant B. The answer must be no, and the store must not have gone looking in
-  // tenant B at all -- loading it would mean the refusal came after the read, not
-  // before it.
-  const outcome = await retrieve(capability(), "payments/secret-key");
+  // `globex/only-here` is a real secret belonging to tenant B. A tenant A
+  // capability that NAMES it exactly -- so the grant check passes -- must still be
+  // refused, because the store only ever loads the capability's own tenant.
+  //
+  // The stronger half is the load assertion: the store must not have gone looking
+  // in tenant B at all. A refusal decided after the bytes were in hand is not an
+  // isolation boundary, it is a filter over a read that already happened.
+  const outcome = await retrieve(capability({ secrets: ["globex/only-here"] }), "globex/only-here");
 
   assert.equal(outcome.ok, false);
-  assert.deepEqual(loadedTenants, [TENANT_A], "only the capability's own tenant is consulted");
+  // Tenant A IS consulted -- that is the store doing its job, looking only where
+  // the capability points. What must never happen is a load of tenant B, because
+  // that is where the secret actually lives. Asserting "no tenant was consulted"
+  // would have been a stronger claim than the design makes, and would have failed
+  // a correct implementation.
+  assert.deepEqual(
+    loadedTenants(),
+    [TENANT_A],
+    "only the capability's own tenant is ever consulted, so the other tenant's bytes are never in hand",
+  );
+});
+
+test("THE ENTITLED TENANT CAN STILL REACH ITS OWN SECRET, so the test above is isolation and not refusal", async () => {
+  const { retrieve } = harness();
+
+  // Without this, "cannot reach another tenant" is satisfied by refusing
+  // everything. The two claims have to be tested together or the first one is
+  // indistinguishable from a store that is simply closed.
+  const outcome = await retrieve(
+    capability({ tenant: TENANT_B, secrets: ["globex/only-here"] }),
+    "globex/only-here",
+  );
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.value, "globex-" + SECRET_VALUE);
 });
 
 test("A CAPABILITY CANNOT REACH A SECRET IT WAS NOT GRANTED, IN ITS OWN TENANT", async () => {
@@ -194,15 +234,17 @@ test("NOTHING IN THE AUDIT TRAIL CONTAINS A SECRET, because the trail outlives t
 test("NOTHING IN A REFUSAL MESSAGE CONTAINS A SECRET OR THE TENANT", async () => {
   const { retrieve } = harness();
 
-  const outcome = await retrieve(capability({ tenant: TENANT_B }), "payments/api-key");
+  // A refusal that names the tenant tells a prober they guessed the tenant right,
+  // and one that echoes the secret name turns a refusal into a confirmation. The
+  // message has to be usable for retry logic and useless for guessing.
+  const outcome = await retrieve(capability({ tenant: TENANT_B, secrets: [] }), "globex/only-here");
 
   assert.equal(outcome.ok, false);
   if (!outcome.ok) {
-    // A refusal that names the tenant tells a prober they guessed the tenant
-    // right. The answer has to be usable for retry logic and useless for guessing.
     assert.equal(outcome.message.includes(TENANT_B), false);
+    assert.equal(outcome.message.includes(TENANT_A), false);
+    assert.equal(outcome.message.includes("globex"), false, "the secret name is echoed back");
     assert.equal(outcome.message.includes(SECRET_VALUE), false);
-    assert.equal(outcome.message.includes("payments"), false);
   }
 });
 
@@ -251,7 +293,7 @@ test("A SOURCE THAT RETURNS A SET FOR A DIFFERENT TENANT IS REFUSED, not served"
   const events: VaultAuditEvent[] = [];
   const store = createTenantSecretStore({
     source: {
-      async load(tenant: string) {
+      async load() {
         return { tenant: TENANT_B, secrets: [{ name: "payments/api-key", value: SECRET_VALUE, rotatedAt: "now" }] };
       },
     },
