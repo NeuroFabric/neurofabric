@@ -11,18 +11,35 @@ import type { AgentDescriptor, AgentSchema, PortalConfig } from "./api/contracts
 /**
  * THE STRANGER TEST, AS AN ASSERTION.
  *
- * === PROJECT LAW, ratified 2026-10-04 ===
+ * === THREE PROJECT LAWS, ratified 2026-10-04 ===
  *
- * **A test that pins jargon defends jargon.**
+ * **1. A test that pins jargon defends jargon.**
  *
  * Every one of the seven lines the operator enumerated on a customer screen was
  * asserted PRESENT by a test in this repository. They did not survive by
  * accident and they did not appear because nobody looked: they were protected.
  * Seven fixes would have fixed seven lines and found an eighth the following week.
  *
- * So when internal vocabulary is removed from a surface, the test that covered it
- * is INVERTED rather than deleted. Deleting it leaves the door open; inverting it
- * makes the removal permanent and the reintroduction loud.
+ * **2. Inversion, not deletion.**
+ *
+ * The same event as law 1 seen from the other side: a removed string's test
+ * becomes its permanent NEGATIVE assertion. Deleting it leaves the door open;
+ * inverting it makes the reintroduction loud.
+ *
+ * **3. Guards assert on what the USER PERCEIVES, not what the machine stores.**
+ *
+ * Derived from an assertion this suite deliberately WEAKENED. An
+ * `<option value="dev/sla-monitor">` MUST carry the real composite id, or
+ * selecting the agent breaks -- that is a bug, not jargon. The same string must
+ * NEVER be spoken or displayed, because a reader cannot act on it.
+ *
+ *     expect(html).toContain('value="dev/sla-monitor"');     // machine: present
+ *     expect(spoken(html)).not.toContain("dev/sla-monitor"); // user: absent
+ *
+ * The obvious tightening -- demand the string be absent from the markup -- would
+ * have been **demanding a bug**. A guard that cannot tell a stored value from a
+ * displayed one will eventually push a real defect out of the code to satisfy it.
+ * That is the failure this law exists to prevent.
  *
  * === WHY THIS FILE EXISTS ===
  *
