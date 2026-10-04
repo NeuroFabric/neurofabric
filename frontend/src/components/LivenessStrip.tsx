@@ -166,7 +166,7 @@ export function LivenessStrip({
 
   return (
     <section
-      className={`live live--${liveness} live--${severity}`}
+      className={`liveness liveness--${liveness} liveness--${severity}`}
       // THE MACHINE ATTRIBUTE. Every assertion about this strip runs on the
       // markup, never on rendered text -- `text()` strips tags and punctuation,
       // so an assertion made against it is asserting on a different thing than
@@ -180,14 +180,14 @@ export function LivenessStrip({
       {/* The pulse. Green only when answers are actually arriving -- a green
           pulse next to a frozen counter is the exact combination that makes a
           dashboard lie, so `empty` and `stalled` get no pulse at all. */}
-      <span className="live__pulse" data-testid="liveness-pulse" aria-hidden="true" />
+      <span className="liveness__pulse" data-testid="liveness-pulse" aria-hidden="true" />
 
-      <span className="live__word">{livenessWord(liveness)}</span>
+      <span className="liveness__word">{livenessWord(liveness)}</span>
 
       {/* Tabular figures on both. A counter and a timestamp that jitter in width
           are unreadable, and the jitter is worst exactly when you are watching
           for movement. */}
-      <span className="live__age live__num" title={`Last answer at ${lastUpdated ?? "never"}`}>
+      <span className="liveness__age liveness__num" title={`Last answer at ${lastUpdated ?? "never"}`}>
         {age}
       </span>
 
@@ -199,12 +199,12 @@ export function LivenessStrip({
           with an empty fault never reached -- so the most important message in
           the component was unreachable in the state that most needed it. */}
       {credentialState !== "ok" && (severity !== "ok" || liveness === "halted") ? (
-        <span className="live__fault">{describeCredentialState(credentialState)}</span>
+        <span className="liveness__fault">{describeCredentialState(credentialState)}</span>
       ) : null}
-      {fault !== null && fault !== "" ? <span className="live__fault">{fault}</span> : null}
+      {fault !== null && fault !== "" ? <span className="liveness__fault">{fault}</span> : null}
 
       {records === null ? null : (
-        <span className="live__records live__num">
+        <span className="liveness__records liveness__num">
           <abbr title="Records in the last snapshot. A count, not a rate.">recs</abbr>{" "}
           {records.toLocaleString("en-GB")}
         </span>
