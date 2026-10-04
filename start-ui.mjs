@@ -38,14 +38,14 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 function parseArgs(argv) {
   const options = {
     workspace: process.env.WEDGE_WORKSPACE ?? path.join(ROOT, "ui-workspace"),
-    // 8080, not 3000. The handoff declares 8080 as the wedge contract, and
-    // `frontend/vite.config.ts` proxies `/api` to it. Those two had drifted -- the
-    // proxy moved to 8080 and this default stayed at 3000 -- so a plain `npm run
-    // dev` and a plain `npm start` in `frontend/` disagreed about the address,
-    // and the disagreement surfaced as a proxy refusing a connection to nothing.
-    // One default, declared once, is what stops that recurring. `--port` still
-    // overrides it.
-    port: Number(process.env.PORT ?? 8080),
+    // THE DEFAULT COMES FROM `scripts/dev-endpoints.ts`, THE SAME CONSTANT THE
+    // FLOOD GENERATOR AND THE DEV PROXY USE.
+    //
+    // It was a literal `3000` here and `8080` in `frontend/vite.config.ts` for
+    // the life of both files, which is how a flood ended up dialling a dead port
+    // while this server was serving healthily on another. One number, one place,
+    // imported -- not a second copy that can be wrong independently.
+    port: Number(process.env.PORT ?? process.env.WEDGE_PORT ?? WEDGE_PORT),
     // LOOPBACK BY DEFAULT, and the default is the security property. The
     // container is the one case that needs a wider bind, and it is an explicit
     // opt-in rather than a default that happens to suit one deployment.

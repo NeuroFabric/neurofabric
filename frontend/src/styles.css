@@ -223,6 +223,70 @@ button:hover { border-color: var(--accent); }
 .pill--stub, .pill--loading, .pill--degraded { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
 .pill--metric, .pill--table, .pill--chart, .pill--feed { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 
+/* === THE LIVENESS STRIP =================================================
+ *
+ * Five states, and the only rule the stylesheet has to obey is that `live` and
+ * `empty` must NOT look alike -- because a green pulse beside a counter that has
+ * not moved is the exact combination that makes a dashboard lie. `empty` is
+ * connected and answering; it is not live traffic, and it is not alarmed
+ * either. Two more states that are genuinely alarmed get their own ink.
+ */
+.live {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1.4rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 0.9rem;
+}
+
+.live__word { font-weight: 600; }
+.live--ok .live__word { color: var(--text); }
+.live--fault .live__word { color: var(--warn); }
+.live--hard .live__word { color: var(--critical); }
+
+.live__age, .live__records {
+  color: var(--muted);
+  /* Tabular figures on BOTH changing values. A counter and a timestamp that
+     jitter in width are unreadable, and the jitter is worst exactly when you are
+     watching for movement. */
+  font-variant-numeric: tabular-nums;
+}
+
+.live__fault { color: var(--critical); font-weight: 600; }
+.live__records { margin-left: auto; }
+.live abbr { text-decoration: none; border-bottom: 1px dotted var(--muted); cursor: help; }
+
+/* One pulse, and it is the ONLY animation on the strip. It sits on a single
+   element so the whole strip never reflows, and it is gated on `live` alone:
+   `empty` and `stalled` must not carry it. */
+.live__pulse {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.live--live.live--ok .live__pulse { background: var(--good); animation: live-pulse 1.6s ease-in-out infinite; }
+.live--connecting .live__pulse { background: var(--warn); }
+.live--empty .live__pulse { background: var(--muted); }
+.live--stalled .live__pulse,
+.live--halted .live__pulse { background: var(--critical); }
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Reduced motion. The global block later in this file neutralises the duration;
+   this one additionally stops the pulse from being the only signal, because an
+   animation removed entirely must not remove information with it. */
+@media (prefers-reduced-motion: reduce) {
+  .live__pulse { animation: none; outline: 2px solid currentColor; outline-offset: 1px; }
+}
+
 /* === SEVERITY AS A SIGNAL, NOT A HUE ====================================
  *
  * These four rules existed as two: colour and border-colour. Every severity was

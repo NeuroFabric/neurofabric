@@ -15,8 +15,9 @@ import path from "node:path";
  *
  * What they are genuinely good for is the most common way a container
  * deployment rots: someone removes `USER node` to make a permission error go
- * away, or changes `127.0.0.1:3000:3000` to `3000:3000` so a colleague can see
- * a demo, or adds a bind mount of the working tree to make a path resolve. Each
+ * away, or changes the published port from a loopback-bound mapping to a bare
+ * one so a colleague can see a demo, or adds a bind mount of the working tree to
+ * make a path resolve. Each
  * of those is a one-character or one-line change that looks like a fix and is a
  * boundary removal, and each of them is invisible in a build log.
  *
@@ -108,10 +109,35 @@ test("the developer's own data files are kept out of the context", () => {
 test("the port is published to the host's LOOPBACK, and the container bind is deliberate", () => {
   // The asymmetry that makes containerisation work without widening the tool's
   // reachable surface: 0.0.0.0 inside the container's network namespace,
-  // 127.0.0.1 on the host. Changing the host side to `3000:3000` is the single
-  // most likely way this deployment becomes remote.
-  assert.match(compose, /"127\.0\.0\.1:3000:3000"/, "the published port must be loopback-bound");
-  assert.ok(!/^\s*-\s*"?3000:3000"?\s*$/m.test(compose), "a bare 3000:3000 would publish on every interface");
+  // 127.0.0.1 on the host. Changing the host side to a bare `PORT:PORT` is the
+  // single most likely way this deployment becomes remote.
+  //
+  // === THE PORT IS READ FROM THE FILE, NOT WRITTEN INTO THIS ASSERTION ===
+  //
+  // This test pinned `127.0.0.1:3000:3000` as a literal, and the port has since
+  // moved to 8080 -- so the assertion would have failed on a number rather than on
+  // a security property, and the temptation would have been to relax it until it
+  // went green rather than to notice what had changed.
+  //
+  // What is actually being protected here is LOOPBACK, and that is what is
+  // asserted. A compose file can be republished on any port and stay safe; what
+  // it cannot survive is losing `127.0.0.1:` from the host side.
+  const published = compose.match(/^\s*-\s*"?(\d+\.\d+\.\d+\.\d+):(\d+):(\d+)"?/m);
+  assert.ok(published !== null, "compose must publish a port, and the mapping must be found");
+  const hostAddress = published?.[1];
+  const hostPort = published?.[2];
+  assert.equal(hostAddress, "127.0.0.1", "the published port must be bound to the host's loopback");
+
+  // A bare `PORT:PORT` publishes on every interface. Matched against whatever
+  // port this file uses, so the check survives the port moving again.
+  assert.ok(
+    !new RegExp(`^\\s*-\\s*"?${hostPort}:${hostPort}"?\\s*$`, "m").test(compose),
+    `a bare ${hostPort}:${hostPort} would publish on every interface`,
+  );
+
+  // And it must be the port the wedge actually binds inside, or the healthcheck
+  // below is asking a container port nothing is listening on.
+  assert.match(compose, new RegExp(`PORT:\\s*"${hostPort}"`), "the container's PORT must match the published container port");
   assert.match(compose, /WEDGE_HOST:\s*"0\.0\.0\.0"/, "the in-container bind is explicit, not inherited");
   // And the code default must still be loopback, or the container would be the
   // only place the safety property is absent.
@@ -134,7 +160,13 @@ test("the healthcheck asks the real question, not merely whether the socket is o
   // A listener that is up while its module graph failed to import answers on the
   // socket and 500s on every request. "Up" is not the question.
   assert.match(compose, /healthcheck:/);
-  assert.match(compose, /fetch\('http:\/\/127\.0\.0\.1:3000\/'\)/, "it must request the real route");
+  // Asked on the port the wedge actually binds, read from the compose file rather
+  // than written here -- a healthcheck pointed at the wrong port is a healthcheck
+  // that reports a healthy container which is serving nothing.
+  const healthPort = compose.match(/fetch\('http:\/\/127\.0\.0\.1:(\d+)\/'\)/)?.[1];
+  assert.ok(healthPort !== undefined, "it must request the real route");
+  const publishedPort = compose.match(/^\s*-\s*"?127\.0\.0\.1:(\d+):/m)?.[1];
+  assert.equal(healthPort, publishedPort, "the healthcheck and the published port must be the same port");
 });
 
 test("the governed reports path exists in the image without shipping its contents", () => {

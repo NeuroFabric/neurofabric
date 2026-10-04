@@ -63,7 +63,7 @@ services:
       - --workspace
       - /app/workspace
       - --port
-      - "3000"
+      - "8080"
       - --host
       - 0.0.0.0
 
@@ -74,7 +74,7 @@ services:
       # someone can forget to set is a deployment with an unbounded boundary.
       WEDGE_WORKSPACE: /app/workspace
       NODE_ENV: production
-      PORT: "3000"
+      PORT: "8080"
       WEDGE_HOST: "0.0.0.0"
 
     # THE PUBLISHED PORT IS LOOPBACK-ONLY ON THE HOST. This is the half that
@@ -83,16 +83,24 @@ services:
     # Inside the container the process must bind 0.0.0.0, because Docker
     # forwards published ports to the container's own interface and a loopback
     # bind there is unreachable -- the wedge would start and then refuse every
-    # connection. Outside it, `127.0.0.1:3000` means the only host that can reach
+    # connection. Outside it, `127.0.0.1:8080` means the only host that can reach
     # it is the one sitting at the keyboard, which is the same reachable surface
     # as running `start-ui.mjs` directly.
     #
-    # It is tempting to write "3000:3000" here so a colleague on the network can
+    # It is tempting to write "8080:8080" here so a colleague on the network can
     # look at a demo. That single character change turns a local tool that reads
     # private files into a service on the office LAN, and it would work, and
     # that is the problem.
+    #
+    # This was 3000 and is now 8080, to match `scripts/dev-endpoints.ts`, which is
+    # where the port is declared. See that file for the demo this prevents: a
+    # container publishing the wedge on 3000 while every host-run path served on
+    # 8080 is two wedges on two ports, and a person who mixed them was dialling a
+    # dead one. The port is written literally here because compose does not read
+    # TypeScript, so it is a copy -- and a copy is exactly what the sweep that
+    # found this one is for.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:8080:8080"
 
     # THE CONTAINER'S OWN LIMITS. Not decoration either: a tool that reads a
     # dropped file has no input size the operator chose, so the ceiling belongs
@@ -120,7 +128,7 @@ services:
       # The real route, not a TCP connect. A listener that is up but whose
       # module graph failed to import answers on the socket and 500s on every
       # request, and "up" is not the question being asked.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       # Three failures before the restart, so a slow start is not a crash loop.
