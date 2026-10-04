@@ -177,6 +177,34 @@ async function handleRequest(
   }
 
   if (method === "tools/list") {
+    /**
+     * DISCOVERY IS BEHIND THE HANDSHAKE, AND IT HAS TO BE.
+     *
+     * `tools/call` has always required an established session. This did not, and
+     * the omission was a real disclosure: the tool list IS the capability map --
+     * it names every operation this embassy will perform on a tenant's behalf --
+     * so a caller that never handshook could enumerate all of them while still
+     * being unable to invoke any. `callTool` refuses to name what exists at its
+     * "no such tool" for exactly that reason, and the portal edge makes the same
+     * choice at its 404 rather than echoing its routes.
+     *
+     * A boundary that holds on the call and not on the listing is not a boundary;
+     * it is a speed bump beside the door.
+     *
+     * The refusal uses the same code as every other session refusal, so its SHAPE
+     * discloses nothing about whether this is an authentication rule or an
+     * incidental one. A caller must not be able to map the boundary by probing it,
+     * which is the property ADR-006 section 5.2 asked for and the earlier code
+     * only half-delivered.
+     *
+     * This is also what the specification requires in any case: initialization is
+     * the first interaction of a session, so a well-behaved client has already
+     * handshook by the time it asks what tools exist. Refusing costs a conforming
+     * client nothing and closes the door on one that has not.
+     */
+    if (!session.established) {
+      return serialise(failure(id, RPC.TENANT_REFUSED, "this session has not been initialised"));
+    }
     return serialise(success(id, { tools: TOOLS }));
   }
 

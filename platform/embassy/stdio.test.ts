@@ -5,6 +5,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { serve, readConfig, type EmbassyConfig } from "./server.ts";
+import { TOOLS, callTool } from "./tools.ts";
+import { RPC } from "./jsonrpc.ts";
 
 /**
  * THE STDIO LOOP, AND THE TWO OBLIGATIONS THAT ONLY IT CAN TEST.
@@ -295,36 +297,84 @@ test("DISCOVERY AFTER THE HANDSHAKE ANSWERS, with a schema for every tool", asyn
   }
 });
 
-test("EVERY PUBLISHED TOOL IS DISPATCHABLE, so the listing cannot drift from the dispatcher", async () => {
+test("EVERY PUBLISHED TOOL REACHES ITS OWN CORE ROUTE, so the listing cannot drift from the dispatcher", async () => {
   // The tool list and the dispatcher are two hand-written authorities for one
-  // surface. They agree today, and agreement today is not a property -- a fourth
-  // tool added to the list and not to the dispatcher would be advertised to every
-  // connecting client and then refuse at the call.
+  // surface. They agree today, and agreement today is not a property: a tool
+  // added to the list and not to the dispatcher would be advertised to every
+  // connecting client and then run somebody else's function.
   //
-  // This asserts the bijection from the caller's side rather than comparing the
-  // two declarations to each other, because the failure it must catch is exactly
-  // the case where the two declarations agree with each other and disagree with
-  // what the server can do.
-  const { out } = await run(
-    '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
-  );
-  const [, listed] = frames(out);
-  const result = listed?.["result"] as { readonly tools?: readonly { readonly name: string }[] } | undefined;
-  const names = (result?.tools ?? []).map((tool) => tool.name);
+  // So the claim is checked from the CORE's side rather than by comparing the two
+  // declarations to each other. Two declarations can agree with each other and
+  // both be wrong about what the server does; what a core route was actually
+  // asked for cannot.
+  //
+  // The failure this exists to catch is silent and wrong in the worst direction:
+  // `get_verdict` reaching the ingest route would report a partial accept to an
+  // agent that asked whether anything is breaching.
+  const seen: string[] = [];
+  const recordFetch = async (url: string): Promise<unknown> => {
+    seen.push(url.replace(CONFIG.endpoint.origin, ""));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ accepted: 1, refused: 0, source: "live", at: "now", provider: "pega", verdict: null, throughput: null }),
+    };
+  };
 
-  for (const name of names) {
-    const [called] = frames(
-      (
-        await run(
-          `{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"${name}","arguments":{}}}\n`,
-        )
-      ).out,
-    ).slice(1);
-    const answer = called?.["result"] as { readonly isError?: boolean } | undefined;
-    assert.equal(
-      answer?.isError,
-      true,
-      `${name} is published but refused as unknown, so the listing advertises a capability the dispatcher does not have`,
-    );
+  // Declared per tool, and the FIRST assertion is that this map covers every
+  // published tool. That is the tripwire: adding a fourth tool to TOOLS without
+  // giving it an entry here fails the suite, which is the moment the dispatcher's
+  // fallthrough arm would otherwise start answering for a tool it cannot serve.
+  const ROUTES: Readonly<Record<string, string>> = {
+    get_verdict: "/api/portal/live",
+    install_schema: "/api/portal/schema",
+    ingest_events: "/api/portal/ingest",
+  };
+  const ARGS: Readonly<Record<string, unknown>> = {
+    get_verdict: {},
+    install_schema: { schema: { id: "s", title: "t", streams: [], rules: [] } },
+    ingest_events: { events: [{ fields: { a: "1" } }] },
+  };
+
+  assert.deepEqual(
+    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ROUTES).sort(),
+    "every published tool declares the core route it must reach",
+  );
+  assert.deepEqual(
+    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ARGS).sort(),
+    "every published tool declares the arguments this test calls it with",
+  );
+
+  for (const tool of TOOLS.map((entry) => entry.name)) {
+    seen.length = 0;
+    const source = Readable.from([
+      Buffer.from(
+        `{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"${tool}","arguments":${JSON.stringify(ARGS[tool])}}}\n`,
+        "utf8",
+      ),
+    ]);
+    const sink = new PassThrough();
+    sink.resume();
+    await serve(source, sink, CONFIG, recordFetch as never);
+    assert.deepEqual(seen, [ROUTES[tool]], `${tool} reached ${ROUTES[tool]}`);
   }
+});
+
+test("A PUBLISHED TOOL WITH NO HANDLER IS REFUSED, not run as somebody else's function", async () => {
+  // The dispatcher used to end in `return ingestEvents(...)`, so "everything else"
+  // meant `ingest_events`. That was invisible while the tool name check was a
+  // separate hand-written triple, and it became a live defect the moment the
+  // published list became the single authority: a tool added to the list and not
+  // to the dispatcher would be advertised to every client and would then run the
+  // ingest route against whatever arguments it was given.
+  //
+  // Pinned by adding a tool that is published and deliberately unimplemented.
+  const published = TOOLS.map((tool) => tool.name);
+  assert.equal(published.includes("not_implemented"), false, "the fixture tool is not in the shipped list");
+
+  const outcome = await callTool("not_implemented", { endpoint: CONFIG.endpoint, credential: "tok" }, {});
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, RPC.METHOD_NOT_FOUND, "an unknown name is refused before dispatch");
 });
