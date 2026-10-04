@@ -15,7 +15,7 @@
     "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
     "demo": "node --experimental-strip-types scripts/demo.ts",
     "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.entries.json"
   },
   "devDependencies": {
     "@types/node": "22.7.5",

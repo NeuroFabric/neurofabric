@@ -23,6 +23,7 @@ import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { startWedgeServer } from "./platform/web/server.ts";
+import { WEDGE_PORT } from "./scripts/dev-endpoints.ts";
 import { describePort, inspectPort } from "./platform/core/port-probe.ts";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -92,7 +93,13 @@ let options;
 try {
   options = parseArgs(process.argv.slice(2));
 } catch (error) {
-  console.error(`${error.message}\n\n${usage()}`);
+  // The catch binding is UNKNOWN unless narrowed. It happened to be an Error
+  // every time, which is why this shipped -- `error.message` on a string prints
+  // `undefined` rather than throwing. Found by `tsconfig.entries.json` on the
+  // same day as the WEDGE_PORT ghost, and for the same reason: nothing was
+  // looking at a plain-JavaScript file.
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`${message}\n\n${usage()}`);
   process.exit(2);
 }
 if (options.help) {
