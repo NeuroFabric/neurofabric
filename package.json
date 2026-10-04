@@ -11,7 +11,7 @@
     "dev:boot": "node --experimental-strip-types scripts/dev-boot.mjs",
     "test": "npm run typecheck && npm run test:mjs && npm run test:ts",
     "test:mjs": "node --test platform/*.test.mjs",
-    "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts scripts/*.test.ts platform/memory/*.test.ts",
+    "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts scripts/*.test.ts platform/memory/*.test.ts platform/embassy/*.test.ts",
     "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
     "demo": "node --experimental-strip-types scripts/demo.ts",
     "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
