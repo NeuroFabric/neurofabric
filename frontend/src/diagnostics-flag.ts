@@ -33,23 +33,42 @@ const DIAGNOSTIC_MARKERS = [
   "recs",
 ] as const;
 
-function fromQuery(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return new URLSearchParams(window.location.search).get("diagnostics") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function fromEnvironment(): boolean {
-  const flag = import.meta.env.VITE_SHOW_DIAGNOSTICS;
-  return flag === "1" || flag === "true";
+/**
+ * Where the sources are read from, so the decision can be tested BOTH ways.
+ *
+ * Passing these is how `app-default-view.test.tsx` asserts that `?diagnostics=1`
+ * brings the internals BACK — and that test matters as much as the default one,
+ * because a flag that can never be turned on is not a flag, it is a deletion.
+ *
+ * The parameters are optional: called with nothing, this reads the real browser
+ * sources. Called with them, it reads those. There is no third path and no global
+ * to reset, which is the only way both directions stay honest.
+ */
+export interface DiagnosticSources {
+  /** `window.location.search`. Omitted means "not in a browser". */
+  readonly search?: string | undefined;
+  /** The `VITE_SHOW_DIAGNOSTICS` value. */
+  readonly flag?: string | undefined;
 }
 
 /** True when the internal view has been deliberately asked for. */
-export function diagnosticsEnabled(): boolean {
-  return fromQuery() || fromEnvironment();
+export function diagnosticsEnabled(sources: DiagnosticSources = {}): boolean {
+  const search = sources.search ?? (typeof window === "undefined" ? undefined : window.location.search);
+  const flag = sources.flag ?? import.meta.env.VITE_SHOW_DIAGNOSTICS;
+
+  if (typeof search === "string") {
+    try {
+      if (new URLSearchParams(search).get("diagnostics") === "1") return true;
+    } catch {
+      // A malformed query string is not a reason to show internals.
+    }
+  }
+  return flag === "1" || flag === "true";
+}
+
+/** Read the real browser sources. What components call. */
+export function diagnosticsEnabledHere(): boolean {
+  return diagnosticsEnabled({});
 }
 
 /**

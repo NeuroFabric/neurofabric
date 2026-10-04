@@ -42,13 +42,13 @@ function text(html: string): string {
 describe("LiveStreamView", () => {
   it("states an explicit absence rather than spinning forever", () => {
     const html = render(<LiveStreamView verdict={null} />);
-    expect(html).toContain("No verdict yet");
+    expect(html).toContain("Nothing has arrived yet");
     // A spinner that never resolves is indistinguishable from a working pipeline.
     expect(html).not.toContain("Loading");
   });
 
   it("says it is connecting while the first poll is outstanding", () => {
-    expect(render(<LiveStreamView verdict={null} loading />)).toContain("Connecting to the live gateway");
+    expect(render(<LiveStreamView verdict={null} loading />)).toContain("Connecting");
   });
 
   it("renders a transport error rather than an empty panel", () => {

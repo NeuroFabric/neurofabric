@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import { diagnosticsEnabled } from "../diagnostics-flag";
+import { diagnosticsEnabledHere } from "../diagnostics-flag";
 
 import type { AgentDescriptor, PortalWidget, RuleSpec } from "../api/contracts";
 import type { UIConfig } from "../store/SchemaStore";
@@ -45,6 +45,11 @@ export interface DynamicDashboardProps {
   readonly config: UIConfig;
   /** Observed values, keyed by rule id. Absent values are stated, never invented. */
   readonly readings?: readonly RuleReading[];
+  /**
+   * Whether the internal view is shown. Injected by the assembled-page test so
+   * BOTH directions are renderable; omitted, it reads the browser sources.
+   */
+  readonly diagnostics?: boolean | undefined;
 }
 
 function readingFor(readings: readonly RuleReading[], ruleId: string): number | undefined {
@@ -119,7 +124,7 @@ function RuleRow({ rule, measured }: { rule: RuleSpec; measured: number | undefi
   );
 }
 
-function AgentStatusCard({ agent }: { agent: AgentDescriptor }): ReactElement {
+function AgentStatusCard({ agent, showDiagnostics }: { agent: AgentDescriptor; showDiagnostics: boolean }): ReactElement {
   return (
     <li className="card">
       <div className="card__head">
@@ -138,7 +143,7 @@ function AgentStatusCard({ agent }: { agent: AgentDescriptor }): ReactElement {
       <dl className="kv">
         {/* The composite id is an address in our namespace (tenant/name), not a
             thing a customer recognises. The title is right above it. */}
-        {diagnosticsEnabled() ? (
+        {showDiagnostics ? (
           <>
             <dt>id</dt>
             <dd><code>{agent.id}</code></dd>
@@ -149,7 +154,7 @@ function AgentStatusCard({ agent }: { agent: AgentDescriptor }): ReactElement {
         {/* Version is a build artefact. "0.0.0.dev+derived" on a customer screen
             tells a reader nothing they can act on, and it is one of the lines the
             operator read off the screen by name. Available under ?diagnostics=1. */}
-        {diagnosticsEnabled() ? (
+        {showDiagnostics ? (
           <>
             <dt>version</dt>
             <dd><code>{agent.version}</code></dd>
@@ -214,7 +219,10 @@ function maturityLabel(maturity: string): string {
   }
 }
 
-export function DynamicDashboard({ config, readings = [] }: DynamicDashboardProps): ReactElement {
+export function DynamicDashboard({ config, readings = [], diagnostics }: DynamicDashboardProps): ReactElement {
+  // Resolved ONCE here rather than at each use, so the whole panel agrees with
+  // itself. A component that asked twice could render two different answers.
+  const showDiagnostics = diagnostics ?? diagnosticsEnabledHere();
   const schema = config.schema;
   const issues = config.issues;
 
@@ -229,7 +237,7 @@ export function DynamicDashboard({ config, readings = [] }: DynamicDashboardProp
             Behind ?diagnostics=1 -- see diagnostics-flag.ts for why this is not
             import.meta.env.DEV, which would be true on the very dev server the
             complaint came from. */}
-        {diagnosticsEnabled() ? (
+        {showDiagnostics ? (
           <p className="muted muted--diagnostic">
             tenant <code>{config.tenant === "" ? "—" : config.tenant}</code> · layout version{" "}
             <code>{config.version === "" ? "—" : config.version}</code>
@@ -274,7 +282,7 @@ export function DynamicDashboard({ config, readings = [] }: DynamicDashboardProp
       ) : (
         <ul className="grid">
           {config.agents.map((agent) => (
-            <AgentStatusCard key={agent.id} agent={agent} />
+            <AgentStatusCard key={agent.id} agent={agent} showDiagnostics={showDiagnostics} />
           ))}
         </ul>
       )}
