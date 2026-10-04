@@ -1,11 +1,8 @@
 import {
   CREDENTIAL_HEADER,
-  guard,
   httpResponse,
-  loadTokens,
+  proveTenant,
   type EdgeDecision,
-  type EdgeRequest,
-  type GatewayToken,
   type VaultProvider,
 } from "../omniroute/edge-security.ts";
 import type { OmniRouteGateway } from "../omniroute/omniroute-gateway.ts";
@@ -157,20 +154,31 @@ export function createUiRoutes(options: UiRoutesOptions): UiRouter {
       return json(405, { error: "this surface is read-only" });
     }
 
-    const tokens: readonly GatewayToken[] = await loadTokens(options.vault, {
+    /**
+     * THROUGH THE ONE DOOR, and the tenant is KEPT rather than discarded.
+     *
+     * The previous version loaded the vault, built a request, ran `guard`, and
+     * then ignored `decision.tokenId` entirely -- because nothing this router
+     * serves is scoped by a tenant. That was correct and it was also the shape of
+     * a bug waiting for the first route here that IS scoped: the author would have
+     * to decide where the boundary was, in a file with no tenancy in it.
+     *
+     * So the tenant is now proven and carried, and the comment says what it is
+     * for. When a scoped route arrives here it has an identity to scope BY rather
+     * than a second authentication path to write.
+     */
+    const proven = await proveTenant(options.vault, UI_PROVIDER, headers, {
       ...(options.strictVault === false ? {} : { strict: true }),
     });
-
-    const request: EdgeRequest = {
-      headers,
-      provider: UI_PROVIDER,
-      events: 1,
-    };
-
-    const decision = guard(request, tokens);
-    if (!decision.ok) {
-      return refused(decision);
+    if (!proven.ok) {
+      return refused(proven.decision);
     }
+    /**
+     * THE PROVEN TENANT. Unused today, deliberately, and named rather than
+     * inlined so that "this is available and this is why it is not used yet" is
+     * visible at the point where someone will want to use it.
+     */
+    void proven.tokenId;
 
     // Proven once, above, for all three handlers: three routes that each proved
     // separately would be three places to forget, and the forgotten one is a

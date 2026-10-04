@@ -1,5 +1,5 @@
 import {
-  guard,
+  proveTenant,
   httpResponse,
   loadTokens,
   type EdgeDecision,
@@ -137,16 +137,16 @@ export function createSchemaRoutes(options: SchemaRoutesOptions): SchemaRouter {
       return json(404, { error: "no such resource" });
     }
 
-    const tokens = await loadTokens(options.vault, {
+    // THROUGH THE ONE DOOR, like every other router. This file was the FOURTH
+    // copy of these four lines, and it was found by the scan in
+    // one-door.test.ts rather than by reading -- three routers had already been
+    // collapsed by hand and this one was missed, because an audit that lists the
+    // files it remembers to look at is not an audit.
+    const proven = await proveTenant(options.vault, AUTHORING_PROVIDER, headers, {
       ...(options.strictVault === false ? {} : { strict: true }),
     });
-
-    const request: EdgeRequest = { headers, provider: AUTHORING_PROVIDER, events: 1 };
-    const decision = guard(request, tokens);
-    if (!decision.ok) return refused(decision);
-
-    const tenant = decision.tokenId;
-    if (tenant === undefined) return refused({ ok: false, status: 401, reason: "no credential was proven" });
+    if (!proven.ok) return refused(proven.decision);
+    const tenant = proven.tokenId;
 
     const segment = clean.slice(BASE.length + 1);
     const id = segment === "" ? undefined : decodeURIComponent(segment);

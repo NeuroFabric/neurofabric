@@ -1,9 +1,8 @@
 import {
-  guard,
   httpResponse,
   loadTokens,
+  proveTenant,
   type EdgeDecision,
-  type EdgeRequest,
   type VaultProvider,
 } from "../omniroute/edge-security.ts";
 import type { ServerResponse } from "node:http";
@@ -183,24 +182,20 @@ export function createMemoryRoutes(options: MemoryRoutesOptions): MemoryRouter {
   });
 
   /**
-   * THE GUARD, AND THE PROVEN TENANT.
+   * THE GUARD, AND THE PROVEN TENANT -- THROUGH THE ONE DOOR.
    *
-   * Extracted so the stream and the two ordinary routes prove the caller in
-   * EXACTLY ONE PLACE. A stream that authenticated itself by a second path would
-   * be a second control plane free to drift from the first -- and the first is
-   * the one under attack. This is also the "one door" property, made a single
-   * function so the audit is a read rather than an argument.
+   * This was a local `prove()` written while the stream was being built, before
+   * `proveTenant()` existed. It is now a two-line call rather than a second
+   * implementation of the same question, which is the whole point of the
+   * refactor: three routers asking "who are you and whose records are yours" in
+   * three slightly different ways is three chances to drift.
    */
   const prove = async (headers: Readonly<Record<string, string | undefined>>): Promise<{ ok: true; tenant: string } | { ok: false; response: UiResponse }> => {
-    const tokens = await loadTokens(options.vault, {
+    const proven = await proveTenant(options.vault, MEMORY_PROVIDER, headers, {
       ...(options.strictVault === false ? {} : { strict: true }),
     });
-    const request: EdgeRequest = { headers, provider: MEMORY_PROVIDER, events: 1 };
-    const decision = guard(request, tokens);
-    if (!decision.ok) return { ok: false, response: refused(decision) };
-    const tenant = decision.tokenId;
-    if (tenant === undefined) return { ok: false, response: refused({ ok: false, status: 401, reason: "no credential was proven" }) };
-    return { ok: true, tenant };
+    if (!proven.ok) return { ok: false, response: refused(proven.decision) };
+    return { ok: true, tenant: proven.tokenId };
   };
 
   async function handle(

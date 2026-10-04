@@ -87,6 +87,22 @@ vitest-*.txt
 # Ad-hoc build output from a frontend run. Same reasoning: nobody reads it twice.
 builds/
 
+# THE OPERATOR'S BOOT SCRIPTS. Ignored, not deleted.
+#
+# `boot.js` and `boot.mjs` are the wedge bootstrap the operator runs by hand. They
+# carry a CREDENTIAL, which is the whole reason they were untracked and still
+# dangerous: untracked and unignored means the next `git add -A` walks them into a
+# commit, and a credential in history is a credential to rotate.
+#
+# **Gitignored rather than removed**, and the distinction is deliberate. A file
+# that is configuration carrying a value should be reconstructed if it is ever
+# lost -- removing it destroys work to prevent a mistake an ignore rule prevents
+# outright, at no cost. An ignore rule says "never commit this"; a deletion says
+# "this never existed", and only the operator can say which of those two they
+# meant.
+boot.js
+boot.mjs
+
 data/
 
 # The wedge launcher workspace: the owner drops CSVs in here and reports are
