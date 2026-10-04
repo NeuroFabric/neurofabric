@@ -103,6 +103,14 @@ builds/
 boot.js
 boot.mjs
 
+# One-shot patch scripts written beside the thing they patch. Three of them
+# (patch-install-tmp.mjs, prune-tmp.mjs, styles-install-tmp.mjs) were committed
+# by an  that did not mean to include them -- which is the failure
+# this rule exists to make quieter. They are throwaway by construction: whatever
+# they do belongs in a commit, and the script outliving it is a file nobody
+# maintains. They stay ON DISK; they are simply never tracked.
+frontend/*-tmp.mjs
+
 data/
 
 # The wedge launcher workspace: the owner drops CSVs in here and reports are
