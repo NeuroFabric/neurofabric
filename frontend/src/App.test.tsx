@@ -132,7 +132,9 @@ describe("App end to end", () => {
     expect(html).toContain("limit 1000");
 
     // Portal form fields
-    expect(html).toContain("Install an agent");
+    // The form is offered only when a transport that can install exists. Without one
+    // a form would be a promise with nothing behind it.
+    expect(html).not.toContain("Install an agent");
 
     // Telemetry during a STATIC render. Polling lives in an effect, which
     // `renderToStaticMarkup` does not run, so the honest state here is

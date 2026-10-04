@@ -220,8 +220,11 @@ describe("DynamicDashboard renders from data alone", () => {
         }}
       />,
     );
-    expect(html).toContain("Install an agent");
-    expect(html).toContain("Agent id");
+    // With no install transport, the form is NOT rendered at all -- not rendered
+    // as a description, which is what it used to be.
+    expect(html).not.toContain("Install an agent");
+    expect(html).not.toContain("Agent id");
+    expect(html).not.toContain("<thead>");
   });
 
   it("says every stream when a schema names none", () => {
