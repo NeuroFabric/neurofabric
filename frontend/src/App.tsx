@@ -221,6 +221,31 @@ export function App({
     );
   }
 
+  // THE INSTALL TRANSPORT, offered only when the source can actually install.
+  // Same runtime check as the front door: a cast would offer a form that 404s.
+  const installSource = hasDemoTransport(source) ? source : undefined;
+
+  /**
+   * After a successful install: reload the roster, then SELECT the new agent and
+   * load its rules.
+   *
+   * Without the select step the agent appears in the list and nothing else
+   * happens, which is the half-loop this replaces. The id from the server is
+   * composite (tenant/name) and is exactly what the roster will carry, so it is
+   * used verbatim rather than reconstructed.
+   */
+  const afterInstall = useCallback(
+    (agentId: string) => {
+      void (async () => {
+        await store.load(source);
+        const composite = store.getState().agents.find((a) => a.id === agentId || a.id.endsWith(`/${agentId}`))?.id ?? agentId;
+        store.select(composite);
+        await store.loadSchema(source, composite);
+      })();
+    },
+    [store, source],
+  );
+
   return (
     <div className="app">
       {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
@@ -284,7 +309,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} readings={readings} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}
@@ -387,7 +412,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} readings={readings} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}

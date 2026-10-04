@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 import { diagnosticsEnabledHere } from "../diagnostics-flag";
+import { InstallAgentForm, type InstallSource } from "./InstallAgentForm";
 
 import type { AgentDescriptor, PortalWidget, RuleSpec } from "../api/contracts";
 import type { UIConfig } from "../store/SchemaStore";
@@ -50,6 +51,10 @@ export interface DynamicDashboardProps {
    * BOTH directions are renderable; omitted, it reads the browser sources.
    */
   readonly diagnostics?: boolean | undefined;
+  /** The transport for installing an agent. Omitted means no form is offered. */
+  readonly install?: InstallSource | undefined;
+  /** Called after a successful install, so the caller can select and load it. */
+  readonly onInstalled?: ((agentId: string) => void) | undefined;
 }
 
 function readingFor(readings: readonly RuleReading[], ruleId: string): number | undefined {
@@ -219,7 +224,7 @@ function maturityLabel(maturity: string): string {
   }
 }
 
-export function DynamicDashboard({ config, readings = [], diagnostics }: DynamicDashboardProps): ReactElement {
+export function DynamicDashboard({ config, readings = [], diagnostics, install, onInstalled }: DynamicDashboardProps): ReactElement {
   // Resolved ONCE here rather than at each use, so the whole panel agrees with
   // itself. A component that asked twice could render two different answers.
   const showDiagnostics = diagnostics ?? diagnosticsEnabledHere();
@@ -346,36 +351,25 @@ export function DynamicDashboard({ config, readings = [], diagnostics }: Dynamic
         </>
       )}
 
-      {config.forms.length === 0 ? null : (
+      {/* THE REAL FORM.
+          *
+          * This rendered a TABLE describing the portal's declared form -- field,
+          * label, type, required -- and called it a form. There was no input and no
+          * path to POST /api/portal/schema from the UI at all, so installing an
+          * agent was something a person did with curl while the screen described
+          * the paperwork.
+          *
+          * Now it is the loop: type, submit, appear, selectable, rules loaded. See
+          * InstallAgentForm.tsx for what is asked and what is supplied. */}
+      {config.forms.length === 0 || install === undefined ? null : (
         <>
-          <h3>Forms</h3>
+          <h3>Add an agent</h3>
           {config.forms.map((form) => (
-            <div key={form.id} className="ruleset">
-              <h4>{form.title}</h4>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th scope="col">field</th>
-                    <th scope="col">label</th>
-                    <th scope="col">type</th>
-                    <th scope="col">required</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {form.fields.map((field) => (
-                    <tr key={field.name}>
-                      <td><code>{field.name}</code></td>
-                      <td>{field.label}</td>
-                      <td>{field.type}</td>
-                      <td>{field.required === true ? "yes" : "no"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <InstallAgentForm key={form.id} form={form} source={install} onInstalled={onInstalled} />
           ))}
         </>
       )}
+
     </section>
   );
 }
