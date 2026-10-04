@@ -140,7 +140,7 @@ describe("App end to end", () => {
     // something the renderer never executed. LiveStreamView's rendering of a
     // real verdict and a measured rate is covered directly in
     // components/telemetry.test.tsx, where it is driven by props.
-    expect(html).toContain("Connecting to the live gateway");
+    expect(html).toContain("Connecting");
     expect(html).not.toContain("SIMULATED SAMPLE");
   });
 
@@ -262,7 +262,7 @@ describe("App end to end", () => {
   it("renders without a verdict and without alerts", async () => {
     const store = await loadedStore();
     const html = text(renderToStaticMarkup(<App store={store} source={source()} />));
-    expect(html).toContain("Connecting to the live gateway");
+    expect(html).toContain("Connecting");
     expect(html).toContain("An empty alert list is the only healthy one");
   });
 });

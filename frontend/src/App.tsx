@@ -104,6 +104,8 @@ export interface AppProps {
    * says what is wrong and stops -- which is a complete screen, not a broken one.
    */
   readonly onCredentialRequired?: ((token: string) => void) | undefined;
+  /** Whether the internal view is shown. Undefined reads the browser sources. */
+  readonly diagnostics?: boolean | undefined;
 }
 
 /**
@@ -123,6 +125,7 @@ export function App({
   alerts = [],
   pollMs,
   onCredentialRequired,
+  diagnostics,
 }: AppProps): ReactElement {
   // `getServerSnapshot` is the third argument and it is required: without it
   // React refuses to render this component on a server at all, and throws
@@ -281,7 +284,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} readings={readings} />
+        <DynamicDashboard config={state} readings={readings} {...(diagnostics === undefined ? {} : { diagnostics })} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}
@@ -384,7 +387,7 @@ export function App({
       </nav>
 
       <main className="app__main">
-        <DynamicDashboard config={state} readings={readings} />
+        <DynamicDashboard config={state} readings={readings} {...(diagnostics === undefined ? {} : { diagnostics })} />
         <aside className="app__side">
           <LiveStreamView
             verdict={live.snapshot?.verdict ?? null}

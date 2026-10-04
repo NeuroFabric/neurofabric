@@ -90,8 +90,20 @@ export function LiveStreamView({
       <section className="live" aria-label="Live telemetry">
         <h3>Live telemetry</h3>
         <p className="muted">
-          {loading ? "Connecting to the live gateway…" : "No verdict yet. This view reports the gateway's own verdict and the rate it measured."}
+          {loading ? "Connecting…" : "Nothing has arrived yet."}
         </p>
+        {/* THE WAY OUT IS HERE TOO.
+            *
+            * The front door used to live only in the `records === 0` branch below,
+            * which means it was ABSENT in the state a stranger actually arrives in:
+            * a fresh install has no verdict yet, so this early return rendered
+            * "Connecting to the live gateway…" and no button. The assembled-page
+            * test caught it by mounting App with no traffic and looking for the
+            * button, which is precisely what that test is for.
+            *
+            * "Connecting" with nothing to show is not progress a viewer can watch,
+            * so the way out belongs in both empty states. */}
+        {demo}
       </section>
     );
   }
