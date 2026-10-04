@@ -23,6 +23,7 @@ import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { startWedgeServer } from "./platform/web/server.ts";
+import { describePort, inspectPort } from "./platform/core/port-probe.ts";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -101,6 +102,36 @@ if (options.help) {
 
 const cwd = path.resolve(options.workspace);
 mkdirSync(cwd, { recursive: true });
+
+/**
+ * THE PORT, BEFORE THE BIND.
+ *
+ * Every session in this project's history has lost time to `EADDRINUSE`, and
+ * what it produces is a code for a situation rather than a description of it: it
+ * does not say WHICH process holds the port, so the reader goes and finds out.
+ *
+ * The check lives here, at the bind site, rather than in a dev script because
+ * `start-ui.mjs` is what actually calls `bind`. A check anywhere else is advice;
+ * a check here is the last moment the answer is still cheap.
+ *
+ * IT REPORTS AND STOPS THIS PROCESS. It does not terminate anything: deciding
+ * whether to end a process somebody else started is a person's decision, and a
+ * tool that makes it silently will eventually make it wrongly.
+ *
+ * `port: 0` is skipped because an OS-assigned port cannot collide, so "is it in
+ * use" is not a question about it.
+ */
+if (options.port !== 0) {
+  const report = await inspectPort(options.port, options.host === "0.0.0.0" ? "0.0.0.0" : options.host);
+  if (!report.free) {
+    console.error(`\n  ${describePort(report)}\n`);
+    console.error("  This process has not started, and nothing has been stopped.");
+    console.error("  When you have decided what to do about the process above, either");
+    console.error("  start it here and re-run, or use another port:");
+    console.error(`    node --experimental-strip-types start-ui.mjs --port ${options.port + 1}\n`);
+    process.exit(2);
+  }
+}
 
 // Port 0 asks the OS for a free one, which is what the tests do. Here the port
 // is chosen explicitly because a person has to type the URL, so the trade is
