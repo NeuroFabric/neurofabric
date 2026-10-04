@@ -61,7 +61,7 @@ this project feel like a diagnostic tool was somebody reasonable filling a gap.
 |---|---|
 | **Any model call.** | D-001. The verdicts are arithmetic. A model would make them unreproducible and would make "how do you know?" unanswerable. |
 | **Any internal jargon on the default view.** | Version strings, stub counts, layout hashes, schema endpoints, provider identifiers. Engineers get these behind a flag; customers never do. |
-| **Multi-tenancy in the UI.** | The *engine* is tenant-scoped for safety. The screen is not a tenancy product and must not look like one. |
+| **Multi-tenancy in the UI — a Phase 5+ destination, not an exclusion.** | The **engine is already tenant-scoped**: every agent is namespaced `tenant/schemaId`, the tenant comes from the *proven credential* and never from the request, and D-042 records that reverting this would trade a correctness property for test convenience. The **screen is not** — it presents a single tenant. That gap is presentation, not architecture, which is the cheapest place for it to live. Amended 2026-10-04; see [ADR-004](adr/0004-recollection-is-reconciliation.md). |
 | **Historical retention, search, and replay.** | The window is live and derived. Persisting it turns a live screen into a database with obligations. |
 | **A charting framework for anything but the dense series.** | One deliberate exception (ADR-002, uPlot) for high-frequency series only, because a chart that re-renders React to move a point would break the render budget. |
 | **Refactoring the kernel, the refusal handling, or the credential guard.** | They are the best things in this repository. The front door gets built *around* them, never by rewriting them. |
