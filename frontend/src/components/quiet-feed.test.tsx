@@ -39,6 +39,34 @@ function spoken(html: string): string {
     .trim();
 }
 
+/**
+ * The explanation's heading, as a COMPARISON, and why it is folded to lower case.
+ *
+ * Slice 5 wrote this block into the panel's `<dl>` as a `<dt>`, and every label in
+ * that grid is lower case ("measured throughput", "busiest hour") -- so the
+ * string arrived here lower case and these assertions were written against it.
+ *
+ * Moving the block out of the `<dl>` (it was a `<div>` of `<dt>`/`<dd>` INSIDE a
+ * grid, so the grid auto-placed a bare element into the `max-content` label track
+ * and squeezed two paragraphs into the width of a word) made it a real heading,
+ * and a heading in this stylesheet is sentence case. So the CASING changed and
+ * the presence of the sentence did not.
+ *
+ * Case is presentation, and the stylesheet owns presentation. Asserting on it
+ * would make these five tests fail on a typographic change to a heading while
+ * saying nothing about whether the explanation is still there -- so the
+ * comparison folds case, and the shared constant keeps the five sites from
+ * drifting apart. The assertions themselves are NOT weakened: each still proves
+ * the heading is present exactly where it should be and absent exactly where it
+ * should not be.
+ */
+const QUIET_HEADING = "why the rate is zero";
+
+/** The heading as a case-insensitive comparison, for presence and absence. */
+function quietHeading(html: string): string {
+  return spoken(html).toLowerCase();
+}
+
 function verdict(overrides: Partial<LiveVerdict> = {}): LiveVerdict {
   return {
     at: "2026-10-04T14:32:05.000Z",
@@ -80,7 +108,7 @@ describe("a quiet feed: zero rate, records held", () => {
   it("EXPLAINS the two figures rather than only showing them", () => {
     // The whole point. Both numbers were already on screen; the ambiguity is what
     // is removed.
-    expect(words).toContain("why the rate is zero");
+    expect(quietHeading(html)).toContain(QUIET_HEADING);
     expect(words).toContain("Nothing new has arrived");
     expect(words).toContain("20,000");
     expect(words).toContain("still held from earlier");
@@ -113,15 +141,15 @@ describe("the explanation appears ONLY where it is true", () => {
   it("not when the rate is non-zero", () => {
     // Traffic is flowing. An explanation of why a rate is zero, shown beside a
     // healthy rate, is noise that trains a reader to skip the panel.
-    const words = spoken(render({ throughput: throughput({ eventsPerSecond: 412, delta: 206 }) }));
-    expect(words).not.toContain("why the rate is zero");
+    const words = quietHeading(render({ throughput: throughput({ eventsPerSecond: 412, delta: 206 }) }));
+    expect(words).not.toContain(QUIET_HEADING);
   });
 
   it("not when the window is empty, where there is nothing to disagree with", () => {
     // Zero records and zero rate agree with each other. Explaining a
     // non-contradiction is how a panel loses the habit of being read.
-    const words = spoken(render({ records: 0, throughput: throughput(), idle: true }));
-    expect(words).not.toContain("why the rate is zero");
+    const words = quietHeading(render({ records: 0, throughput: throughput(), idle: true }));
+    expect(words).not.toContain(QUIET_HEADING);
   });
 
   it("not when there is no measurement yet", () => {
@@ -135,9 +163,9 @@ describe("the explanation appears ONLY where it is true", () => {
     // The honest edge: `eventsPerSecond` is a real number and may be 0.4, which
     // `toLocaleString` renders as "0". Explaining a rate of zero when the truth
     // is "some arrived" would be worse than showing nothing.
-    const words = spoken(render({ throughput: throughput({ eventsPerSecond: 0.4, delta: 1 }) }));
+    const words = quietHeading(render({ throughput: throughput({ eventsPerSecond: 0.4, delta: 1 }) }));
     expect(words).toContain("0");
-    expect(words).not.toContain("why the rate is zero");
+    expect(words).not.toContain(QUIET_HEADING);
   });
 });
 
