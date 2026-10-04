@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DynamicDashboard } from "./components/DynamicDashboard";
-import { AgentSelector } from "./components/AgentSelector";
+import { AgentList } from "./components/AgentList";
 import { AlertCenter } from "./components/AlertCenter";
 import { LivenessStrip } from "./components/LivenessStrip";
 import { DIAGNOSTIC_MARKERS_FOR_TESTS } from "./diagnostics-flag";
@@ -112,7 +112,7 @@ function wholeDefaultView(): string {
   };
   return [
     renderToStaticMarkup(<DynamicDashboard config={store as never} readings={[{ ruleId: "r", value: 8541 }]} />),
-    renderToStaticMarkup(<AgentSelector agents={[descriptor, stubDescriptor]} selectedAgentId={null} loading={false} onSelect={() => {}} />),
+    renderToStaticMarkup(<AgentList agents={[descriptor, stubDescriptor]} selectedAgentId={null} loading={false} onSelect={() => {}} />),
     renderToStaticMarkup(<AlertCenter alerts={[]} verdict={verdict as never} />),
     renderToStaticMarkup(<LivenessStrip liveness="live" lastUpdated="2026-10-04T08:59:59.000Z" now={Date.parse("2026-10-04T09:00:00.000Z")} records={240} />),
   ].join("\n");

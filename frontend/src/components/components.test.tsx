@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentDescriptor, AgentSchema, PortalConfig } from "../api/contracts";
 import type { UIConfig } from "../store/SchemaStore";
 import { DynamicDashboard } from "./DynamicDashboard";
-import { AgentSelector } from "./AgentSelector";
+import { AgentList } from "./AgentList";
 
 /**
  * THE COMPONENTS, TESTED WITHOUT A BROWSER.
@@ -237,9 +237,9 @@ describe("DynamicDashboard renders from data alone", () => {
   });
 });
 
-describe("AgentSelector", () => {
+describe("AgentList", () => {
   it("says so when there are no agents, rather than rendering an empty control", () => {
-    const html = render(<AgentSelector agents={[]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
+    const html = render(<AgentList agents={[]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
     expect(html).toContain("No agents registered");
   });
 
@@ -263,13 +263,13 @@ describe("AgentSelector", () => {
   it("always offers a none option so a null selection is representable", () => {
     // Without it, a select with a null value shows its first option, which reads
     // as "the first agent is selected" when no agent is.
-    const html = render(<AgentSelector agents={[descriptor("a")]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
+    const html = render(<AgentList agents={[descriptor("a")]} selectedAgentId={null} loading={false} onSelect={() => {}} />);
     expect(html).toContain("— none —");
   });
 
   it("falls back to none when the selection names an agent that is gone", () => {
     const html = render(
-      <AgentSelector agents={[descriptor("a")]} selectedAgentId="vanished" loading={false} onSelect={() => {}} />,
+      <AgentList agents={[descriptor("a")]} selectedAgentId="vanished" loading={false} onSelect={() => {}} />,
     );
     // The none option is the selected one, because the named agent is not here.
     expect(html).toContain('value="" selected=""');
@@ -277,11 +277,11 @@ describe("AgentSelector", () => {
   });
 
   it("reflects the current selection", () => {
-    const html = render(<AgentSelector agents={[descriptor("a")]} selectedAgentId="a" loading={false} onSelect={() => {}} />);
+    const html = render(<AgentList agents={[descriptor("a")]} selectedAgentId="a" loading={false} onSelect={() => {}} />);
     expect(html).toContain('value="a" selected');
   });
 
   it("shows that rules are loading", () => {
-    expect(render(<AgentSelector agents={[descriptor("a")]} selectedAgentId="a" loading onSelect={() => {}} />)).toContain("loading rules");
+    expect(render(<AgentList agents={[descriptor("a")]} selectedAgentId="a" loading onSelect={() => {}} />)).toContain("loading rules");
   });
 });
