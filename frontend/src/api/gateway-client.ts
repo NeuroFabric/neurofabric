@@ -64,7 +64,38 @@ export const PORTAL_PATHS = {
   agents: "/api/portal/agents",
   schema: "/api/portal/schema",
   live: "/api/portal/live",
+  ingest: "/api/portal/ingest",
 } as const;
+
+/** The server's own per-call ceiling, mirrored so a refusal is not a surprise. */
+export const MAX_INGEST_EVENTS = 1000;
+
+/** The body `POST /api/portal/ingest` answers. */
+export interface IngestAccepted {
+  readonly accepted: number;
+  readonly refused: number;
+  readonly provider: string;
+}
+
+/**
+ * Validate the ingest result.
+ *
+ * Hand-rolled rather than borrowed, because the contract is three numbers and a
+ * name, and the alternative was letting a malformed answer through into the
+ * "events are arriving" claim on the front door.
+ */
+function validateIngestAccepted(input: unknown): { ok: true; value: IngestAccepted } | { ok: false; issues: readonly ShapeIssue[] } {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { ok: false, issues: [{ path: "$", reason: "the ingest result must be an object" }] };
+  }
+  const record = input as Record<string, unknown>;
+  const issues: ShapeIssue[] = [];
+  if (typeof record.accepted !== "number") issues.push({ path: "$.accepted", reason: "accepted must be a number" });
+  if (typeof record.refused !== "number") issues.push({ path: "$.refused", reason: "refused must be a number" });
+  if (typeof record.provider !== "string") issues.push({ path: "$.provider", reason: "provider must be a string" });
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, value: { accepted: record.accepted as number, refused: record.refused as number, provider: record.provider as string } };
+}
 
 export type GatewayFailure =
   /** 401 / 403. The credential is absent, wrong, or not permitted. */
@@ -331,6 +362,39 @@ export class GatewayClient {
     const body = await this.#request("POST", PORTAL_PATHS.schema, JSON.stringify(document));
     const verdict = validateSchemaInstall(body);
     if (!verdict.ok) throw this.#malformed("the install result", verdict.issues);
+    return verdict.value;
+  }
+
+  /**
+   * `POST /api/portal/ingest` -- push a batch of events.
+   *
+   * Added for the one-click demo, and the reason it did not exist before is
+   * worth recording: **the UI could read every route and write none of them
+   * except schemas.** A stranger who opened the Command Center had exactly two
+   * ways out of an empty screen -- a terminal, or a hand-built curl. The front
+   * door could not open itself because the client could not push a single event.
+   *
+   * The batch is capped at 1000 because THAT IS THE SERVER'S CAP, and the server
+   * refuses a larger body with a validation error. A client-side clamp turns a
+   * refusal that reads like a server fault into a call that simply works, so the
+   * caller may think in "as many as I have".
+   */
+  async ingest(provider: string, events: readonly unknown[]): Promise<IngestAccepted> {
+    if (typeof provider !== "string" || provider.trim() === "") {
+      throw new GatewayError("misconfigured", "a provider name is required to push events");
+    }
+    if (!Array.isArray(events) || events.length === 0) {
+      throw new GatewayError("misconfigured", "there is nothing to push");
+    }
+    if (events.length > MAX_INGEST_EVENTS) {
+      throw new GatewayError(
+        "misconfigured",
+        `the server accepts at most ${MAX_INGEST_EVENTS} events in one call; push ${Math.ceil(events.length / MAX_INGEST_EVENTS)} batches`,
+      );
+    }
+    const body = await this.#request("POST", PORTAL_PATHS.ingest, JSON.stringify({ provider, events }));
+    const verdict = validateIngestAccepted(body);
+    if (!verdict.ok) throw this.#malformed("the ingest result", verdict.issues);
     return verdict.value;
   }
 

@@ -49,7 +49,17 @@ export interface LiveStreamViewProps {
   /** True while the gateway is attached but nothing has arrived. */
   readonly idle?: boolean;
   /** Which provider this is reporting on, for the idle message. */
-  readonly provider?: string;
+  /**
+   * The front door, offered when there is nothing to show.
+   *
+   * Rendered HERE rather than as a global empty-state overlay because this panel
+   * is the one that explains the emptiness: it already knows the gateway is
+   * attached and holding zero records, which is exactly the state a stranger
+   * arrives in, and it is the panel that starts filling in.
+   *
+   * Null when there is nothing to offer -- no transport, or data already flowing.
+   */
+  readonly demo?: ReactElement | null;
 }
 
 function numberOrDash(value: number | null): string {
@@ -62,7 +72,8 @@ export function LiveStreamView({
   error,
   loading = false,
   idle = false,
-  provider = "pega",
+
+  demo = null,
 }: LiveStreamViewProps): ReactElement {
   if (error !== undefined && error !== "") {
     return (
@@ -101,10 +112,16 @@ export function LiveStreamView({
           starts -- and folding it into "no data" would make a healthy idle system
           look broken. */}
       {idle || verdict.records === 0 ? (
-        <p className="muted">
-          Connected but idle: the gateway holds no records yet for provider <code>{provider}</code>. Start the flood and
-          this fills in.
-        </p>
+        <>
+          <p className="muted">
+            No activity yet. The platform is connected and holding nothing.
+          </p>
+          {/* THE WAY OUT. An empty state that explains itself and then leaves the
+              operator there is a dead end, and the previous copy here --
+              "Start the flood and this fills in" -- described a terminal command
+              to someone who does not know there is a terminal. */}
+          {demo}
+        </>
       ) : null}
 
       <dl className="kv kv--wide">
