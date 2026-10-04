@@ -361,6 +361,24 @@ export interface PortalRoutesOptions {
   readonly live?: LiveGateway;
   /** The provider name `/api/portal/live` reports on. Defaults to `pega`. */
   readonly liveProvider?: string;
+  /**
+   * CALLED WHEN A SCHEMA IS ACCEPTED, SO THE DURABLE RECORD CAN HEAR ABOUT IT.
+   *
+   * A hook rather than a store, because the portal has no business knowing that
+   * a database exists -- this file is about configuration and the record is about
+   * history, and a portal route that reached into `node:sqlite` would make the
+   * record's availability a property of the customer's configuration surface.
+   *
+   * It is called with the ALREADY-VALIDATED schema and the PROVEN tenant, and it
+   * is called AFTER `registry.register` succeeds, so nothing is written for a
+   * schema that was refused. A record that contained a refused schema would put
+   * the two halves of this platform -- what is running and what was written down
+   * -- into disagreement for no reason, which is the exact condition the
+   * reconciliation exists to report.
+   *
+   * Optional: a caller with no record open simply does not get told.
+   */
+  readonly onSchemaRegistered?: ((tenant: string, schema: AgentSchema) => void) | undefined;
 }
 
 export interface PortalRouter {
@@ -616,6 +634,10 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
         // caller that could name its tenant could write into another customer's
         // namespace by choosing a different one.
         const { agent, replaced } = registry.register(validation.schema, { tenant });
+        // AFTER the registry accepted it, and with the SAME tenant. A write that
+        // happened before the accept would put the record ahead of the running
+        // system, which is the one ordering this platform refuses to get wrong.
+        options.onSchemaRegistered?.(tenant, validation.schema);
         return json(200, {
           agent: agent.describe(),
           replacedVersion: replaced?.version ?? null,

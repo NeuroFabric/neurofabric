@@ -61,6 +61,17 @@ const SHARED_UTILITY_CLASSES: ReadonlySet<string> = new Set([
   "card",
   "topkeys",
 
+  // Added by the guard CATCHING something, a second time. `.stack` is a bare
+  // layout utility -- `list-style: none; display: grid; gap` -- with no colour,
+  // no border and no component meaning, so it cannot capture anything the way
+  // `.live` captured a whole panel in !97. `ReconciliationPanel` uses it for the
+  // same reason `AlertCenter` does: a vertical list of cards.
+  //
+  // The alternative was a `.record__stack` alias, which would be a second name
+  // for one rule and a second thing to update. That is the "relocated rather
+  // than answered" pattern, and it is why the allowlist exists instead.
+  "stack",
+
   // The entry below was added by the guard CATCHING something: `topkeys` was
   // claimed by both AlertCenter and LiveStreamView, which render the same data
   // in the same presentation. Unlike the `.live` collision -- where a whole PANEL

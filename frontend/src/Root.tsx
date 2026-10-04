@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { App } from "./App";
 import { CredentialPrompt } from "./components/CredentialPrompt";
 import { GatewayClient } from "./api/gateway-client";
+import { useReconciliation } from "./hooks/useReconciliation";
 import { SchemaStore } from "./store/SchemaStore";
 import { type AlertPayload } from "./api/live-contracts";
 import { initialToken, isUsableToken, sessionTokenStorage, type TokenStorage } from "./token-storage";
@@ -42,6 +43,13 @@ export interface RootProps {
   readonly alerts?: readonly AlertPayload[];
   /** Poll cadence for the live panel. */
   readonly pollMs?: number;
+  /**
+   * Cadence for the record panel's comparison.
+   *
+   * A prop so a test can shorten it rather than disabling it, and so the five
+   * second default is visible at the call site instead of hiding inside a hook.
+   */
+  readonly diffPollMs?: number;
 }
 
 /**
@@ -64,6 +72,7 @@ export function Root({
   environmentToken,
   alerts = [],
   pollMs,
+  diffPollMs,
 }: RootProps): ReactElement {
   const resolved = useMemo(() => storage ?? sessionTokenStorage(), [storage]);
 
@@ -96,6 +105,23 @@ export function Root({
     [resolved],
   );
 
+  /**
+   * THE DIFF, ON ITS OWN CLOCK, CALLED UNCONDITIONALLY.
+   *
+   * `client ?? undefined` above the `client === null` return is the whole point,
+   * and the first version of this put the hook BELOW that return -- which is a
+   * conditional hook: the component's hook count changes when the credential
+   * arrives, and React does not permit that. The comment on it claimed the
+   * opposite of what the code did, which is the more dangerous half of that
+   * mistake: the reasoning was right and the line order was wrong, so the next
+   * reader would have believed the reasoning and moved the line.
+   *
+   * Passing `undefined` when there is no client is what makes the panel render
+   * nothing at all, rather than an empty diff that reads as "the record agrees
+   * with everything".
+   */
+  const reconciliation = useReconciliation(client ?? undefined, diffPollMs);
+
   if (client === null) {
     return <CredentialPrompt onSubmit={submit} error={buildError} />;
   }
@@ -113,6 +139,24 @@ export function Root({
       // value replaces the token in state, which builds a NEW client, which is
       // what restarts the poller -- so recovery needs no flag of its own.
       onCredentialRequired={submit}
+      reconciliation={reconciliation.diff ?? null}
+      /**
+       * ACKNOWLEDGE, THEN RE-READ.
+       *
+       * The re-read is not optimism. The acknowledgement changes what the DIFF
+       * says (that row now carries "seen"), so without it the operator's own
+       * action appears not to have registered, and the natural conclusion is that
+       * the button is broken. The server is asked again rather than the row being
+       * patched locally, because the server owns what has been recorded -- a
+       * local guess that the write landed is the sort of optimism that hides a
+       * failed one.
+       */
+      onAcknowledge={(key: string) => {
+        void client
+          .acknowledgeDifference(key)
+          .then(() => reconciliation.refresh())
+          .catch(() => reconciliation.refresh());
+      }}
       // Conditional spread rather than `pollMs={pollMs}`: under
       // `exactOptionalPropertyTypes` an explicitly-passed `undefined` is not the
       // same as an absent optional, and the difference is the difference between

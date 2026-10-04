@@ -97,24 +97,48 @@ closer to skipping than to fixing.
 
 ## MRs ready to merge
 
+**This table is the queue, and it is corrected against the repository rather than
+against this file's memory.** !99–!104 are merged and accepted. **!98, !93 and !94
+are not open in the repository** — they are struck rather than left listed, because
+a queue that names MRs which do not exist is a queue nobody can trust to be a
+queue.
+
 | # | MR | Verification |
 |---|---|---|
-| 1 | **!93** Ghost identifier fix + entry-script gate | `env -u PORT -u WEDGE_PORT node --experimental-strip-types start-ui.mjs --help` |
-| 2 | **!94** Vault gate skips on win32 and says so | `node verification/assert-posix-vault-permissions.mjs; echo $?` |
-| 3 | **!95** product-identity contract, 13/13 green | `cd frontend && npx vitest run src/product-identity.test.tsx` |
-| 4 | **!96** ADR-002 alternatives | read the finding-to-slice table |
-| 5 | **!88** Liveness strip (Slice 2) + ADR-002 | `cd frontend && npx vitest run` |
-| 6 | **!89** Port startup check (T9) | `node --experimental-strip-types start-ui.mjs --port <busy>` |
-| 7 | **!87** Bootstrap door | `node --experimental-strip-types scripts/dev-boot.mjs` |
-| 8 | **!90** Testing guide | `type frontend\TESTING.md` |
-| 9 | **!91** Operator runbooks (T10, T11) | instructions for you |
+| 1 | **!105** The record, wired: store in the boot path, and the diff for the operator | `node --experimental-strip-types .scratch/boot-proof.mts` |
 
-**!93 first.** Everything else was verified against a tree where the entry script
-could not boot.
+### Struck — merged and accepted
 
-**Receipts for !93:** `test:mjs` 22/22 · `test:ts` 1558 tests / 1556 pass / 0 fail
-/ 2 skipped · `typecheck` clean including the new entries project ·
+| MR | What it was |
+|---|---|
+| !99 | Product identity, and the vision the delivery is judged against |
+| !100 | CSS collision guard, and the assembled-tree census |
+| !101 | Liveness strip and the front door |
+| !102 | Install loop — a form, not a description of one |
+| !103 | The MEMORY decision record (ADR-005) and the vision amendment |
+| !104 | Phase 1A/1B — `node:sqlite` store, and the five legal disagreements |
+
+### Struck — not open in the repository
+
+**!98, !93, !94.** Closed or never landed there. They are removed rather than
+carried, and the receipts below are kept only because they describe work that is
+in `main`, not because the MR is available to re-check.
+
+**Receipts for !93 (in `main`):** `test:mjs` 22/22 · `test:ts` 1558 tests / 1556
+pass / 0 fail / 2 skipped · `typecheck` clean including the new entries project ·
 `entry-contract` 4/4.
+
+**Receipts for !105 (this tree):** `test:mjs` 22/22 · `test:ts` 1589 tests /
+1587 pass / 0 fail / 2 skipped · `tsc --noEmit` clean ·
+`tsc -p tsconfig.entries.json` clean · frontend `tsc --noEmit` clean · frontend
+vitest 384 passed / 6 skipped / 0 fail, 24 files · memory suites 31/31 ·
+`.scratch/boot-proof.mts` against a real booted process.
+
+### The queue is one line long, and that is the point
+
+Everything else in this table used to be work waiting on a merge. **The only
+thing left is the thing that could not be done without the record first being
+merged**, which is the dependency this table exists to make visible.
 
 ---
 
@@ -171,11 +195,15 @@ the moment; rotation is yours.
 
 ## What I would do next
 
-1. **Merge !93**, then !94 — the entry script cannot boot on a clean machine until
-   the first lands, and `test-ts` is red until the second.
-2. **B1**, with the runbook.
-3. **Decide on `boot.js` / `boot.mjs`** — gitignore is my recommendation.
-4. **Merge !88 and !89** — the two that change the product.
+1. **Merge !105.** The record is durable and the diff is on screen; the operator
+   can acknowledge, and nothing else.
+2. **!106 — SSE, and only after this lands.** The subscription is not the record:
+   alerts are persisted *before* they are pushed (ADR-005 §5 rule 3), and
+   `recordDecision()` still has no caller in the running server. Wiring SSE to
+   `gateway.subscribe()` today would push alerts nothing has written, which is the
+   one design failure that section names.
+3. **B1**, with the runbook in `docs/operator-runbooks.md` §T10.
+4. **Decide on `boot.js` / `boot.mjs`** — gitignored rather than deleted is my
+   recommendation; they carry a credential and neither is tracked nor ignored.
 5. **Slice 3** — uPlot and its first consumer in the same commit, against the
-   ADR-002 criteria. The failure the deferred sparkline predicted is still mine
-   to avoid: whatever draws the series must not re-render React to move a point.
+   ADR-002 criteria.

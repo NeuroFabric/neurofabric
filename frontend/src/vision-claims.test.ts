@@ -96,20 +96,54 @@ describe("ADR-004 exists and says what it was asked to say", () => {
   });
 });
 
-describe("ADR-005 was published before it was built", () => {
-  it("exists, and carries no implementation", () => {
-    const path5 = path.join(DOCS, "adr", "0005-memory.md");
+describe("ADR-005's status matches reality", () => {
+  /**
+   * THIS TEST CHANGED WHEN THE DOCUMENT DID, AND THE REASON MATTERS MORE THAN
+   * THE CHANGE.
+   *
+   * It used to assert that ADR-005 was "published for ratification", carried
+   * "pending", and said "Nothing here is implemented" -- which was correct while
+   * it was true, and would have gone RED the moment the operator ratified it and
+   * !104/!105 landed.
+   *
+   * A test like that has a real cost: it makes ratification look like a
+   * regression, and the cheapest way to keep it green would have been to leave
+   * the ADR claiming to be a proposal. So the invariant is now the one that
+   * actually matters in both directions --
+   *
+   *  - BEFORE ratification the ADR must say it is a proposal, and
+   *  - AFTER it, the ADR must SAY SO and must NAME what was built.
+   *
+   * The second half is the load-bearing half. A decision record that says
+   * "ratified" without saying which MRs implemented it is decoration, and the
+   * failure mode is silent: nothing breaks, the document just stops being
+   * checkable.
+   */
+  const path5 = path.join(DOCS, "adr", "0005-memory.md");
+  const adr = existsSync(path5) ? readFileSync(path5, "utf8") : "";
+
+  it("exists", () => {
     expect(existsSync(path5), "ADR-005 is missing").toBe(true);
-    const adr = readFileSync(path5, "utf8");
+  });
 
-    // The gate the operator set: published, ratified by reading, THEN built. If
-    // code has landed without the ratification being recorded, this is the test
-    // that would have noticed.
-    expect(adr).toContain("published for ratification");
-    expect(adr).toContain("pending");
+  it("records that it is RATIFIED, and no longer claims to be a proposal", () => {
+    expect(adr).toContain("RATIFIED");
+    // The superseded pre-ratification language must not survive alongside the
+    // new status. Two statuses in one document is how a reader picks the wrong
+    // one.
+    expect(adr).not.toContain("published for ratification");
+    expect(adr).not.toContain("Nothing here is implemented");
+  });
 
-    // And it must not have been quietly implemented in the same commit. A DR that
-    // describes shipped code cannot be read as a proposal.
-    expect(adr).toContain("Nothing here is implemented");
+  it("names the work that implemented it, so the claim is falsifiable", () => {
+    expect(adr).toContain("!104");
+    expect(adr).toContain("!105");
+  });
+
+  it("still keeps the open questions open -- ratification is not a blank cheque", () => {
+    // The sections that were deliberately deferred stay deferred. A ratified ADR
+    // that quietly absorbed its own refusals would be a different document.
+    expect(adr).toContain("does not decide");
+    expect(adr).toContain("Encryption at rest");
   });
 });
