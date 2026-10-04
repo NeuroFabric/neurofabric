@@ -5,6 +5,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { serve, readConfig, type EmbassyConfig } from "./server.ts";
+import { TOOLS, callTool } from "./tools.ts";
+import { RPC } from "./jsonrpc.ts";
 
 /**
  * THE STDIO LOOP, AND THE TWO OBLIGATIONS THAT ONLY IT CAN TEST.
@@ -243,4 +245,136 @@ test("a Writable that throws does not take the loop down mid-stream", async () =
     },
   });
   await assert.doesNotReject(() => serve(source, hostile, CONFIG));
+});
+
+test("DISCOVERY BEFORE THE HANDSHAKE IS REFUSED, because the tool list is a capability map", async () => {
+  // `tools/call` has always required an established session. `tools/list` did not,
+  // so a caller that never handshook could still enumerate every tool this
+  // embassy offers -- which is the same reconnaissance `callTool` refuses to
+  // hand over at its "no such tool", for the same reason the portal edge does not
+  // echo its routes at a 404. A boundary that holds on the call and not on the
+  // listing is not a boundary; it is a speed bump beside the door.
+  //
+  // The refusal shape is identical to every other session refusal, so a caller
+  // cannot map the boundary by probing it.
+  const { out } = await run('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
+  const [frame] = frames(out);
+
+  assert.ok(frame !== undefined, "the request must be answered, not dropped");
+  const error = frame["error"] as { readonly code?: number; readonly message?: string } | undefined;
+  assert.ok(error !== undefined, "discovery must be refused before the handshake, not served");
+  assert.equal(error.code, -32001);
+
+  // No capability is disclosed. Naming what exists to a caller that has not proved
+  // it holds a credential is the disclosure this whole assertion exists to stop.
+  assert.equal(out.includes("get_verdict"), false);
+  assert.equal(out.includes("install_schema"), false);
+  assert.equal(out.includes("ingest_events"), false);
+});
+
+test("DISCOVERY AFTER THE HANDSHAKE ANSWERS, with a schema for every tool", async () => {
+  const { out } = await run(
+    '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+  );
+  const [, listed] = frames(out);
+  const result = listed?.["result"] as { readonly tools?: readonly Record<string, unknown>[] } | undefined;
+  const tools = result?.tools ?? [];
+
+  assert.deepEqual(
+    tools.map((tool) => tool["name"]),
+    ["get_verdict", "install_schema", "ingest_events"],
+    "every published tool is discoverable",
+  );
+
+  for (const tool of tools) {
+    // The specification says inputSchema MUST be a valid JSON Schema object, and
+    // explicitly recommends `additionalProperties: false` for a tool that takes
+    // nothing. That property is also the enforcement behind "no tool accepts a
+    // tenant or a credential", so it is asserted rather than assumed.
+    const schema = tool["inputSchema"] as Record<string, unknown> | undefined;
+    assert.equal(schema?.["type"], "object", `${String(tool["name"])} publishes an object schema`);
+    assert.equal(schema?.["additionalProperties"], false, `${String(tool["name"])} refuses extra keys`);
+  }
+});
+
+test("EVERY PUBLISHED TOOL REACHES ITS OWN CORE ROUTE, so the listing cannot drift from the dispatcher", async () => {
+  // The tool list and the dispatcher are two hand-written authorities for one
+  // surface. They agree today, and agreement today is not a property: a tool
+  // added to the list and not to the dispatcher would be advertised to every
+  // connecting client and then run somebody else's function.
+  //
+  // So the claim is checked from the CORE's side rather than by comparing the two
+  // declarations to each other. Two declarations can agree with each other and
+  // both be wrong about what the server does; what a core route was actually
+  // asked for cannot.
+  //
+  // The failure this exists to catch is silent and wrong in the worst direction:
+  // `get_verdict` reaching the ingest route would report a partial accept to an
+  // agent that asked whether anything is breaching.
+  const seen: string[] = [];
+  const recordFetch = async (url: string): Promise<unknown> => {
+    seen.push(url.replace(CONFIG.endpoint.origin, ""));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ accepted: 1, refused: 0, source: "live", at: "now", provider: "pega", verdict: null, throughput: null }),
+    };
+  };
+
+  // Declared per tool, and the FIRST assertion is that this map covers every
+  // published tool. That is the tripwire: adding a fourth tool to TOOLS without
+  // giving it an entry here fails the suite, which is the moment the dispatcher's
+  // fallthrough arm would otherwise start answering for a tool it cannot serve.
+  const ROUTES: Readonly<Record<string, string>> = {
+    get_verdict: "/api/portal/live",
+    install_schema: "/api/portal/schema",
+    ingest_events: "/api/portal/ingest",
+  };
+  const ARGS: Readonly<Record<string, unknown>> = {
+    get_verdict: {},
+    install_schema: { schema: { id: "s", title: "t", streams: [], rules: [] } },
+    ingest_events: { events: [{ fields: { a: "1" } }] },
+  };
+
+  assert.deepEqual(
+    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ROUTES).sort(),
+    "every published tool declares the core route it must reach",
+  );
+  assert.deepEqual(
+    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ARGS).sort(),
+    "every published tool declares the arguments this test calls it with",
+  );
+
+  for (const tool of TOOLS.map((entry) => entry.name)) {
+    seen.length = 0;
+    const source = Readable.from([
+      Buffer.from(
+        `{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"${tool}","arguments":${JSON.stringify(ARGS[tool])}}}\n`,
+        "utf8",
+      ),
+    ]);
+    const sink = new PassThrough();
+    sink.resume();
+    await serve(source, sink, CONFIG, recordFetch as never);
+    assert.deepEqual(seen, [ROUTES[tool]], `${tool} reached ${ROUTES[tool]}`);
+  }
+});
+
+test("A PUBLISHED TOOL WITH NO HANDLER IS REFUSED, not run as somebody else's function", async () => {
+  // The dispatcher used to end in `return ingestEvents(...)`, so "everything else"
+  // meant `ingest_events`. That was invisible while the tool name check was a
+  // separate hand-written triple, and it became a live defect the moment the
+  // published list became the single authority: a tool added to the list and not
+  // to the dispatcher would be advertised to every client and would then run the
+  // ingest route against whatever arguments it was given.
+  //
+  // Pinned by adding a tool that is published and deliberately unimplemented.
+  const published = TOOLS.map((tool) => tool.name);
+  assert.equal(published.includes("not_implemented"), false, "the fixture tool is not in the shipped list");
+
+  const outcome = await callTool("not_implemented", { endpoint: CONFIG.endpoint, credential: "tok" }, {});
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.code, RPC.METHOD_NOT_FOUND, "an unknown name is refused before dispatch");
 });

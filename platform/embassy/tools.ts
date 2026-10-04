@@ -87,9 +87,26 @@ export const TOOLS = [
 
 export type ToolName = (typeof TOOLS)[number]["name"];
 
-/** True when `name` is one of the three published tools. */
+/** The published tool list, in the order a client discovers it. */
+const PUBLISHED_NAMES: ReadonlySet<string> = new Set<string>(TOOLS.map((tool) => tool.name));
+
+/**
+ * True when `name` is one of the published tools.
+ *
+ * DERIVED FROM `TOOLS`, and that is the whole point of writing it this way.
+ * It used to be a hand-written `name === "a" || name === "b" || ...`, which meant
+ * the published surface was declared TWICE: once as the list a client discovers,
+ * and once as the set the dispatcher will accept. The two agreed, and agreement
+ * was a coincidence with an expiry date rather than a property -- a fourth tool
+ * added to the list and not to this function would be advertised to every
+ * connecting client and then refused at the call, which is a capability that looks
+ * real and is not.
+ *
+ * One authority, so the list cannot drift from the dispatcher. The cost is a Set
+ * built once at module load, which is smaller than the bug it removes.
+ */
 export function isTool(name: string): name is ToolName {
-  return name === "get_verdict" || name === "install_schema" || name === "ingest_events";
+  return PUBLISHED_NAMES.has(name);
 }
 
 /**
@@ -292,9 +309,28 @@ export async function callTool(name: string, ctx: HandlerContext, args: Readonly
   }
   const safe = ctx.fetchImpl === undefined ? { ...ctx, fetchImpl: undefined } : ctx;
   try {
+    /**
+     * EXHAUSTIVE DISPATCH, WITH NO DEFAULT ARM.
+     *
+     * This used to end in `return await ingestEvents(safe, args)`, treating
+     * "everything else" as `ingest_events`. That was harmless while `isTool` was a
+     * hand-written triple, because nothing else could get past it -- and it became
+     * actively wrong the moment `isTool` was derived from `TOOLS`, which is what
+     * removed the second declaration and made it possible for a tool to be
+     * published without a handler here.
+     *
+     * Then the failure mode inverts. A tool added to the list and not to this
+     * function is ADVERTISED to every connecting client, and calling it silently
+     * runs `ingest_events` against the caller's arguments. An agent asking to
+     * install a schema would get an ingest refusal, or worse, a partial accept.
+     *
+     * So the fallthrough is gone and the last arm refuses. A tool with no handler
+     * is a refusal that says so, not a call to somebody else's function.
+     */
     if (name === "get_verdict") return await getVerdict(safe, args);
     if (name === "install_schema") return await installSchema(safe, args);
-    return await ingestEvents(safe, args);
+    if (name === "ingest_events") return await ingestEvents(safe, args);
+    return { ok: false, code: RPC.INTERNAL_ERROR, message: "this tool is published but has no handler" };
   } catch {
     // The belt to `core.ts`'s braces. A handler that threw would end the
     // dispatcher, and the dispatcher ending is the host agent's session ending.
