@@ -205,7 +205,7 @@ export function LivenessStrip({
 
       {records === null ? null : (
         <span className="liveness__records liveness__num">
-          <abbr title="Records in the last snapshot. A count, not a rate.">recs</abbr>{" "}
+          <span title="Events in the current window. A count, not a rate.">events</span>{" "}
           {records.toLocaleString("en-GB")}
         </span>
       )}

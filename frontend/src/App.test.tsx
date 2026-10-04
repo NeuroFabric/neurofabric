@@ -113,12 +113,14 @@ describe("App end to end", () => {
     // itself.
     expect(html).toContain("Neurofebric");
     expect(html).toContain("acme diagnostics");
-    expect(html).toContain("ready");
+    expect(html).toContain("Ready");
 
     // Agent roster, from the payload
     expect(html).toContain("log-anomaly");
     expect(html).toContain("latency");
-    expect(html).toContain("1 ready, 1 stub");
+    // The ready/stub classification is internal and is no longer rendered.
+    // Asserted ABSENT below rather than merely removed.
+    expect(html).not.toContain("stubCount");
 
     // Widgets, one static and one agent-fed
     expect(html).toContain("Error rate");
@@ -151,8 +153,9 @@ describe("App end to end", () => {
       }),
     );
     const html = text(renderToStaticMarkup(<App store={empty} source={source()} />));
-    expect(html).toContain("No agents are registered");
-    expect(html).toContain("derived from registered agents");
+    expect(html).toContain("No agents yet");
+    // Diagnostics are OFF by default, so the derived/layout line must be ABSENT.
+    expect(html).not.toContain("derived from registered agents");
   });
 
   it("renders a refused gateway rather than an empty shell", async () => {
@@ -237,7 +240,7 @@ describe("App end to end", () => {
 
   it("reflects the status in the header, so a fault is visible without scrolling", async () => {
     const healthy = await loadedStore();
-    expect(text(renderToStaticMarkup(<App store={healthy} source={source()} />))).toContain("ready");
+    expect(text(renderToStaticMarkup(<App store={healthy} source={source()} />))).toContain("Ready");
 
     const broken = new SchemaStore();
     await broken.load(

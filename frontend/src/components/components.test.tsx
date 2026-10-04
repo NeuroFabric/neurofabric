@@ -81,7 +81,7 @@ describe("DynamicDashboard renders from data alone", () => {
   it("renders an idle store without crashing", () => {
     const html = render(<DynamicDashboard config={baseConfig} />);
     expect(html).toContain('aria-label="Agent dashboard"');
-    expect(html).toContain("No agents are registered");
+    expect(html).toContain("No agents yet");
   });
 
   it("falls back to a generic heading when the portal has no title", () => {
@@ -94,7 +94,12 @@ describe("DynamicDashboard renders from data alone", () => {
         config={{ ...baseConfig, agents: [descriptor("a"), descriptor("b", "stub")], readyCount: 1, stubCount: 1 }}
       />,
     );
-    expect(html).toContain("Agents (1 ready, 1 stub)");
+    // The count stays; the internal classification does not.
+    expect(html).toContain("Agents");
+    // The CLASS may keep the machine value -- it is not displayed. The LABEL is
+    // what a screen reader announces, and that was "stub".
+    expect(html).not.toContain('aria-label="stub"');
+    expect(html).toContain("not yet configured");
   });
 
   it("renders a widget with no agent as static, and one with an agent as fed", () => {
@@ -225,7 +230,7 @@ describe("DynamicDashboard renders from data alone", () => {
   });
 
   it("marks a derived portal as derived", () => {
-    expect(render(<DynamicDashboard config={{ ...baseConfig, derived: true }} />)).toContain("derived from registered agents");
+    expect(render(<DynamicDashboard config={{ ...baseConfig, derived: true }} />)).not.toContain("derived from registered agents");
   });
 });
 
@@ -244,8 +249,12 @@ describe("AgentSelector", () => {
         onSelect={() => {}}
       />,
     );
-    expect(html).toContain("a title — ready");
-    expect(html).toContain("b title — stub");
+    // Maturity is no longer appended to the agent title: "stub" is this
+    // codebase's classification, not something a customer can act on.
+    expect(html).toContain("a title");
+    expect(html).not.toContain("— ready");
+    expect(html).toContain("b title");
+    expect(html).not.toContain("— stub");
   });
 
   it("always offers a none option so a null selection is representable", () => {

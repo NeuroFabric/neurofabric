@@ -123,7 +123,7 @@ function VerdictFallback({ verdict }: { verdict: LiveVerdict }): ReactElement {
         </strong>
       </div>
       <p className="muted">
-        From the live verdict, not a dispatched alert.{verdict.synthetic ? " This sample is SIMULATED." : ""}
+        Measured directly from the data in view.{verdict.synthetic ? " This sample is SIMULATED." : ""}
       </p>
       <ul className="topkeys">
         {breached.map((column) => (
