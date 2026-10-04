@@ -1,0 +1,50 @@
+{
+  "$comment": [
+    "THE ENTRY-SCRIPT GATE. `checkJs` over the plain-JavaScript files that START things.",
+    "",
+    "WHY THIS FILE EXISTS. `start-ui.mjs` shipped a line referencing WEDGE_PORT with",
+    "no import and no definition. It was invisible to `npm run typecheck` because",
+    "the root tsconfig includes only `*.ts` -- and every verification of it passed,",
+    "because the shell running the verification had WEDGE_PORT set, so the `??`",
+    "short-circuited before the bare reference was evaluated. With a stripped",
+    "environment it was a ReferenceError.",
+    "",
+    "So the bug was statically visible the whole time. Nothing was looking. This",
+    "file is the looking.",
+    "",
+    "NO NEW DEPENDENCY. typescript is already a devDependency for the kernel gate;",
+    "this reuses the same binary with different flags. Per the mandate, an ADR is",
+    "required only if a dependency is added, and none is -- the change is two",
+    "compiler flags and a script entry.",
+    "",
+    "WHY `noEmit` AND `noImplicitAny: false`. These files are deliberately plain",
+    "JavaScript with no annotations. Turning on `noImplicitAny` would demand",
+    "annotations across every entry script and produce noise that hides the one",
+    "error that matters. `noUnusedLocals` is OFF for the same reason: an unused",
+    "import in a start script is a lint opinion, not a defect.",
+    "",
+    "WHAT IT CATCHES: undeclared identifiers, misspelled imports, wrong arity on an",
+    "imported function, and typos in property names on typed values. What it does",
+    "NOT catch is anything about runtime behaviour; that is what the tests and the",
+    "stripped-environment spawn in `platform/core/entry-contract.test.ts` are for."
+  ],
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+
+    "strict": true,
+    "noImplicitAny": false,
+    "noUnusedLocals": false,
+    "skipLibCheck": true,
+
+    "types": ["node"]
+  },
+  "include": ["start-ui.mjs"]
+}
