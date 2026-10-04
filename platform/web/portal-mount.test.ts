@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { startWedgeServer } from "./server.ts";
 import { makeTempWorkspace } from "../test-support/temp-workspace.ts";
 import { CREDENTIAL_HEADER, staticVault, type GatewayToken } from "../omniroute/edge-security.ts";
+import { MemoryStore } from "../memory/store.ts";
 
 /**
  * THE PORTAL API, REACHED OVER REAL HTTP.
@@ -440,3 +441,76 @@ interface LiveBody {
   readonly verdict: { records: number; synthetic: boolean; breachedColumns: number } | null;
   readonly throughput: { records: number; delta: number; windowMs: number; eventsPerSecond: number } | null;
 }
+test("THE DECISION PATH IS REACHED WITH NOBODY READING THE DASHBOARD", async () => {
+  // The half that could have been got wrong. Removing evaluation from the read
+  // route makes the record unreachable again UNLESS something else drives it --
+  // and the earlier version of this comment in server.ts records that this
+  // callback used to be the only caller, so "nothing asked for an alert" is a
+  // state this platform has already shipped once.
+  //
+  // So: ingest a breaching batch, then deliberately never open the live route.
+  // The record must fill anyway, because evaluation belongs to the deployment
+  // and not to whoever is watching. A deployment with no dashboard open is the
+  // case that has no other way to learn a breach happened.
+  const cwd = await makeTempWorkspace("nf-portal-decision-");
+  const store = MemoryStore.open({ inMemory: true });
+  const server = await startWedgeServer({
+    cwd,
+    port: 0,
+    portalVault: staticVault([TENANT_TOKEN], "mount-test"),
+    memory: { store, tenant: "acme" },
+    evaluationIntervalMs: 25,
+  });
+  trackClose(server.close);
+
+  try {
+    // VARIANCE, AND ONE GENUINE OUTLIER. A batch of identical values has an IQR
+    // of zero, every fence sits on the same number, and nothing can breach it --
+    // so a batch of clones would have made this test pass or fail for a reason
+    // that has nothing to do with who drives evaluation.
+    const events = Array.from({ length: 400 }, (_, index) => ({
+      fields: {
+        alert_code: "PEGA0001",
+        elapsed_time: String(1_000 + (index % 20) * 5),
+        threshold: "1000",
+        pega_time: "2026-10-03T00:00:00.000Z",
+      },
+      at: 1_760_000_000_000 + index * 1_000,
+    }));
+    events.push({
+      fields: {
+        alert_code: "PEGA0001",
+        elapsed_time: "999999",
+        threshold: "1000",
+        pega_time: "2026-10-03T00:00:00.000Z",
+      },
+      at: 1_760_000_000_000 + 401_000,
+    });
+
+    const ingested = await call(server, INGEST, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "pega", events }),
+    });
+    assert.equal(ingested.status, 200);
+    const taken = (await ingested.json()) as { accepted: number };
+    assert.equal(taken.accepted, 401, "every event reached the broker, so the window is real");
+
+    // The scheduler runs on its own clock and the broker consumes asynchronously,
+    // so wait for the record rather than assume a duration.
+    const deadline = Date.now() + 8_000;
+    let recorded = 0;
+    while (Date.now() < deadline && recorded === 0) {
+      recorded = store.alertsFor("acme").length;
+      if (recorded === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    assert.ok(
+      recorded > 0,
+      "no alert reached the record with no dashboard open, so this deployment is a monitor nobody can hear from",
+    );
+  } finally {
+    await server.close();
+    store.close();
+  }
+});

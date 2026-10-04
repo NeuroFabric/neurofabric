@@ -7,6 +7,7 @@ import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { createPortalRoutes, InMemoryPortalStore, type PortalRouter } from "../api/portal-routes.ts";
+import { createEvaluationScheduler } from "../omniroute/evaluation-scheduler.ts";
 import { createMemoryRoutes, MEMORY_ALERTS_PATH, type MemoryRouter } from "../memory/memory-routes.ts";
 import { validateSchema, type AgentSchema } from "../swarm/dynamic-registry.ts";
 import { buildAlertPayload } from "../egress/webhook-dispatcher.ts";
@@ -131,6 +132,21 @@ export interface WedgeOptions {
    */
   liveProviders?: readonly string[];
   /**
+   * HOW OFTEN THE EVALUATION LOOP RUNS, in millis.
+   *
+   * Present because the right answer depends on what is being watched, and this
+   * platform does not get to guess it: a stream breaching in seconds and a
+   * warehouse landing in hours do not want the same cadence. The default is the
+   * value this product is tuned for, and setting it here is how a deployment
+   * overrules that without editing code.
+   *
+   * The loop is armed whatever this is set to, so a deployment cannot end up
+   * with no evaluation at all by omitting it. There is deliberately no way to
+   * disable it here: a monitor that can be switched off by a config key is a
+   * monitor whose silence is indistinguishable from health.
+   */
+  evaluationIntervalMs?: number;
+  /**
    * THE DURABLE RECORD, WHEN THIS PROCESS HAS ONE OPEN.
    *
    * Optional because the wedge is started by more than one caller and a caller
@@ -179,6 +195,19 @@ export interface RunningWedge {
 
 /** 8 MiB. A CSV export that does not fit in this is not a CSV export. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+/**
+ * HOW OFTEN THE EVALUATION LOOP RUNS, when the deployment does not say.
+ *
+ * Five seconds is chosen against the thing it must not do: the alert policy
+ * refuses to write anything for a healthy reading, so a tick over a quiet stream
+ * costs one in-memory pass and no I/O. The cost only appears on a first
+ * observation, where the record is persisted synchronously. That makes the
+ * interval a trade between noticing a breach promptly and paying a blocking
+ * write more often than once -- and since the loop refuses to re-enter while a
+ * tick is running, a slow tick is skipped rather than stacked.
+ */
+const DEFAULT_EVALUATION_INTERVAL_MS = 5_000;
 
 /**
  * Read the file a route needs, THROUGH THE STREAMING READER.
@@ -587,6 +616,49 @@ export function createWedgeServer(options: WedgeOptions): Server {
   const liveProvider = liveProviders[0] ?? "pega";
 
   /**
+   * THE EVALUATION LOOP, ARMED HERE BECAUSE THIS IS WHERE IT BELONGS.
+   *
+   * Evaluation used to be reachable only through a portal read, so the alert
+   * policy -- and therefore `onDecision`, the durable record write and the SSE
+   * publish -- ran when somebody asked how a stream was doing. The read route no
+   * longer decides anything, so this is what makes the whole decision path
+   * reachable: a deployment with no dashboard open still evaluates, records and
+   * publishes, which is the only version of a monitor that is not a dashboard
+   * with a stopwatch.
+   *
+   * It is started HERE, at the composition root, and nowhere else. Nothing below
+   * this point constructs one, so there is no path to a live interval that did
+   * not go through this one -- which is the failure mode that hung this
+   * repository before, when a timer was created in the server factory and became
+   * a handle outliving its owner in every test that built a server.
+   *
+   * The providers are resolved PER TICK rather than captured, so a provider bound
+   * after boot is still evaluated. Resolving once here would work today -- the
+   * bindings are filled just above -- and would quietly stop working the first
+   * time a provider is attached at runtime, which is exactly the kind of
+   * regression that reports a healthy zero breaches forever.
+   *
+   * A failure inside a tick is contained and counted by the scheduler, and the
+   * interval is unref'd, so neither a locked database nor this loop can be the
+   * reason the process stays up. Stopping on close is tidiness; the loop is not
+   * what holds anything open.
+   */
+  const evaluation = createEvaluationScheduler({
+    gateway,
+    providers: () => [...bindings.keys()],
+    intervalMs: options.evaluationIntervalMs ?? DEFAULT_EVALUATION_INTERVAL_MS,
+    onError: (error, context) => {
+      // Reported where a boot-time failure would be seen, and counted by the
+      // scheduler so a degraded loop can be asked about it later. A monitor that
+      // fails silently is worse than one that never started, because it looks
+      // healthy while it misses every breach.
+      const reason = error instanceof Error ? error.message : String(error);
+      const subject = context.provider ?? "the provider list";
+      console.error(`[evaluation] ${subject} could not be evaluated: ${reason}`);
+    },
+  });
+
+  /**
    * THE NEWEST EVENT TIME PER PROVIDER. Bounded by the provider list, which is
    * fixed at boot, so it cannot grow without limit.
    */
@@ -616,18 +688,22 @@ export function createWedgeServer(options: WedgeOptions): Server {
     live: {
       verdict: (provider) => gateway.verdict(provider),
       /**
-       * THE DECISION, ENTERED FROM THE READ PATH.
+       * NO `evaluate` HERE, AND THE ABSENCE IS THE POINT.
        *
-       * This is what makes `onDecision` -- and therefore `recordDecision` and the
-       * SSE publish -- actually REACHABLE. Before this line existed,
-       * `gateway.evaluate()` had no caller outside tests: the record was wired,
-       * the ordering was proved, and nothing ever asked for an alert. A write
-       * boundary that is never entered is indistinguishable from no boundary, and
-       * the test suite was the only thing exercising it.
+       * This member used to forward the alert policy, and it was the only thing
+       * making `onDecision` -- and therefore `recordDecision` and the SSE publish
+       * -- reachable: before it existed the record was wired, the ordering was
+       * proved, and nothing ever asked for an alert, so a write boundary that is
+       * never entered is indistinguishable from no boundary.
+       *
+       * That is now the scheduler's job, and removing the member here is what
+       * makes the read path provably read-only rather than merely intended to
+       * be. The type still permits it, because the portal route is also a usable
+       * schema surface with no stream attached -- so instead of trusting the
+       * absence, `portal-routes.test.ts` counts the decisions a read causes and
+       * pins that it causes none. A seam with a test on it does not need the
+       * caller to be trusted.
        */
-      evaluate: (provider) => {
-        gateway.evaluate(provider);
-      },
       push: (provider, event) => {
         // THE NEWEST LIVE READING, TAKEN AT THE INGRESS.
         //
@@ -709,7 +785,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
   // rather than one per request.
   routes = memoryRoutes;
 
-  return createServer((request, response) => {
+  const server = createServer((request, response) => {
     void (async () => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -1429,6 +1505,23 @@ export function createWedgeServer(options: WedgeOptions): Server {
       }
     })();
   });
+
+  /**
+   * ARMED AT THE COMPOSITION ROOT, AND RELEASED ON THE SERVER'S OWN CLOSE.
+   *
+   * Both halves are here rather than in `startWedgeServer` because the server is
+   * built in tests that never call `startWedgeServer`, and a loop started by the
+   * listener and stopped by the listener is a loop nobody owns. Binding release
+   * to the server's `close` event means every path out of this function releases
+   * it, including the direct ones.
+   *
+   * Started only once the handler exists, so a request can never arrive before
+   * the loop that records what it produces.
+   */
+  server.once("close", () => evaluation.stop());
+  evaluation.start();
+
+  return server;
 }
 
 export async function startWedgeServer(options: WedgeOptions): Promise<RunningWedge> {
