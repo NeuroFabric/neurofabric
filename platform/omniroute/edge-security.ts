@@ -262,6 +262,61 @@ export function guard(
   return identity;
 }
 
+/**
+ * ONE DOOR. Load the credential list, prove the caller, and hand back the tenant.
+ *
+ * === WHY THIS EXISTS, AND WHAT IT PREVENTS ===
+ *
+ * Three routers each wrote the same four lines -- load the vault, build an
+ * `EdgeRequest`, `guard` it, take `decision.tokenId` -- and each wrote them
+ * slightly differently. `portal-routes` refused on `tokenId === undefined`;
+ * `memory-routes` grew its own `prove()`; and `ui-routes` never checked it at all.
+ * Three copies of an authentication path is three chances to drift, and the copy
+ * that drifts is the one nobody re-reads.
+ *
+ * The drift was not theoretical. **`ui-routes.ts` proved the caller and then threw
+ * the tenant away**, because nothing it served is scoped yet. That is correct
+ * today, and it is exactly the shape of a bug waiting for the first route that has
+ * a tenant to scope by -- at which point the author has to decide where the
+ * tenancy boundary is, in a file that currently has no tenancy in it at all.
+ *
+ * So this returns the tenant ALONGSIDE the decision, and a caller that ignores it
+ * has to say so rather than having it simply be available.
+ *
+ * === WHAT IT DOES NOT DO ===
+ *
+ * It does not decide *what* a caller may do. That is `guard`'s job and it stays
+ * there. This is only the door: who are you, and whose records are yours. The two
+ * questions are separated on purpose -- "is this credential valid" and "whose data
+ * is this" are different claims, and a function that answered both would be a
+ * function nobody could check one half of.
+ *
+ * === WHY `tokenId === undefined` IS A REFUSAL AND NOT A PASS ===
+ *
+ * Because `guard` answers "this credential is valid", and a valid credential with
+ * no id would name a tenant that does not exist. Every record in this platform is
+ * namespaced by `tokenId` (ADR-005 §10.1), so an undefined one would write rows
+ * nobody can read and serve reads nobody can scope. Fail closed.
+ */
+export async function proveTenant(
+  vault: VaultProvider,
+  provider: string,
+  headers: Readonly<Record<string, string | undefined>>,
+  options: { readonly strict?: boolean; readonly events?: number } = {},
+): Promise<
+  { readonly ok: true; readonly tokenId: string; readonly decision: EdgeDecision } | { readonly ok: false; readonly decision: EdgeDecision }
+> {
+  const tokens = await loadTokens(vault, { ...(options.strict === false ? {} : { strict: true }) });
+  const request: EdgeRequest = { headers, provider, events: options.events ?? 1 };
+  const decision = guard(request, tokens);
+  if (!decision.ok) return { ok: false, decision };
+  const tokenId = decision.tokenId;
+  if (tokenId === undefined) {
+    return { ok: false, decision: { ok: false, status: 401, reason: "no credential was proven" } };
+  }
+  return { ok: true, tokenId, decision };
+}
+
 /** Issue a credential. The value is returned ONCE, because it is never recoverable. */
 export function issueToken(id: string, providers: readonly string[], scope?: string): GatewayToken {
   return {

@@ -2,6 +2,7 @@ import {
   guard,
   httpResponse,
   loadTokens,
+  proveTenant,
   type EdgeDecision,
   type EdgeRequest,
   type VaultProvider,
@@ -624,17 +625,14 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
       return json(404, { error: "no such resource" });
     }
 
-    const tokens = await loadTokens(options.vault, {
+    const proven = await proveTenant(options.vault, PORTAL_PROVIDER, headers, {
       ...(options.strictVault === false ? {} : { strict: true }),
     });
+    if (!proven.ok) return refused(proven.decision);
 
-    const request: EdgeRequest = { headers, provider: PORTAL_PROVIDER, events: 1 };
-    const decision = guard(request, tokens);
-    if (!decision.ok) return refused(decision);
-
-    // THE TENANT IS THE PROVEN TOKEN ID. Nothing in the request chose it.
-    const tenant = decision.tokenId;
-    if (tenant === undefined) return refused({ ok: false, status: 401, reason: "no credential was proven" });
+    // THE TENANT IS THE PROVEN TOKEN ID. Nothing in the request chose it, and it
+    // arrived from the one door rather than from four lines repeated here.
+    const tenant = proven.tokenId;
 
     if (isSchemaWrite) {
       const validation = validateSchema(body);
