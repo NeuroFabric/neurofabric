@@ -210,7 +210,7 @@ export function ReconciliationPanel({ diff, onAcknowledge, now = Date.now() }: R
   const quiet = diff.differences.length === 0 && diff.corruptions.length === 0;
 
   return (
-    <section className="record" aria-label="From the record" data-source={diff.source}>
+    <section className="record" aria-label="From the record" data-source={diff.source} data-surface="record">
       {/*
         THE HEADER, IN THE WORDS ADR-005 §9 ASKS FOR.
 

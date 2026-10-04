@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactElement } from "react";
 
-import { AgentSelector } from "./components/AgentSelector";
+import { AgentList } from "./components/AgentList";
 import { AlertCenter } from "./components/AlertCenter";
 import { DynamicDashboard, type RuleReading } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
@@ -332,14 +332,27 @@ export function App({
         </div>
       </header>
 
-      <nav className="app__select" aria-label="Agent selection">
-        <AgentSelector
-          agents={state.agents}
-          selectedAgentId={state.selectedAgentId}
-          loading={state.schemaLoading}
-          onSelect={select}
-        />
-      </nav>
+      {/*
+        THE AGENT LIST, IN ITS OWN LANDING STRIP.
+
+        Slice 4 (F6c): a `<select>` rendered here, which is a form control for
+        the primary navigation of the product. The list is the same information in
+        a shape a person can scan, and it is a real `<nav>` so the product's main
+        navigation is navigable as one.
+
+        The `<nav>` here is NOT a label for the component -- `AgentList` renders
+        its own `<nav aria-label="Agents">`, and nesting a labelled navigation
+        inside another navigation landmark produces two landmarks with the same
+        purpose, which is exactly the sort of thing a screen-reader user has to
+        disambiguate by guesswork. So this wrapper is gone with the old wrapper's
+        reason, and `AgentList` owns the landmark.
+      */}
+      <AgentList
+        agents={state.agents}
+        selectedAgentId={state.selectedAgentId}
+        loading={state.schemaLoading}
+        onSelect={select}
+      />
 
       <main className="app__main">
         {/*
