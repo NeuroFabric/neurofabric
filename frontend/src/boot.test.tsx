@@ -172,7 +172,9 @@ describe("Root renders a prompt instead of crashing", () => {
 
   it("renders the app when the environment supplies a credential", () => {
     const html = text(render(<Root storage={memoryTokenStorage(null)} environmentToken="gw-env" />));
-    expect(html).toContain("Command Center");
+    // The wordmark is the product name, not the component name. The prompt still
+    // says "Command Center" -- which is why this asserts the header.
+    expect(html).toContain("Neurofebric");
     expect(html).toContain("schema-driven · live ·");
     expect(html).not.toContain("No gateway credential is configured");
   });

@@ -107,8 +107,11 @@ describe("App end to end", () => {
     const store = await loadedStore({}, true);
     const html = text(renderToStaticMarkup(<App store={store} source={source()} liveSource={source()} />));
 
-    // Shell
-    expect(html).toContain("Command Center");
+    // Shell. The wordmark was "Command Center" until Slice 1; it is the
+    // product name now, and "Command Center" survives only as the credential
+    // prompt title. Asserting the wordmark is asserting the product presents
+    // itself.
+    expect(html).toContain("Neurofebric");
     expect(html).toContain("acme diagnostics");
     expect(html).toContain("ready");
 
@@ -193,9 +196,14 @@ describe("App end to end", () => {
       source({ fetchSchema: async () => ({ rules: "not-an-array" }) as never }),
       "log-anomaly",
     );
-    const html = text(renderToStaticMarkup(<App store={store} source={source()} />));
-    expect(html).toContain("Command Center");
-    expect(html).toContain("degraded");
+    const markup = renderToStaticMarkup(<App store={store} source={source()} />);
+    const html = text(markup);
+    expect(html).toContain("Neurofebric");
+    // The machine state lives in the DOM as data-status. text() strips tags, so
+    // the attribute is asserted on the raw markup — it is invisible to text().
+    expect(markup).toContain('data-status="degraded"');
+    // The human word is what a person reads without scrolling.
+    expect(html).toContain("Partial data");
   });
 
   it("renders an alert center with a real payload alongside the dashboard", async () => {
@@ -239,7 +247,7 @@ describe("App end to end", () => {
         },
       }),
     );
-    expect(text(renderToStaticMarkup(<App store={broken} source={source()} />))).toContain("degraded");
+    expect(text(renderToStaticMarkup(<App store={broken} source={source()} />))).toContain("Partial data");
   });
 
   it("shows the tenant hint in the header", async () => {

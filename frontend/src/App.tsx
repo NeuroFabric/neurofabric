@@ -7,7 +7,7 @@ import { DynamicDashboard } from "./components/DynamicDashboard";
 import { LiveStreamView } from "./components/LiveStreamView";
 import { RefusalScreen } from "./components/RefusalScreen";
 import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
-import { SchemaStore, type PortalSource } from "./store/SchemaStore";
+import { SchemaStore, type PortalSource, type StoreStatus } from "./store/SchemaStore";
 import type { AlertPayload } from "./api/live-contracts";
 
 /**
@@ -26,6 +26,33 @@ import type { AlertPayload } from "./api/live-contracts";
  * on mount are the one part `renderToStaticMarkup` will not run, which is
  * stated in the test file rather than left to be discovered.
  */
+/**
+ * What a person reads instead of the store's internal status word.
+ *
+ * === WHY THIS EXISTS ===
+ *
+ * The header rendered `state.status` verbatim: `idle`, `loading`, `ready`,
+ * `degraded`. "degraded" in particular is a word that means whatever the reader
+ * is already worried about -- it is the store's honest name for "some payloads
+ * were fine and some were refused", which is a fact a person needs stated
+ * precisely, not shouted. This was the clearest "this is a debug console"
+ * symptom in the tree, and it was one span wide.
+ *
+ * The keys are `StoreStatus`, not strings, so a state added to the union fails
+ * the type gate here instead of shipping untranslated. That is the fourth
+ * instance of one lesson in this repository: a literal drifts, a type does not.
+ */
+const STATUS_WORDS: Record<StoreStatus, string> = {
+  idle: "Not loaded",
+  loading: "Loading",
+  ready: "Ready",
+  degraded: "Partial data",
+};
+
+export function statusWord(status: string): string {
+  return STATUS_WORDS[status as StoreStatus] ?? status;
+}
+
 export interface AppProps {
   readonly store: SchemaStore;
   readonly source: PortalSource;
@@ -120,18 +147,29 @@ export function App({
   return (
     <div className="app">
       <header className="app__bar">
-        <div>
-          <h1>Command Center</h1>
+        {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
+            gutter, which is a description of a component rather than a product
+            -- and the word "Neurofebric" appeared nowhere on screen at all. The
+            class carries the centring so the change is one line of CSS rather
+            than a layout rewrite. */}
+        <div className="app__identity">
+          <h1 className="app__wordmark">Neurofebric</h1>
+        </div>
+        <div className="app__meta">
           <p className="muted">
             {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
             {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
           </p>
-        </div>
-        <div className="app__actions">
-          <span className={`pill pill--${state.status}`}>{state.status}</span>
-          <button type="button" onClick={reload}>
-            Reload
-          </button>
+          <div className="app__actions">
+            {/* The CLASS still carries the machine state, for styling and for the
+                test that asserts on it. Only the word a person reads changes. */}
+            <span className={`pill pill--${state.status}`} data-status={state.status}>
+              {statusWord(state.status)}
+            </span>
+            <button type="button" onClick={reload}>
+              Reload
+            </button>
+          </div>
         </div>
       </header>
 
