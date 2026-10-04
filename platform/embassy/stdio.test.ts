@@ -244,3 +244,87 @@ test("a Writable that throws does not take the loop down mid-stream", async () =
   });
   await assert.doesNotReject(() => serve(source, hostile, CONFIG));
 });
+
+test("DISCOVERY BEFORE THE HANDSHAKE IS REFUSED, because the tool list is a capability map", async () => {
+  // `tools/call` has always required an established session. `tools/list` did not,
+  // so a caller that never handshook could still enumerate every tool this
+  // embassy offers -- which is the same reconnaissance `callTool` refuses to
+  // hand over at its "no such tool", for the same reason the portal edge does not
+  // echo its routes at a 404. A boundary that holds on the call and not on the
+  // listing is not a boundary; it is a speed bump beside the door.
+  //
+  // The refusal shape is identical to every other session refusal, so a caller
+  // cannot map the boundary by probing it.
+  const { out } = await run('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n');
+  const [frame] = frames(out);
+
+  assert.ok(frame !== undefined, "the request must be answered, not dropped");
+  const error = frame["error"] as { readonly code?: number; readonly message?: string } | undefined;
+  assert.ok(error !== undefined, "discovery must be refused before the handshake, not served");
+  assert.equal(error.code, -32001);
+
+  // No capability is disclosed. Naming what exists to a caller that has not proved
+  // it holds a credential is the disclosure this whole assertion exists to stop.
+  assert.equal(out.includes("get_verdict"), false);
+  assert.equal(out.includes("install_schema"), false);
+  assert.equal(out.includes("ingest_events"), false);
+});
+
+test("DISCOVERY AFTER THE HANDSHAKE ANSWERS, with a schema for every tool", async () => {
+  const { out } = await run(
+    '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+  );
+  const [, listed] = frames(out);
+  const result = listed?.["result"] as { readonly tools?: readonly Record<string, unknown>[] } | undefined;
+  const tools = result?.tools ?? [];
+
+  assert.deepEqual(
+    tools.map((tool) => tool["name"]),
+    ["get_verdict", "install_schema", "ingest_events"],
+    "every published tool is discoverable",
+  );
+
+  for (const tool of tools) {
+    // The specification says inputSchema MUST be a valid JSON Schema object, and
+    // explicitly recommends `additionalProperties: false` for a tool that takes
+    // nothing. That property is also the enforcement behind "no tool accepts a
+    // tenant or a credential", so it is asserted rather than assumed.
+    const schema = tool["inputSchema"] as Record<string, unknown> | undefined;
+    assert.equal(schema?.["type"], "object", `${String(tool["name"])} publishes an object schema`);
+    assert.equal(schema?.["additionalProperties"], false, `${String(tool["name"])} refuses extra keys`);
+  }
+});
+
+test("EVERY PUBLISHED TOOL IS DISPATCHABLE, so the listing cannot drift from the dispatcher", async () => {
+  // The tool list and the dispatcher are two hand-written authorities for one
+  // surface. They agree today, and agreement today is not a property -- a fourth
+  // tool added to the list and not to the dispatcher would be advertised to every
+  // connecting client and then refuse at the call.
+  //
+  // This asserts the bijection from the caller's side rather than comparing the
+  // two declarations to each other, because the failure it must catch is exactly
+  // the case where the two declarations agree with each other and disagree with
+  // what the server can do.
+  const { out } = await run(
+    '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+  );
+  const [, listed] = frames(out);
+  const result = listed?.["result"] as { readonly tools?: readonly { readonly name: string }[] } | undefined;
+  const names = (result?.tools ?? []).map((tool) => tool.name);
+
+  for (const name of names) {
+    const [called] = frames(
+      (
+        await run(
+          `{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"${name}","arguments":{}}}\n`,
+        )
+      ).out,
+    ).slice(1);
+    const answer = called?.["result"] as { readonly isError?: boolean } | undefined;
+    assert.equal(
+      answer?.isError,
+      true,
+      `${name} is published but refused as unknown, so the listing advertises a capability the dispatcher does not have`,
+    );
+  }
+});
