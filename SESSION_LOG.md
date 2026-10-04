@@ -1,157 +1,181 @@
-# Session log — autonomous run 2, 2026-10-04
+# Session log — priority-insert run, 2026-10-04
 
-**Read this first.** State on arrival, what is ready to merge, what is blocked and
-whose hands it needs, and what I did wrong.
+Read this first. **A real bug was found in `main` by the operator and fixed, plus
+the mechanism that makes its whole class provable.** Everything else from the last
+two sessions is listed at the end.
 
 ---
 
-## THE HEADLINE: CI IS ALIVE
+## THE BUG — your report, confirmed and fixed
 
-Your PATH fix worked. **Tests have now executed in this project's pipeline for the
-first time in its history.**
-
-| Job | Status | Evidence |
-|---|---|---|
-| typecheck | **success** | first-ever green |
-| test-mjs | **success** | 22/22 |
-| test-proof | **success** | — |
-| test-ts | **failed** | **1535 tests, 1533 pass, 0 fail, 2 skipped** — then a *later step* failed |
-
-**The tests all passed.** `test-ts` died on its final step:
+`start-ui.mjs` referenced `WEDGE_PORT` at line 48 with **no import and no
+definition**. The comment directly above it claimed the number was imported and
+that the file held no copy. The import was never added.
 
 ```
-$ node verification/assert-posix-vault-permissions.mjs
-FAIL  this gate is POSIX-only; running it on win32 cannot prove anything.
+$ env -u PORT -u WEDGE_PORT node --experimental-strip-types start-ui.mjs --help
+WEDGE_PORT is not defined
 ```
 
-**Same class as `measure-wrappers`.** The gate is *right* to refuse — it exists to
-verify the Linux runner — and `.gitlab-ci.yml` runs it unconditionally. The file
-is wrong; the gate is correct.
+**MR !93.** Your reading was exact: bare identifier, missing import, `--port`
+cannot bypass it because argv parsing runs after the options object is built, and
+`Select-String` finding one occurrence is what identified it as a reference rather
+than a definition.
 
-**This is exactly what your mandate predicted**: a never-run pipeline's first
-failure is expected. This one is not a code fault, and it is not mine to fix —
-fixing it means editing `.gitlab-ci.yml`, which is outside my authority.
-**Runbook written: T10 in `docs/operator-runbooks.md`.**
+### The part that matters most
+
+**My earlier receipt for this exact line was green.** `node --experimental-strip-types
+start-ui.mjs --port 1` printed "The wedge is up". That run had `WEDGE_PORT` in
+its environment, so `??` short-circuited before the bare reference was evaluated.
+**The receipts were honest; the environment flattered the code.** That is now the
+standing rule: *the environment that verifies must not be the environment that
+flatters.*
+
+---
+
+## The mechanism: no undeclared identifier in shipped entry scripts
+
+**Your call on mechanism, my decision: `checkJs` via a second tsconfig.**
+
+`tsconfig.entries.json` type-checks `start-ui.mjs` with `allowJs` + `checkJs`,
+wired into `npm run typecheck` as `tsc --noEmit && tsc -p tsconfig.entries.json`.
+
+**No new dependency** — `typescript` is already the kernel's static gate; this is
+the same binary with different flags. Your ADR condition ("if it adds a
+dependency") therefore does not trigger, and I did not write one. `noImplicitAny`
+is deliberately off: these files are plain JavaScript, and demanding annotations
+would bury the one error that matters.
+
+**Proven, not promised.** Deleting the import and re-running the gate:
+
+```
+start-ui.mjs(53,64): error TS2304: Cannot find name 'WEDGE_PORT'.
+```
+
+### It found a second real defect on its first run
+
+```
+start-ui.mjs(100,20): error TS18046: 'error' is of type 'unknown'.
+```
+
+`error.message` on an un-narrowed catch binding. It ships fine when the binding is
+an `Error` and prints `undefined` when it is not — so it fails **quietly, on the
+rare path, and only when the thing is already going wrong.** Fixed.
+
+**Your systemic note is the right one and I will keep it: this is the second
+invented reference this week** (`StoreStatus` union, now this import). Both were
+statically visible. The first was caught by a type; this one had no type gate at
+all. That asymmetry is why the mechanism matters more than the fix.
+
+---
+
+## B1 — the POSIX vault gate, fixed in the SCRIPT
+
+**MR !94.** Your framing was right and I took it: `exit(0)` with a loud
+`SKIPPED (not verified)`, never a silent pass.
+
+The reason it mattered more than a red job: it ran as the **last step of
+`test-ts`**, so one POSIX assertion was overriding `1..1535 / pass 1533 / fail 0`.
+That trains people to see red and not read it — the exact habit that hides a real
+failure.
+
+The log now says, every time:
+
+```
+SKIPPED (not verified) ... Do not read a green test-ts as proof that
+secrets at rest are not world-readable.
+```
+
+**D-037 caveat two stays open in configuration only** until a Linux runner runs
+it and the log is read. The POSIX path is byte-for-byte unchanged.
+
+**`.gitlab-ci.yml` untouched.** Moving the step into a tagged job would have been
+tidier and it is not mine — a failing step *relocated* rather than *answered* is
+closer to skipping than to fixing.
 
 ---
 
 ## MRs ready to merge
 
-| # | MR | One-line verification |
+| # | MR | Verification |
 |---|---|---|
-| 1 | **!88** Liveness strip (Slice 2) + ADR-002 | `cd frontend && npx vitest run` → 283 pass |
-| 2 | **!89** Port startup check (T9) | `node --experimental-strip-types start-ui.mjs --port <busy>` |
-| 3 | **!87** Bootstrap door (TASK 1) | `node --experimental-strip-types scripts/dev-boot.mjs` |
-| 4 | **!90** Testing guide + scratch hygiene | `type frontend\TESTING.md` |
-| 5 | **!91** Operator runbooks (T10, T11) | read it; it is instructions for you |
+| 1 | **!93** Ghost identifier fix + entry-script gate | `env -u PORT -u WEDGE_PORT node --experimental-strip-types start-ui.mjs --help` |
+| 2 | **!94** Vault gate skips on win32 and says so | `node verification/assert-posix-vault-permissions.mjs; echo $?` |
+| 3 | **!95** product-identity contract, 13/13 green | `cd frontend && npx vitest run src/product-identity.test.tsx` |
+| 4 | **!96** ADR-002 alternatives | read the finding-to-slice table |
+| 5 | **!88** Liveness strip (Slice 2) + ADR-002 | `cd frontend && npx vitest run` |
+| 6 | **!89** Port startup check (T9) | `node --experimental-strip-types start-ui.mjs --port <busy>` |
+| 7 | **!87** Bootstrap door | `node --experimental-strip-types scripts/dev-boot.mjs` |
+| 8 | **!90** Testing guide | `type frontend\TESTING.md` |
+| 9 | **!91** Operator runbooks (T10, T11) | instructions for you |
 
-Independent of each other. **!88 and !89 are the substance**; the rest is
-documentation of decisions.
+**!93 first.** Everything else was verified against a tree where the entry script
+could not boot.
 
----
-
-## What Slice 2 actually delivers
-
-The liveness strip, above everything, because **silence must never be ambiguous**.
-A dashboard that is silent and a dashboard that is broken look identical from
-outside; both show numbers that are not moving, and only one is true.
-
-Five states that were previously one grey number: `connecting`, `live`, `stalled`,
-`halted`, `empty`.
-
-Two decisions in it, and both are arguments, not implementation:
-
-- **`halted` is checked first.** A poller that stopped asking is not
-  "connecting", and calling it that is a lie that looks like patience.
-- **A read too old is `stalled` whatever the counter says.** A count holding
-  steady while the feed dies is the exact failure this exists to catch.
-
-**Partial data with a visible fault beats no data** — hiding a degraded store
-loses the good data the operator already has *and* hides the only thing they
-could act on.
-
-### uPlot is decided and deliberately NOT shipped
-
-ADR-002. I installed and verified `uplot@1.6.32` (545KB unpacked, 0
-vulnerabilities) and then **removed it**, because nothing renders a series yet and
-a dependency ahead of its consumer is a cost with no return — precisely what
-ADR-001 exists to prevent. `frontend/package.json` is byte-identical to `main`.
-
-ADR-002 also records two costs rather than hiding them: this breaks
-zero-dependency for **`frontend/`** (the *kernel* claim is untouched — the root
-manifest has no `dependencies` field), and 145KB raw / ~45KB gzipped **exceeds
-the ≤~50KB budget** on raw size. I treated the budget as gzipped, which is what a
-browser downloads, and stated both numbers rather than redefining the criterion to
-fit the decision.
+**Receipts for !93:** `test:mjs` 22/22 · `test:ts` 1558 tests / 1556 pass / 0 fail
+/ 2 skipped · `typecheck` clean including the new entries project ·
+`entry-contract` 4/4.
 
 ---
 
-## T9 — the fifth coat
+## Budget ruling — confirmed, not changed
 
-`platform/core/port-probe.ts`, wired **at the bind site**, because `start-ui.mjs`
-is what calls `bind`. Measured output:
-
-```
-port 8097 on 127.0.0.1 is already in use by PID 1488 (node.exe).
-Nothing has been stopped. ...
-  node --experimental-strip-types start-ui.mjs --port 8098
-```
-
-**There is no code path in it that terminates a process**, and the test file states
-that absence explicitly — "it does not kill things" is exactly the claim that
-quietly stops being true when nobody checks.
+**≤50KB gzipped, raw logged beside.** ADR-002 states both: uPlot is **145KB raw,
+~45KB gzipped**. Neither number was rounded in the direction that helps.
 
 ---
 
-## Self-corrections, recorded not buried
+## The design log
 
-1. **The credential fault in the liveness strip was unreachable.** It was gated on
-   `severity === "hard"`, which a credential refusal with an empty fault never
-   reaches — so the most important message was missing in the state that most
-   needed it. Caught by a test written to the !86 contract.
-2. **`.map(words)` passed the array index as the props object.** Five identical
-   strings from five states, and "expected 1 to be 5" looked like a component bug.
-3. **The test suite's own `StoreStatus` union guess was wrong** — I invented two
-   states; the real union is four. `statusWord` is now keyed on the type.
-4. **uPlot almost shipped unused.** Caught by asking whether anything imports it.
+Its live content is now in **ADR-002** — the finding-to-slice table, the
+deferral argument for the hand-rolled sparkline, and the acceptance criteria that
+travel to Slice 3.
 
----
-
-## Blockers — operator only
-
-**B1 — `test-ts` red on a POSIX gate.** Steps in `docs/operator-runbooks.md` §T10.
-Needs: enable shared Linux runners, and a decision on tagging. **I did not edit
-`.gitlab-ci.yml`** — moving a failing step into a separately-tagged job could be
-read as skipping it, and that call is yours.
-
-**B2 — runner token rotation.** It has been in a transcript four times; **one was
-me**, printing it while looking for the shell setting. T11 in the same runbook is
-the moment to rotate, and it is yours.
-
-**B3 — 60fps and flat-heap-over-30-minutes.** Unverifiable here — no browser, no
-profiler. **Logged operator-verified, never claimed.** I will not put a number in
-a description I did not measure.
+`docs/ux-overhaul-design-log.md` is **untracked and now disposable.** It was never
+committed, so deleting it removes nothing from history — it just stops being a
+document that reads as current with nobody maintaining it. **I did not delete it.**
+That is your call, and the deletion guard has been right twice now.
 
 ---
 
-## Not done, and why
+## `boot.js` / `boot.mjs` / `builds/` — identified, decision yours
 
-- **Slice 3 (uPlot series) and Slices 4–6.** ADR-002 has the decision; the
-  dependency lands *with* the commit that first draws a series.
-- **T10/T11 execution.** Runbooks written; both steps are yours.
-- **`docs/ux-overhaul-design-log.md` and `frontend/src/product-identity.test.tsx`**
-  are uncommitted in the working tree from the previous session. The design log
-  content is now largely superseded by ADR-002 and the Slice 2 MR description.
-  **They need a decision: commit or discard.** I did not delete them — the
-  deletion guard is right that they should be a deliberate choice, not a reflex.
+| Path | Size | Tracked | Ignored | What it is |
+|---|---|---|---|---|
+| `boot.js` | 161 B | no | **no** | the operator's wedge bootstrap; **contains a credential** |
+| `boot.mjs` | 154 B | no | **no** | same, minified variant |
+| `builds/` | **8.9 MB** | no | **yes** (`.gitignore:88`) | GitLab Runner's build directory, named after the runner |
+
+**My read:** `builds/` is handled — already ignored, never tracked, 8.9MB of
+runner scratch that would be a mistake to commit. `boot.js` and `boot.mjs` are
+**yours, contain a credential, and are not ignored.** Recommend **gitignoring them
+rather than deleting**: they are configuration that carries a value, deleting is
+yours, and an ignore rule costs nothing while a deleted file has to be
+reconstructed from memory. **Either way they should not be committed, and I have
+not staged them in any MR.**
+
+---
+
+## Blockers — all yours
+
+**B1 — Linux runner.** !94 turns `test-ts` green on Windows. **That is not the
+POSIX gate passing; it is the POSIX gate not running.** Runbook in !91 §T10.
+
+**B2 — runner token.** Four transcript appearances, one of them mine. !91 §T11 is
+the moment; rotation is yours.
+
+**B3 — 60fps and flat heap over 30 minutes.** No browser, no profiler here.
+**Logged operator-verified, never claimed.**
 
 ---
 
 ## What I would do next
 
-1. **B1** — the Linux runner. Everything about CI is downstream of it.
-2. **Merge !88, then !89** — the two that change the product.
-3. **The two untracked files**: commit the design log into Slice 3, or discard.
-4. **Slice 3** — uPlot series, with the dependency and its benefit arriving in the
-   same commit.
-5. **B2** — rotate, once !91's steps are followed.
+1. **Merge !93**, then !94 — the entry script cannot boot on a clean machine until
+   the first lands, and `test-ts` is red until the second.
+2. **B1**, with the runbook.
+3. **Decide on `boot.js` / `boot.mjs`** — gitignore is my recommendation.
+4. **Merge !88 and !89** — the two that change the product.
+5. **Slice 3** — uPlot and its first consumer in the same commit, against the
+   ADR-002 criteria. The failure the deferred sparkline predicted is still mine
+   to avoid: whatever draws the series must not re-render React to move a point.
