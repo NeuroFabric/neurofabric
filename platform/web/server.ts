@@ -7,6 +7,9 @@ import { titleFor, type Purpose } from "../conductor/semantics.ts";
 import { csvRead } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
 import { createPortalRoutes, InMemoryPortalStore, type PortalRouter } from "../api/portal-routes.ts";
+import { createMemoryRoutes, type MemoryRouter } from "../memory/memory-routes.ts";
+import { validateSchema, type AgentSchema } from "../swarm/dynamic-registry.ts";
+import type { MemoryStore } from "../memory/store.ts";
 import { environmentVault, type VaultProvider } from "../omniroute/edge-security.ts";
 import { OmniRouteGateway } from "../omniroute/omniroute-gateway.ts";
 import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
@@ -124,6 +127,27 @@ export interface WedgeOptions {
    * this process connected first, or the boundary is the caller's to choose.
    */
   liveProviders?: readonly string[];
+  /**
+   * THE DURABLE RECORD, WHEN THIS PROCESS HAS ONE OPEN.
+   *
+   * Optional because the wedge is started by more than one caller and a caller
+   * with no record has nothing to reconcile -- a test over the report routes, for
+   * instance. It is optional at the TYPE level and it is honest at RUNTIME: with
+   * no store, `/api/memory/*` is not mounted at all and answers 404, rather than
+   * answering 200 with an empty diff that reads as "your record agrees with
+   * everything". **A surface that reports agreement it did not check is worse
+   * than a surface that is absent**, and that is the whole reason this is a
+   * union rather than a nullable field that quietly defaults.
+   */
+  memory?: {
+    readonly store: MemoryStore;
+    /**
+     * Newest live reading per composite agent id. Computed by the CALLER because
+     * only the caller knows which of its ingresses a producer actually used --
+     * see the honesty note in `createWedgeServer`.
+     */
+    readonly latest?: () => Readonly<Record<string, number>>;
+  };
 }
 
 export interface RunningWedge {
@@ -419,22 +443,154 @@ export function createWedgeServer(options: WedgeOptions): Server {
   }
   const liveProvider = liveProviders[0] ?? "pega";
 
+  /**
+   * THE NEWEST EVENT TIME PER PROVIDER. Bounded by the provider list, which is
+   * fixed at boot, so it cannot grow without limit.
+   */
+  const liveNewest = new Map<string, number>();
+
   const portalRoutes: PortalRouter = createPortalRoutes({
     registry,
     store: new InMemoryPortalStore(),
     vault: options.portalVault ?? environmentVault(),
+    /**
+     * THE RECORD HEARS ABOUT AN INSTALLED AGENT.
+     *
+     * This is the only path by which the durable record gains content in this
+     * process, and it is deliberately narrow: schemas and nothing else. A verdict
+     * is written at decision time by the alert path (ADR-005 §7.1), NOT here --
+     * a portal read must never block on a synchronous write, because the record's
+     * cost model only pays for facts that change what a person does next, and an
+     * agent appearing on a screen is not one of them.
+     */
+    ...(options.memory === undefined
+      ? {}
+      : {
+          onSchemaRegistered: (tenant: string, schema: AgentSchema) => {
+            options.memory?.store.putSchema(tenant, schema.id, schema.version, schema, Date.now());
+          },
+        }),
     live: {
       verdict: (provider) => gateway.verdict(provider),
-      push: (provider, event) => gateway.push(provider, event),
+      push: (provider, event) => {
+        // THE NEWEST LIVE READING, TAKEN AT THE INGRESS.
+        //
+        // It is recorded here rather than derived from the gateway because the
+        // gateway answers "how many records are in the window", which is a COUNT
+        // and not a TIME -- and the whole point of difference 2 and difference 5
+        // is WHEN. The gap matters: an event with no `at` falls back to the
+        // arrival time and says so, rather than being dropped, because a missing
+        // timestamp is a fact about the producer and not a reason to lose the
+        // reading entirely.
+        const at = typeof event.at === "number" ? event.at : Date.now();
+        const previous = liveNewest.get(provider);
+        if (previous === undefined || at > previous) liveNewest.set(provider, at);
+        gateway.push(provider, event);
+      },
       connected: (provider) => bindings.has(provider),
     },
     liveProvider,
   });
 
+  /**
+   * THE LIVE HALF OF THE DIFF, DERIVED HONESTLY OR NOT AT ALL.
+   *
+   * Two conditions, both required, and each one is there to stop a fabricated
+   * "live reading":
+   *
+   *  - the gateway must hold records, so an empty window produces NO entry rather
+   *    than an entry timestamped now. This is what makes difference 2 ("no live
+   *    window yet") reachable at all -- substituting "now" for a missing reading
+   *    would make that difference impossible to ever see, which is the failure
+   *    mode a fabricated timestamp creates everywhere it appears.
+   *  - an event must actually have arrived, because a verdict can exist from a
+   *    drain that happened before this process saw the event.
+   *
+   * **AND THE ATTRIBUTION IS COARSE, WHICH IS STATED RATHER THAN HIDDEN.** The
+   * newest reading is attributed to every registered agent because the wedge's
+   * live path is not tenant-routed: `push` carries no tenant, so there is nothing
+   * here that could attribute an event to one agent rather than another. That
+   * makes the reading "something live arrived recently", not "this agent produced
+   * a reading at this instant" -- so it is fit for differences 2 and 5, which ask
+   * whether the window is empty and whether history is ahead, and it is NOT fit
+   * for attributing a number to an agent. A caller with real attribution passes
+   * `memory.latest` and this default is not used.
+   */
+  const defaultLatest = (): Readonly<Record<string, number>> => {
+    const verdict = gateway.verdict(liveProvider);
+    if (verdict === undefined || verdict.records === 0) return {};
+    const newest = liveNewest.get(liveProvider);
+    if (newest === undefined) return {};
+    const out: Record<string, number> = {};
+    for (const agent of registry.describeAll()) out[agent.id] = newest;
+    return out;
+  };
+
+  /**
+   * THE DIFF ROUTES, MOUNTED ONLY WHEN A RECORD IS OPEN.
+   *
+   * `validateSchema` is passed as the CURRENT validator so a grammar that
+   * tightened after an agent was written is difference 1 -- an expected
+   * disagreement the operator resolves -- rather than corruption. That distinction
+   * is the difference between a list somebody reads and an alarm somebody
+   * skims past, so the function is wired here rather than left undefined, which
+   * would have silently disabled difference 1 for every deployment.
+   */
+  const memoryRoutes: MemoryRouter | undefined =
+    options.memory === undefined
+      ? undefined
+      : createMemoryRoutes({
+          store: options.memory.store,
+          live: {
+            providers: liveProviders,
+            latest: options.memory.latest ?? defaultLatest,
+            accepts: (document) => validateSchema(document).ok,
+          },
+          vault: options.portalVault ?? environmentVault(),
+        });
+
   return createServer((request, response) => {
     void (async () => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+        /**
+         * THE DIFF SURFACE, BEFORE ANY PORTAL ROUTE.
+         *
+         * Delegated first so `/api/memory/*` can never fall through to a route
+         * written for a different verb, and so a 404 from the memory router is a
+         * memory 404 rather than the wedge's own.
+         *
+         * With no record open this branch does not exist at all, which is the
+         * point of the `undefined` above: a caller without a record gets a 404,
+         * not an answer about a record nobody is keeping.
+         */
+        if (memoryRoutes !== undefined && url.pathname.startsWith("/api/memory/")) {
+          const headers: Record<string, string | undefined> = {};
+          for (const [name, value] of Object.entries(request.headers)) {
+            headers[name.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
+          }
+
+          let payload: unknown;
+          if (request.method === "POST") {
+            try {
+              const raw = await readBody(request);
+              payload = raw.trim() === "" ? undefined : JSON.parse(raw);
+            } catch {
+              sendJson(response, 400, { error: "the request body is not valid JSON" });
+              return;
+            }
+          }
+
+          const result = await memoryRoutes.handle(request.method ?? "GET", url.pathname, headers, payload);
+          const text = JSON.stringify(result.body ?? null);
+          response.writeHead(result.status, {
+            ...result.headers,
+            "content-length": Buffer.byteLength(text),
+          });
+          response.end(text);
+          return;
+        }
 
         /**
          * THE PORTAL SURFACE, BEFORE ANY WEDGE ROUTE.

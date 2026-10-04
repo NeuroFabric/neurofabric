@@ -85,6 +85,27 @@ export interface Reconciliation {
   readonly clean: boolean;
 }
 
+/**
+ * THE IDENTITY OF ONE DIFFERENCE, AND IT LIVES HERE ON PURPOSE.
+ *
+ * An acknowledgement is durable, so it has to outlive the process that computed
+ * the difference it refers to. That means the key cannot be an array index or a
+ * render position: it has to be derivable from the difference alone, identically,
+ * in the reconciler, in the HTTP route that stores the acknowledgement, and in
+ * the component that draws the button.
+ *
+ * Three definitions of this string would be three chances to disagree, and the
+ * failure would be silent and permanent -- an acknowledgement filed against a key
+ * that no longer exists, which reads as "never acknowledged" forever.
+ *
+ * `kind` is first because it is the coarse identity: the same subject can
+ * disagree in more than one way over time, and collapsing those into one row
+ * would overwrite the earlier reason with the later one.
+ */
+export function differenceKey(difference: Pick<Difference, "kind" | "subject">): string {
+  return `${difference.kind}|${difference.subject}`;
+}
+
 export function reconcile(store: MemoryStore, tenant: string, live: LiveState): Reconciliation {
   const differences: Difference[] = [];
   const corruptions: Corruption[] = [];

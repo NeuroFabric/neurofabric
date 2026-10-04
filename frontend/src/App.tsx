@@ -8,9 +8,11 @@ import { LiveStreamView } from "./components/LiveStreamView";
 import { AGE_TICK_MS, LivenessStrip, livenessOf } from "./components/LivenessStrip";
 import { StartDemo, hasDemoTransport } from "./components/StartDemo";
 import { RefusalScreen } from "./components/RefusalScreen";
+import { ReconciliationPanel } from "./components/ReconciliationPanel";
 import { useLiveTelemetry, type LiveSource } from "./hooks/useLiveTelemetry";
 import { SchemaStore, type PortalSource, type StoreStatus } from "./store/SchemaStore";
 import type { AlertPayload } from "./api/live-contracts";
+import type { ReconciliationDiff } from "./api/memory-contracts";
 
 /**
  * THE COMMAND CENTER.
@@ -106,6 +108,35 @@ export interface AppProps {
   readonly onCredentialRequired?: ((token: string) => void) | undefined;
   /** Whether the internal view is shown. Undefined reads the browser sources. */
   readonly diagnostics?: boolean | undefined;
+  /**
+   * WHERE THE RECORD AND THE RUNNING SYSTEM DISAGREE.
+   *
+   * Three states, and the distinction between the last two is the whole point:
+   *
+   *  - **absent** -- no transport was ever asked. The panel renders NOTHING.
+   *  - **`null`** -- a transport exists and answered, and there is nothing to
+   *    compare: a process with no record open, or a record that agrees with
+   *    everything.
+   *  - **a diff** -- here is what disagrees.
+   *
+   * Absent and `null` render the same empty thing, which sounds like a collapsed
+   * distinction until you ask what happens when it collapses: a panel showing "no
+   * differences" because nobody asked is claiming agreement it never checked.
+   * The backend already refuses to mount the route without a record, so `null`
+   * here means "asked and told there is nothing", and the two cases arrive from
+   * different places rather than being told apart at the call site.
+   */
+  readonly reconciliation?: ReconciliationDiff | null;
+  /**
+   * Called with a difference's key when an operator says they have seen it.
+   *
+   * A callback and not a client, so `App` stays a tree of components with no
+   * transport of its own and a test can drive it. **There is no `resolve` prop,
+   * and adding one is the mistake this signature exists to prevent**: the system
+   * presents the disagreement and the operator decides what it means. What is
+   * recorded is that they looked, which is a smaller and defensible claim.
+   */
+  readonly onAcknowledge?: ((key: string) => void) | undefined;
 }
 
 /**
@@ -126,6 +157,8 @@ export function App({
   pollMs,
   onCredentialRequired,
   diagnostics,
+  reconciliation,
+  onAcknowledge,
 }: AppProps): ReactElement {
   // `getServerSnapshot` is the third argument and it is required: without it
   // React refuses to render this component on a server at all, and throws
@@ -309,6 +342,28 @@ export function App({
       </nav>
 
       <main className="app__main">
+        {/*
+          THE RECORD PANEL IS A SIBLING OF THE LIVE PANEL, NOT A CHILD OF IT.
+          THIS IS THE STRUCTURAL HALF OF ADR-005 §9 RULE 1.
+
+          Rule 1 says the two truths never appear in the same block, and it says
+          the distinction must be STRUCTURAL RATHER THAN A CAPTION -- because a
+          caption is a thing a reader can stop noticing, while a boundary is a
+          thing the layout enforces. So the record sits in its own `<section>`
+          above the dashboard, and the live telemetry stays in `<aside
+          className="app__side">`. Nothing here reads the live verdict and nothing
+          there reads the record; neither can drift into the other by accident,
+          because neither has a reference to it.
+
+          Rendered unconditionally when the prop is present, and the panel itself
+          decides what to draw. Passing `null` renders nothing -- see the prop
+          comment for why that is not the same as "no differences".
+        */}
+        <ReconciliationPanel
+          diff={reconciliation ?? null}
+          {...(onAcknowledge === undefined ? {} : { onAcknowledge })}
+          now={now}
+        />
         <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
         <aside className="app__side">
           <LiveStreamView
@@ -325,104 +380,24 @@ export function App({
     </div>
   );
 
-  /**
-   * THE REFUSAL SCREEN, TAKEN BEFORE THE DASHBOARD.
+  /*
+   * THE DUPLICATE BLOCK THIS REPLACES, AND WHY IT WAS HERE.
    *
-   * A refused credential is not a degraded dashboard. It is a question only a
-   * person can answer, and it is asked ONCE, in place of the screen whose data
-   * could never arrive. Returning early here is what makes the two states visibly
-   * distinct rather than merely differently bad: without it the operator gets a
-   * shell with refused-field panels and a live panel that can only ever say
-   * "unreachable", which is precisely the screenshot this replaces.
+   * This file ended with a SECOND verbatim copy of everything from the
+   * refusal screen to the closing `return` -- sitting after the first
+   * `return`, where nothing can reach it.
    *
-   * Both variants live in `RefusalScreen`, reachable without an effect, so what
-   * is asserted about them is what an operator would actually see.
+   * Nothing caught it. `tsc` does not report unreachable code as an error by
+   * default (`allowUnreachableCode` is `undefined`, which is a suggestion),
+   * the tests render the LIVE copy, and both copies pass every assertion
+   * anybody wrote. So the next person to change this component had a fair
+   * chance of editing the copy that does not run -- and the record panel
+   * added in this MR would have been the third thing wired into one of the
+   * two, silently.
+   *
+   * It is deleted rather than left, because this is the third instance of the
+   * same shape in this repository (after the CSS class collision in !97 and
+   * the `StoreStatus` union drift) and the fix that keeps working is the one
+   * that removes the second copy.
    */
-  if (live.credentialRequired) {
-    return (
-      <RefusalScreen
-        state={live.state}
-        {...(onCredentialRequired === undefined ? {} : { onCredentialRequired })}
-        onRetry={reload}
-      />
-    );
-  }
-
-  return (
-    <div className="app">
-      {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
-          *
-          "Visible without scrolling" is the requirement, and putting it here
-          * rather than in the side panel is what satisfies it. A fault you have
-          * to scroll to find is a fault an operator misses, and the state that
-          * must never be ambiguous is the one that costs the most to reach. */}
-      <LivenessStrip
-        liveness={livenessOf({
-          credentialRequired: live.credentialRequired,
-          lastUpdated: live.snapshot?.at ?? null,
-          now,
-          loading: live.loading,
-          records: live.snapshot?.verdict?.records ?? null,
-          // ADR-003: the RATE decides whether the feed is live. Without this the
-          // strip said "Live, just now" directly beside "0 events/sec" once a
-          // burst ended, and both readings were true.
-          rate: live.snapshot?.throughput?.eventsPerSecond ?? null,
-        })}
-        lastUpdated={live.snapshot?.at ?? null}
-        now={now}
-        credentialState={live.state}
-        fault={live.error}
-        records={live.snapshot?.verdict?.records ?? null}
-      />
-
-      <header className="app__bar">
-        {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
-            gutter, which is a description of a component rather than a product
-            -- and the word "Neurofebric" appeared nowhere on screen at all. The
-            class carries the centring so the change is one line of CSS rather
-            than a layout rewrite. */}
-        <div className="app__identity">
-          <h1 className="app__wordmark">Neurofebric</h1>
-        </div>
-        <div className="app__meta">
-          <p className="muted">
-            {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
-            {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
-          </p>
-          <div className="app__actions">
-            {/* The CLASS still carries the machine state, for styling and for the
-                test that asserts on it. Only the word a person reads changes. */}
-            <span className={`pill pill--${state.status}`} data-status={state.status}>
-              {statusWord(state.status)}
-            </span>
-            <button type="button" onClick={reload}>
-              Reload
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <nav className="app__select" aria-label="Agent selection">
-        <AgentSelector
-          agents={state.agents}
-          selectedAgentId={state.selectedAgentId}
-          loading={state.schemaLoading}
-          onSelect={select}
-        />
-      </nav>
-
-      <main className="app__main">
-        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
-        <aside className="app__side">
-          <LiveStreamView
-            verdict={live.snapshot?.verdict ?? null}
-            throughput={live.snapshot?.throughput ?? null}
-            error={live.error ?? undefined}
-            demo={demo}
-          />
-          <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
-        </aside>
-      </main>
-    </div>
-  );
 }

@@ -111,6 +111,36 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS audit_by_tenant ON audit (tenant, at);
     `,
   },
+  {
+    // MIGRATION 2 -- THE OPERATOR'S ACKNOWLEDGEMENT IS A FACT, SO IT IS STORED.
+    //
+    // It went in as its own migration rather than as a column on the first one
+    // because ADR-005 §8 rule 2 says a shipped migration is never edited: change
+    // number 1 now and every database that already ran it keeps the old shape
+    // while the code believes it has the new one. Adding is the only move that
+    // cannot quietly corrupt a record.
+    //
+    // `seen_count` exists because "acknowledged" alone is ambiguous after the
+    // second restart. A difference that comes BACK after an operator looked at it
+    // is a different situation from one they have just seen for the first time,
+    // and a single boolean cannot say which happened.
+    version: 2,
+    name: "acknowledgements",
+    sql: `
+      CREATE TABLE IF NOT EXISTS acknowledgements (
+        tenant      TEXT NOT NULL,
+        diff_key    TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        subject     TEXT NOT NULL,
+        at          INTEGER NOT NULL,
+        actor       TEXT NOT NULL,
+        seen_count  INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (tenant, diff_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS acknowledgements_by_tenant ON acknowledgements (tenant, at);
+    `,
+  },
 ];
 
 /** The schema version this build expects. Bumping it means adding a migration. */
@@ -304,6 +334,74 @@ export class MemoryStore {
         document: string;
       }[]
     ).map((row) => ({ at: row.at, actor: row.actor, action: row.action, document: safeParse(row.document) }));
+  }
+
+  /**
+   * THE OPERATOR LOOKED AT A DIFFERENCE. Durable, and counted.
+   *
+   * **This method records an observation. It does not change the difference.**
+   * There is no `resolveDifference`, and the absence is the design: a
+   * reconciliation that could mark itself finished would be a reconciliation
+   * choosing, and ADR-005 §7.3 gives the operator that decision. What this
+   * stores is the fact that a person looked, which is the thing the product
+   * actually promises to keep.
+   *
+   * The key is the identity the reconciler computed for that difference
+   * (`differenceKey`), so the same disagreement acknowledged across two restarts
+   * accumulates on one row instead of growing a row per boot.
+   */
+  acknowledgeDifference(input: {
+    readonly tenant: string;
+    readonly key: string;
+    readonly kind: string;
+    readonly subject: string;
+    readonly actor: string;
+    readonly at?: number;
+  }): void {
+    this.#assertOpen();
+    const at = input.at ?? Date.now();
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      this.#db
+        .prepare(
+          "INSERT INTO acknowledgements (tenant, diff_key, kind, subject, at, actor, seen_count) VALUES (?, ?, ?, ?, ?, ?, 1) " +
+            "ON CONFLICT (tenant, diff_key) DO UPDATE SET kind=excluded.kind, subject=excluded.subject, " +
+            "at=excluded.at, actor=excluded.actor, seen_count=acknowledgements.seen_count + 1",
+        )
+        .run(input.tenant, input.key, input.kind, input.subject, at, input.actor);
+      // The same fact, in the same transaction, in the append-only place. If the
+      // audit write fails the acknowledgement rolls back with it, because an
+      // acknowledgement that exists only in one table is a record of somebody
+      // looking at something that the audit trail never saw happen.
+      this.#db
+        .prepare("INSERT INTO audit (tenant, at, actor, action, document) VALUES (?, ?, ?, ?, ?)")
+        .run(input.tenant, at, input.actor, "acknowledge-difference", JSON.stringify({ key: input.key, kind: input.kind, subject: input.subject }));
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.#db.exec("ROLLBACK");
+      } catch {
+        // Already unwound.
+      }
+      throw error;
+    }
+  }
+
+  /** What the operator has already looked at, newest first. Never inferred. */
+  acknowledgementsFor(tenant: string): { key: string; kind: string; subject: string; at: number; actor: string; seenCount: number }[] {
+    this.#assertOpen();
+    return (
+      this.#db
+        .prepare("SELECT diff_key, kind, subject, at, actor, seen_count FROM acknowledgements WHERE tenant = ? ORDER BY at DESC")
+        .all(tenant) as { diff_key: string; kind: string; subject: string; at: number; actor: string; seen_count: number }[]
+    ).map((row) => ({
+      key: row.diff_key,
+      kind: row.kind,
+      subject: row.subject,
+      at: row.at,
+      actor: row.actor,
+      seenCount: row.seen_count,
+    }));
   }
 
   close(): void {

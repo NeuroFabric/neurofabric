@@ -1,14 +1,17 @@
 # ADR-005 — MEMORY: what persists, and how the system tells you when it disagrees with itself
 
-- **Status:** proposed — **published for ratification before any of it is built**
+- **Status:** **RATIFIED** — 2026-10-04, by the operator reading it before any of
+  it was built, and by !104 (1A/1B) and !105 (boot wiring and the diff) landing on
+  top of it
 - **Date:** 2026-10-04
-- **Ratified by:** *pending. The operator reads this before implementation begins.*
+- **Ratified by:** the operator. §7.3's five legal disagreements, §8's forward-only
+  migrations and §9's two-truths contract are all implemented and asserted.
 - **Relates to:** ADR-003 (**interim — resolved by §6 below**), ADR-004,
   `docs/PRODUCT-VISION.md`, D-017 (vault stays dark)
 
-> **Read-before-build gate.** No `node:sqlite` code, schema, or migration ships
-> until this document is ratified. Nothing here is implemented. Where a choice is
-> genuinely open it says so rather than picking quietly.
+> **Read-before-build gate: satisfied.** No `node:sqlite` code shipped before this
+> document was read and accepted. What is still open is named per section rather
+> than left to be discovered — §11's absences are unchanged.
 
 ---
 
@@ -323,9 +326,36 @@ audit trace that can be silently reattributed is not an audit trace.
 |---|---|
 | `node:sqlite` works with zero npm deps | **Verified above, on this machine.** A test asserts the kernel manifest has no `dependencies` field. |
 | The five legal disagreements are recognised | TDD: five cases in §7.3, and a sixth asserting corruption is NOT folded in. |
-| Two truths never share a block | A rendered-markup test, **perceived not stored**. |
-| No live figure is shown without an age | A census assertion. |
-| The stale vision phrase is gone | **Added in this MR** — §13. |
+| Two truths never share a block | A rendered-markup test, **perceived not stored** — `frontend/src/components/app-reconciliation.test.tsx` asserts the record section CLOSES BEFORE the live column opens. |
+| No live figure is shown without an age | A census assertion, plus a markup test that no bare ISO timestamp reaches the screen. |
+| The operator acknowledges; the system does not choose | The response carries `stillOpen: true`, the difference stays listed after acknowledgement, and a client test asserts there is no `resolve`/`dismiss`/`migrate` method to call. |
+| The acknowledgement is durable | Proven through the **file**, and proven again by a real restart in `.scratch/boot-proof.mts`. |
+| The stale vision phrase is gone | `frontend/src/vision-claims.test.ts`. |
+
+### 12.1 What §9's rule 3 looks like in ink
+
+Rule 3 required a decision this document could not make: **how** a recorded breach
+differs from a live one. It is `chip--recorded-breach` against the live strip's
+pulse — flat, dated, no animation — and the stylesheet says in a comment that
+nothing in the record panel may animate, because an animation on a recorded value
+is a claim that it is happening now.
+
+### 12.2 Two things this section did not anticipate
+
+**The diff is recomputed per read, not captured at boot.** §2 step 5 puts
+reconciliation at boot. It is not there, because the tenant is proven by a
+credential the boot process does not have — reconciling at boot would mean
+guessing which tenant to reconcile. The route therefore reconciles per
+authenticated request, and the response carries `at` with its age on screen. The
+consequence is that a difference can **retire itself** — difference 2 clears the
+moment data starts arriving — which is a fact ceasing to exist, not the system
+choosing anything.
+
+**An unknown difference kind is refused rather than ignored.** Every other
+validator in the frontend ignores fields it does not recognise, because the server
+owns the shape and may grow it. This one does not: an unrecognised kind is a
+disagreement the platform cannot explain, and rendering it as an unlabelled row
+is exactly the skimming §7.3 warns about. Refusing makes the gap loud.
 
 ## 13. The honest limit, closed in this MR
 

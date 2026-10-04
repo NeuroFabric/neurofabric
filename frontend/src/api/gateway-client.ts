@@ -11,6 +11,12 @@ import {
   type ShapeIssue,
 } from "./contracts";
 import { validateLiveSnapshot, type LiveSnapshot } from "./live-contracts";
+import {
+  validateAcknowledgeResult,
+  validateReconciliationDiff,
+  type AcknowledgeResult,
+  type ReconciliationDiff,
+} from "./memory-contracts";
 
 /**
  * THE GATEWAY CLIENT.
@@ -65,6 +71,12 @@ export const PORTAL_PATHS = {
   schema: "/api/portal/schema",
   live: "/api/portal/live",
   ingest: "/api/portal/ingest",
+} as const;
+
+/** The routes this client speaks to for the diff. Mirrors `memory-routes.ts`. */
+export const MEMORY_PATHS = {
+  diff: "/api/memory/diff",
+  ack: "/api/memory/ack",
 } as const;
 
 /** The server's own per-call ceiling, mirrored so a refusal is not a surprise. */
@@ -395,6 +407,50 @@ export class GatewayClient {
     const body = await this.#request("POST", PORTAL_PATHS.ingest, JSON.stringify({ provider, events }));
     const verdict = validateIngestAccepted(body);
     if (!verdict.ok) throw this.#malformed("the ingest result", verdict.issues);
+    return verdict.value;
+  }
+
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `GET /api/memory/diff` -- where the record and the running system disagree.
+   *
+   * Validated rather than cast, and with more force than any other route in this
+   * client. Every other read here failing to validate loses a panel; this one
+   * failing to validate would render an EMPTY DIFF, which reads as "the record
+   * agrees with everything" on the one screen whose entire purpose is to say
+   * when it does not. So the validator refuses an unrecognised difference kind
+   * instead of dropping it, and the panel treats a refusal as a refusal.
+   *
+   * **SAME CREDENTIAL, SAME TENANT.** No tenant is named here, because there is
+   * nowhere on this call for a caller to put one -- which is the only arrangement
+   * in which it cannot be the wrong tenant.
+   */
+  async fetchReconciliation(): Promise<ReconciliationDiff> {
+    const body = await this.#request("GET", MEMORY_PATHS.diff);
+    const verdict = validateReconciliationDiff(body);
+    if (!verdict.ok) throw this.#malformed("the reconciliation diff", verdict.issues);
+    return verdict.value;
+  }
+
+  /**
+   * `POST /api/memory/ack` -- record that a person LOOKED at a difference.
+   *
+   * The name is the design. There is no `resolve`, and a caller cannot ask for
+   * one, because the decision about what a disagreement means belongs to the
+   * operator and not to a button. What comes back carries `stillOpen`, so a
+   * caller that wanted a "resolved" flag has to notice that the server refused
+   * to send one.
+   *
+   * The key is the one the diff handed out, not one this client composes.
+   */
+  async acknowledgeDifference(key: string): Promise<AcknowledgeResult> {
+    if (typeof key !== "string" || key.trim() === "") {
+      throw new GatewayError("misconfigured", "which difference? a key is required");
+    }
+    const body = await this.#request("POST", MEMORY_PATHS.ack, JSON.stringify({ key }));
+    const verdict = validateAcknowledgeResult(body);
+    if (!verdict.ok) throw this.#malformed("the acknowledgement result", verdict.issues);
     return verdict.value;
   }
 
