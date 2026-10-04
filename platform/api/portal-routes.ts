@@ -686,27 +686,26 @@ export function createPortalRoutes(options: PortalRoutesOptions): PortalRouter {
       }
 
       /**
-       * THE EVALUATION LOOP, AND THIS IS THE ONLY PLACE IT RUNS.
+       * READING IS NOT DECIDING, AND THIS ROUTE ONLY READS.
        *
-       * It runs HERE, on the read path, and the consequence is stated rather than
-       * left to be discovered: **an alert is raised when something asks how the
-       * stream is doing.** A deployment where nobody polls raises no alerts, which
-       * is honest and wrong for a monitoring product at the same time -- and the
-       * fix is a scheduler this platform does not have, not a trick hidden in a
-       * request handler. It is named here so whoever adds one knows this line is
-       * already taken.
+       * This handler used to call `gateway.evaluate()` here, so the alert policy
+       * ran on the read path and an alert was raised when somebody asked how the
+       * stream was doing. A deployment nobody polled raised no alerts, which is
+       * honest and wrong for a monitoring product at the same time.
        *
-       * A timer in the server factory was rejected for a specific reason: it
-       * would be a handle outliving the object that owns it in every test that
-       * builds a server without `startWedgeServer`, and this repository has been
-       * hung by exactly that shape. A read path cannot leak, because it exists
-       * only while a request does.
+       * Evaluation is now owned by the deployment: `EvaluationScheduler` decides
+       * WHEN, and this route reports only what it can read. The ordering that
+       * survives the move is the one that mattered -- the decision and the
+       * numbers a dashboard draws now come from the scheduler's tick rather than
+       * from one call in the middle of a request -- and the guarantee that a
+       * breach which persists is still ONE incident still belongs to
+       * `OmniRouteGateway.announced`, not to whoever calls it.
        *
-       * It runs AFTER nothing, and before `verdict` is read, so the decision and
-       * the numbers a dashboard draws come from the same window.
+       * A read path also cannot leak, because it exists only while a request
+       * does. That property was the reason a timer here was rejected once; it is
+       * now owned by the scheduler, which arms only when asked and unrefs its
+       * interval so it can never be the reason a process stays up.
        */
-      gateway.evaluate?.(provider);
-
       const verdict = gateway.verdict(provider);
       // An explicit null, not an omitted field: a dashboard must be able to say
       // "connected but idle" rather than failing to parse the response.

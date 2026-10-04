@@ -30,6 +30,7 @@ const as = (token: string) => ({ [CREDENTIAL_HEADER]: token });
 const CONFIG = "/api/portal/config";
 const AGENTS = "/api/portal/agents";
 const SCHEMA = "/api/portal/schema";
+const LIVE = "/api/portal/live";
 
 function schema(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -364,4 +365,33 @@ test("AN EMPTY VAULT REFUSES EVERY PORTAL READ RATHER THAN SERVING A DEFAULT TEN
   });
 
   assert.equal((await routes.handle("GET", CONFIG, as("acme-value"))).status, 401);
+});
+
+test("THE READ ROUTE NEVER DECIDES ANYTHING, because a dashboard is not a monitor", async () => {
+  // The coupling this removes: `GET` on the live surface used to run the alert
+  // policy, so a deployment raised alerts only when somebody asked how a stream
+  // was doing. Reading and deciding are now separate, and the seam that proved
+  // it is the most direct one available -- a gateway that counts how many times
+  // it is asked to decide, polled until it would certainly be noticed.
+  let decisions = 0;
+  const routes = createPortalRoutes({
+    registry: new DynamicAgentRegistry(),
+    store: new InMemoryPortalStore(),
+    vault: staticVault([ACME], "portal-test"),
+    live: {
+      verdict: () => undefined,
+      push: () => {},
+      connected: () => true,
+      evaluate: () => {
+        decisions += 1;
+      },
+    },
+  });
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await routes.handle("GET", LIVE, as("acme-value"));
+    assert.equal(response.status, 200);
+  }
+
+  assert.equal(decisions, 0, "reading the live surface must never enter the write boundary");
 });
