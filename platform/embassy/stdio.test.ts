@@ -213,17 +213,51 @@ test("the embassy reaches NO ingestion or streaming module", async () => {
   // truths would acquire a third source and the statelessness argument collapses.
   //
   // A comment is not a control, so this is an assertion over the import graph.
+  //
+  // THE EXCEPTION IS `server.ts`, AND IT IS THE POINT.
+  //
+  // When the embassy had no credential tool, NOTHING here could reach the vault,
+  // because there was nothing to reach. ADR-009 §3.2 anticipated the change: the
+  // dispatcher receives a reader FACTORY, and the port is implemented outside this
+  // package, so the composition root is the one place that legitimately names it.
+  //
+  // So the boundary narrows rather than disappearing. `tools.ts`, `jsonrpc.ts`,
+  // `elicitation.ts` and `core.ts` still may not reach the vault, which is what
+  // keeps a protocol-layer module from ever holding a credential -- and that is the
+  // property worth keeping, because those are the files an agent's arguments reach
+  // first.
   const here = fileURLToPath(new URL(".", import.meta.url));
   const forbidden = ["ingestion", "conductor", "live-anomaly", "omniroute-gateway", "store.ts"];
+  const COMPOSITION_ROOT = "server.ts";
   const offenders: string[] = [];
   for (const file of readdirSync(here)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
     const code = readFileSync(new URL(file, import.meta.url), "utf8");
     for (const needle of forbidden) {
+      // `store.ts` is the one the composition root is entitled to name; everything
+      // else stays forbidden for everyone.
+      if (needle === "store.ts" && file === COMPOSITION_ROOT) continue;
       if (code.includes(`/${needle}`) || code.includes(`/${needle}.ts`)) offenders.push(`${file} -> ${needle}`);
     }
   }
   assert.deepEqual(offenders, []);
+});
+
+test("THE PROTOCOL LAYER CANNOT REACH THE VAULT, which is narrower than nobody and stronger than everything", () => {
+  // Stated separately from the scan above, because "the composition root may" is
+  // only meaningful if the other half is pinned: the modules that parse an agent's
+  // arguments and the frames around them must never hold a credential.
+  //
+  // If this ever fails, the credential has moved somewhere it can be reached without
+  // an approval -- which is the one property the whole port arrangement exists to
+  // make structural.
+  const PROTOCOL_LAYER = ["tools.ts", "jsonrpc.ts", "elicitation.ts", "core.ts"];
+  const offenders: string[] = [];
+  for (const file of PROTOCOL_LAYER) {
+    const code = readFileSync(new URL(file, import.meta.url), "utf8");
+    if (/\.\.\/vault\//.test(code)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, [], "a protocol-layer module must not import the vault");
 });
 
 test("config rejects a missing origin even when a token is present", () => {

@@ -41,7 +41,10 @@ import {
   type RpcId,
 } from "./jsonrpc.ts";
 import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs, type HandlerContext } from "./tools.ts";
-import { approvalRefusal, type ApprovalGate } from "./elicitation.ts";
+import { approvalRefusal, createApprovalGate, type ApprovalGate } from "./elicitation.ts";
+import { createApprovedCredentialReader } from "../vault/reader.ts";
+import { createTenantSecretStore } from "../vault/store.ts";
+import { createFileSecretSource } from "../vault/file-source.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -637,5 +640,78 @@ export async function main(env: Readonly<Record<string, string | undefined>> = p
     process.exitCode = 2;
     return;
   }
-  await serve(process.stdin, process.stdout, config);
+
+  /**
+   * THE PRECHECK AND THE READER, BUILT HERE AND ONLY HERE.
+   *
+   * This is the composition root, so this is the one place in the embassy that knows
+   * both halves exist. Everything below receives a port: the dispatcher receives a
+   * gate and a reader FACTORY, and neither it nor anything it imports can name the
+   * vault's modules -- a boundary the import-graph test enforces rather than a
+   * convention.
+   *
+   * All of it is optional, and that is the safe default. With none of it configured
+   * the three core tools work exactly as before and the credential tool refuses
+   * itself, so an operator who has not finished the setup gets a closed door rather
+   * than a half-open one.
+   */
+  const precheck = buildPrecheck(env);
+  await serve(process.stdin, process.stdout, config, undefined, precheck);
+}
+
+/**
+ * BUILD THE APPROVAL PATH FROM THE ENVIRONMENT, OR RETURN NONE.
+ *
+ * Four variables, all optional together: a half-configured vault is refused rather
+ * than half-armed, because a gate with no reader would ask an operator to approve
+ * reads that can only ever be refused -- which trains people to approve without
+ * reading.
+ *
+ * ADR-010 section 5 listed "where does the signing key come from" as open. This is
+ * an answer, and it is deliberately the weakest one that works: a hex key in the
+ * environment. It is kept beside the credential it authorises and inherits the
+ * environment's protections -- which for most deployments is to say it inherits
+ * very little. Rotation, and a source that is not a file, remain open and are named
+ * as such in ADR-010 rather than left to be discovered during an incident.
+ */
+function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
+  gate: ApprovalGate;
+  credentialReader: () => ApprovedCredentialReader;
+} | undefined {
+  const capability = env["NEUROFEBRIC_CAPABILITY"];
+  const keyHex = env["NEUROFEBRIC_VAULT_KEY"];
+  const vaultFile = env["NEUROFEBRIC_VAULT_FILE"];
+  if (capability === undefined || keyHex === undefined || vaultFile === undefined) return undefined;
+
+  let verificationKey: Buffer;
+  try {
+    verificationKey = Buffer.from(keyHex, "hex");
+  } catch {
+    process.stderr.write("neurofebric-embassy: NEUROFEBRIC_VAULT_KEY is not valid hex\n");
+    process.exitCode = 2;
+    throw new Error("the vault key is not valid hex");
+  }
+
+  const store = createTenantSecretStore({
+    source: createFileSecretSource(vaultFile),
+    // The store's own trail goes to stderr. stdout is the protocol channel and a
+    // credential event on it would be parsed by the host as a frame.
+    audit: (event) => process.stderr.write(`neurofebric-embassy: vault ${event.outcome} ${event.tenant} ${event.name}\n`),
+  });
+
+  const gate = createApprovalGate({
+    // No trail sink is passed, so the gate treats the audit as optional -- which
+    // means an approval here is NOT durably recorded. That is a real gap and it is
+    // called out rather than papered over: this adapter is for deployments that have
+    // not yet wired the durable log ADR-009 describes. See ADR-010 section 5.
+    audit: (event) =>
+      process.stderr.write(
+        `neurofebric-embassy: approval ${event.outcome} ${event.tenant} ${event.credentialName}` +
+          `${event.approvedBy === undefined ? "" : ` by ${event.approvedBy}`}\n`,
+      ),
+  });
+
+  const reader = createApprovedCredentialReader({ store, capability, verificationKey });
+
+  return { gate, credentialReader: () => reader };
 }
