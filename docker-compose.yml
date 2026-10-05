@@ -197,6 +197,14 @@ services:
 
     volumes:
       - wedge-data:/app/workspace:ro
+      # THE EMBASSY'S APPROVAL LEDGER. Read-only for the same reason as the volume
+      # above: the process that backs this up must not be able to alter it.
+      #
+      # THIS IS THE CROWN JEWEL. Every row here is a record of which person approved
+      # which credential read, at what exposure, and when. It is the document an
+      # auditor asks for, and until it was mounted here it existed on exactly one
+      # disk -- which is not a backup, it is a hope.
+      - embassy-audit:/app/embassy-audit:ro
       - litestream-data:/var/lib/litestream
       # Mounted rather than baked, so changing a replica or retention does not
       # require rebuilding an image.
@@ -247,3 +255,19 @@ volumes:
   # backs up can be damaged by the same event it exists to survive.
   litestream-data:
     name: neurofebric-litestream-data
+
+  # THE EMBASSY'S APPROVAL LEDGER.
+  #
+  # Declared here so the sidecar has something to mount and replicate. NOTE THIS
+  # HONESTLY: the embassy is NOT a service in this compose file, so nothing here
+  # writes to it yet. Until the embassy is deployed with
+  # `NEUROFEBRIC_AUDIT_DIR=/app/embassy-audit` on this volume, the sidecar finds
+  # no database at this path and replicates nothing for it -- silently, because
+  # Litestream treats "no database matched" as a normal state.
+  #
+  # A backup that quietly backs up nothing is worse than no backup, because it is
+  # counted. So this is stated in three places rather than implied: here, in
+  # `litestream.sidecar.yml`, and in ADR-011. Deploying the embassy on this volume
+  # is a separate piece of work and is not this commit.
+  embassy-audit:
+    name: neurofebric-embassy-audit

@@ -1,25 +1,29 @@
 # LITESTREAM, SCOPED TO THE WEDGE DATABASE.
 #
-# === WHY THIS FILE EXISTS INSTEAD OF JUST USING litestream.yml ===
+# === WHAT THIS FILE COVERS NOW, AND WHAT IT STILL DOES NOT ===
 #
-# `litestream.yml` lists BOTH databases, and the second one is the embassy's
-# approval ledger at `$NEUROFEBRIC_AUDIT_DIR`. The wedge container has no such
-# directory and runs no embassy, so pointing the sidecar at the full config gives
-# Litestream a database path that does not exist in that container.
+# BOTH databases. The wedge's memory record AND the embassy's approval ledger --
+# every row recording which person approved which credential read, at what
+# exposure, and when. That ledger is the document an auditor asks for, and for most
+# of this project's life it existed on exactly one disk, which is a hope rather than
+# a backup.
 #
-# A replication agent that cannot open every database it was told about is a
-# replication agent that may refuse to start, and a sidecar in a crash loop protects
-# nothing while looking like it does. This file states only what this container can
-# actually see.
+# === AND THE HONEST CAVEAT, WHICH IS NOT OPTIONAL ===
 #
-# The consequence is stated rather than papered over: **the approval ledger is NOT
-# replicated by this sidecar.** It lives with the embassy, in a different container
-# on a different volume. A deployment that runs the approval path must replicate it
-# from there, or it has no copy of who approved which credential read.
+# The embassy is NOT a service in docker-compose.yml. Nothing in this deployment
+# writes to `/app/embassy-audit` yet. Until the embassy is deployed with
+# `NEUROFEBRIC_AUDIT_DIR=/app/embassy-audit` on the `neurofebric-embassy-audit`
+# volume, the glob below matches no file and this sidecar replicates NOTHING for the
+# ledger -- silently, because Litestream treats "no database matched" as normal.
 #
-# Config is split, not duplicated: the credentials, endpoint, retention and
-# back-pressure settings are identical to `litestream.yml` and must be changed in
-# both.
+# A backup that quietly backs up nothing is worse than no backup, because it appears
+# in the status output. Before you rely on this, verify the replica actually has
+# the ledger:
+#
+#   litestream snapshots -config /etc/litestream.yml
+#
+# Config is split, not duplicated: credentials, endpoint, retention and sync
+# interval are identical to `litestream.yml` and must be changed in both.
 
 access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
 secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
@@ -36,8 +40,16 @@ replicas:
 
 dbs:
   # The wedge's durable record. start-ui.mjs resolves the workspace to
-  # `$WEDGE_WORKSPACE` and puts the database at `<workspace>/workspace/memory`.
-  # Globbed so a deployment that mounts the volume somewhere else still matches one
-  # database rather than failing to start on a path that moved.
+  # $WEDGE_WORKSPACE and puts the database at `<workspace>/workspace/memory`.
   - path: /app/workspace/workspace/memory/*.sqlite
+    replica: primary
+
+  # THE APPROVAL LEDGER. Read by this sidecar from a read-only mount; written by the
+  # embassy, which is not in this compose file -- see the caveat at the top.
+  #
+  # Globbed for the same reason as the database above, and for one more: a
+  # non-existent path here would mean asking the agent to replicate a database it
+  # cannot open, which is how a replication agent ends up refusing to start at all.
+  # A glob that matches nothing is inert; a path that does not exist may not be.
+  - path: /app/embassy-audit/*.sqlite
     replica: primary
