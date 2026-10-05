@@ -51,6 +51,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 
+import { frame } from "../memory/alert-hub.ts";
 import type { ApprovalSubject } from "./elicitation.ts";
 
 /**
@@ -77,7 +78,7 @@ const DEFAULT_RESULT_TTL_MS = 60_000;
 export const VERDICT_CHANNEL = "/alert";
 export const VERDICT_EVENT = "elicitation.verdict";
 
-export type TaskStatus = "pending" | "approved" | "refused" | "expired";
+export type TaskStatus = "pending" | "approved" | "refused" | "expired" | "consumed";
 
 /** What the caller is told it has to do next. Never a value, never a bearer. */
 export interface ElicitationRequiredData {
@@ -107,6 +108,16 @@ export interface VerdictBroadcast {
   readonly taskToken: string;
   readonly status: Extract<TaskStatus, "approved" | "refused">;
   readonly subject: {
+    /**
+     * THE TENANT, AND IT IS NOT OPTIONAL.
+     *
+     * `AlertHub.publish` filters by the tenant captured at connect time, so a
+     * broadcast with no tenant has nowhere correct to go. It would have to be sent
+     * to every subscriber of every tenant, which means one tenant's operator could
+     * be shown another tenant's credential reference. The scoping is the hub's, and
+     * it can only work if the verdict carries the tenant to scope BY.
+     */
+    readonly tenant: string;
     readonly tool: string;
     readonly credentialName: string;
     readonly exposure: ApprovalSubject["exposure"];
@@ -181,6 +192,21 @@ export interface AsyncApprovalGate {
    */
   subject(token: string): ApprovalSubject | undefined;
   /**
+   * WHY A TOKEN CANNOT BE COLLECTED.
+   *
+   * The polling case needs this. A client whose SSE connection dropped has a token
+   * and no verdict, and "still waiting", "already collected", "the human said no"
+   * and "it timed out" call for four different responses — keep polling, stop, stop,
+   * and start over respectively. Returning "invalid" for all four would make a
+   * client retry a decision that has already been made, which is how one human
+   * decision turns into three approval prompts.
+   *
+   * Terminal records hold the STATUS AND NOTHING ELSE. In particular the collected
+   * result is not retained here, so this map can never become a second copy of every
+   * approved credential the gateway has issued.
+   */
+  status(token: string): TaskStatus | undefined;
+  /**
    * RECORD THE VERDICT AND BROADCAST IT.
    *
    * `result` is supplied only on a grant, and only because the read has to happen at
@@ -207,11 +233,19 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
 
   /** Keyed by the token's SHA-256. A dump of this map is not a list of live tokens. */
   const tasks = new Map<string, Task>();
+  /**
+   * TERMINAL OUTCOMES, and why they are kept.
+   *
+   * So a polling client can be told what became of its token. Holds a status and a
+   * timestamp and nothing else — never the result — so this is not a second store of
+   * approved credentials.
+   */
+  const terminal = new Map<string, { readonly status: TaskStatus; readonly decidedAt: number }>();
   let requested = 0;
   let approved = 0;
   let refused = 0;
   let expired = 0;
-  let uncollected = 0;
+
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const write = (event: PendingAuditEvent): void => {
@@ -237,12 +271,21 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
           reason: task.reason,
         });
         tasks.delete(key);
+        terminal.set(key, { status: "expired", decidedAt: at });
         continue;
       }
       if (task.result !== undefined && task.resultExpiresAt !== undefined && at >= task.resultExpiresAt) {
-        // The result outlived its window. Dropping it is the whole point of a TTL.
+        // The result outlived its window. Dropping it is the whole point of a TTL,
+        // and the terminal record says `consumed` rather than `approved`, because
+        // what the caller needs to know is that there is nothing left to fetch.
+        terminal.set(key, { status: "consumed", decidedAt: at });
         tasks.delete(key);
       }
+    }
+    // Terminal records are swept on the same clock. An unbounded map of "things that
+    // once happened" is a slow leak with a long tail.
+    for (const [key, record] of [...terminal.entries()]) {
+      if (at - record.decidedAt >= taskTtlMs) terminal.delete(key);
     }
   };
 
@@ -351,7 +394,9 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
         task.resultExpiresAt = at + resultTtlMs;
       } else {
         // A refusal has nothing to hand back, so the row goes immediately rather
-        // than sitting in the map holding a decision nobody needs.
+        // than sitting in the map holding a decision nobody needs. The TERMINAL
+        // record is what lets a polling client learn that this happened.
+        terminal.set(key, { status: "refused", decidedAt: at });
         tasks.delete(key);
       }
 
@@ -359,6 +404,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
         taskToken: task.token,
         status: task.status,
         subject: {
+          tenant: task.subject.tenant,
           tool: task.subject.tool,
           credentialName: task.subject.credentialName,
           exposure: task.subject.exposure,
@@ -388,6 +434,13 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
       return verdict;
     },
 
+    status(token: string): TaskStatus | undefined {
+      const key = digestOf(token).toString("hex");
+      const task = tasks.get(key);
+      if (task !== undefined) return task.status;
+      return terminal.get(key)?.status;
+    },
+
     collect(token: string): VerdictBroadcast | undefined {
       const key = digestOf(token).toString("hex");
       const task = tasks.get(key);
@@ -395,6 +448,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
 
       const at = now();
       if (task.resultExpiresAt !== undefined && at >= task.resultExpiresAt) {
+        terminal.set(key, { status: "consumed", decidedAt: at });
         tasks.delete(key);
         return undefined;
       }
@@ -404,13 +458,14 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
       // A result that is removed before it is checked cannot be replayed by a client
       // that retries, and a "found but expired" must not leave the row behind for a
       // second attempt.
+      terminal.set(key, { status: "consumed", decidedAt: at });
       tasks.delete(key);
-      if (task.resultExpiresAt !== undefined && at >= task.resultExpiresAt) uncollected += 1;
 
       return {
         taskToken: task.token,
         status: "approved",
         subject: {
+          tenant: task.subject.tenant,
           tool: task.subject.tool,
           credentialName: task.subject.credentialName,
           exposure: task.subject.exposure,
@@ -432,7 +487,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
         if (task.status === "pending") pending += 1;
         else if (task.result !== undefined) awaitingCollection += 1;
       }
-      return { requested, approved, refused, expired, pending, uncollected: uncollected + awaitingCollection };
+      return { requested, approved, refused, expired, pending, uncollected: awaitingCollection };
     },
 
     dispose(): void {
@@ -440,6 +495,66 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
       // Anything still stashed goes, on the principle that a credential outliving
       // the object that was approved to release it is the failure mode.
       tasks.clear();
+      terminal.clear();
     },
   };
+}
+
+/**
+ * THE SSE BRIDGE.
+ *
+ * === WHY IT LIVES HERE AND NOT INSIDE THE GATE ===
+ *
+ * The gate's job is the decision and the row. It knows nothing about SSE, and it
+ * should: a gate that also formatted a wire protocol would be harder to test and
+ * would break whenever the framing changed. What the two DO share is the event
+ * name, so the constant a client subscribes to and the constant the server
+ * publishes under cannot drift apart into a silent no-op.
+ *
+ * === WHY IT REUSES THE HUB'S OWN FRAMER ===
+ *
+ * The SSE format has three separate escaping rules and getting one wrong produces a
+ * frame the client parses as TWO events. `alert-hub.ts` gets that right and is
+ * tested for it, so this delegates rather than reassembling it: a second
+ * implementation is a second set of bugs with none of the coverage.
+ *
+ * === AND WHY THE TENANT TRAVELS IN THE VERDICT ===
+ *
+ * `publish` filters by the tenant captured at connect time. A verdict with no tenant
+ * has no correct destination, and broadcasting it to everyone would show one
+ * tenant's operator another tenant's credential reference. The scoping is the hub's
+ * job, and it can only work if the verdict names the tenant to scope by.
+ */
+export interface VerdictHub {
+  publish(tenant: string, frame: string): { readonly told: number; readonly dropped: number };
+}
+
+/** Wire a gate's verdicts to a tenant-filtered SSE hub. */
+export function createVerdictBroadcaster(
+  hub: VerdictHub,
+  options: { readonly onDropped?: (tenant: string, dropped: number) => void } = {},
+): (verdict: VerdictBroadcast) => void {
+  return (verdict: VerdictBroadcast): void => {
+    const delivered = hub.publish(verdict.subject.tenant, verdictFrame(verdict));
+    // A dropped consumer is COUNTED, not swallowed. This is precisely the failure
+    // the hub's own header describes: a publish that silently lost a consumer
+    // reports "1" and lets the caller believe the verdict reached somebody.
+    if (delivered.dropped > 0) options.onDropped?.(verdict.subject.tenant, delivered.dropped);
+  };
+}
+
+/** The verdict as one SSE event. */
+export function verdictFrame(verdict: VerdictBroadcast): string {
+  return frame(verdict.taskToken, VERDICT_EVENT, {
+    taskToken: verdict.taskToken,
+    status: verdict.status,
+    decidedAt: verdict.decidedAt,
+    ...(verdict.approvedBy === undefined ? {} : { approvedBy: verdict.approvedBy }),
+    subject: verdict.subject,
+    // Present only on a grant. A refusal frame carries no field a client could read
+    // as a credential.
+    ...(verdict.result === undefined ? {} : { result: verdict.result }),
+    ...(verdict.exists === undefined ? {} : { exists: verdict.exists }),
+    ...(verdict.rotatedAt === undefined ? {} : { rotatedAt: verdict.rotatedAt }),
+  });
 }

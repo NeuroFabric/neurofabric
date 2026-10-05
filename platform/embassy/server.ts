@@ -50,6 +50,8 @@ import {
   VERDICT_EVENT,
   type AsyncApprovalGate,
   type VerdictBroadcast,
+  type VerdictHub,
+  createVerdictBroadcaster,
 } from "./async-approval.ts";
 import { createApprovedCredentialReader } from "../vault/reader.ts";
 import { evaluateStandingInstruction, type StandingInstruction } from "../vault/osi.ts";
@@ -57,6 +59,7 @@ import { createTenantSecretStore } from "../vault/store.ts";
 import { MemoryStore } from "../memory/store.ts";
 import { createFileSecretSource } from "../vault/file-source.ts";
 import { createDurableApprovalSink, createDurableExposureSink, createDurableReadSink } from "../vault/audit-sink.ts";
+import { AlertHub } from "../memory/alert-hub.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -607,6 +610,86 @@ async function performCredentialRead(
  * refuses to tell, and it is why the task stays pending here: the sweep will expire
  * it and record that, which is honest.
  */
+/**
+ * COLLECT AN APPROVED RESULT, OR REPORT WHY IT CANNOT BE COLLECTED.
+ *
+ * The four outcomes are deliberately distinguishable, and that is the one place in
+ * this gateway where they are. A caller polling after a dropped connection needs to
+ * tell "still waiting" from "already collected" from "never existed", because the
+ * three call for different behaviour: keep polling, stop polling, or start over.
+ * None of them is a fact about anybody's authority, so there is no oracle here —
+ * see `elicitation.ts` for why the vault answers every refusal identically.
+ *
+ * A PENDING task is answered successfully, not refused. It is not an error; the
+ * request was accepted and the human has not answered yet, and a client that treats
+ * a non-2xx as "give up" would abandon a decision already in front of a person.
+ */
+async function handleAsyncResult(
+  id: RpcId,
+  args: Readonly<Record<string, unknown>>,
+  session: SessionState,
+  deps: DispatcherDeps,
+): Promise<string> {
+  const gate = deps.asyncApproval;
+  if (gate === undefined) {
+    return serialise(failure(id, RPC.METHOD_NOT_FOUND, "this gateway has no asynchronous approval path"));
+  }
+
+  const taskToken = args["taskToken"];
+  if (typeof taskToken !== "string" || taskToken.length === 0) {
+    return serialise(failure(id, RPC.INVALID_PARAMS, "a result request needs the task token"));
+  }
+
+  /**
+   * THE SESSION'S TENANT IS CHECKED AGAINST THE TASK'S TENANT.
+   *
+   * The token is a bearer, and a bearer that crossed tenants would let one session
+   * collect another tenant's approved credential. The token is unguessable, which
+   * makes that unlikely — "unlikely" is not a control, and this check costs one
+   * comparison.
+   */
+  const subject = gate.subject(taskToken);
+  if (subject !== undefined && subject.tenant !== session.tenant) {
+    return serialise(failure(id, RPC.TENANT_REFUSED, "this session has not been initialised"));
+  }
+
+  const collected = gate.collect(taskToken);
+  if (collected !== undefined) {
+    return serialise(
+      success(id, {
+        taskToken,
+        status: "approved",
+        decidedAt: collected.decidedAt,
+        ...(collected.approvedBy === undefined ? {} : { approvedBy: collected.approvedBy }),
+        ...(collected.exists === undefined ? {} : { exists: collected.exists }),
+        ...(collected.rotatedAt === undefined ? {} : { rotatedAt: collected.rotatedAt }),
+        // The single-use result. The second call to this method gets `consumed`.
+        result: collected.result,
+      }),
+    );
+  }
+
+  // Not collectable. Distinguish the three reasons a caller must act on differently.
+  if (subject !== undefined) return serialise(success(id, { taskToken, status: "pending" }));
+
+  const verdict = gate.status(taskToken);
+  if (verdict === "refused") return serialise(success(id, { taskToken, status: "refused" }));
+  if (verdict === "approved") {
+    // Approved and still holding its result. Only reachable if a client raced the
+    // broadcast, so it answers `pending` on the collection rather than handing back
+    // a second copy.
+    return serialise(success(id, { taskToken, status: "approved", collected: false }));
+  }
+  if (verdict === "consumed") {
+    // Approved AND ALREADY COLLECTED. The normal case for a client that retried after
+    // a dropped connection, and it must be distinguishable from "never existed" --
+    // otherwise an agent concludes its approval vanished and asks a person again.
+    return serialise(success(id, { taskToken, status: "consumed" }));
+  }
+  if (verdict === "expired") return serialise(success(id, { taskToken, status: "expired" }));
+  return serialise(failure(id, RPC.INVALID_PARAMS, "that task token is not one this gateway issued"));
+}
+
 async function handleAsyncVerdict(
   id: RpcId,
   args: Readonly<Record<string, unknown>>,
@@ -750,6 +833,23 @@ async function handleRequest(
     return serialise(success(id, { tools: TOOLS }));
   }
 
+  if (method === "elicitation/result") {
+    /**
+     * RECOVER A STATE THAT A DROPPED CONNECTION LOST.
+     *
+     * The SSE stream is not durable, and in a jittery network it will drop. An agent
+     * that was mid-approval when the socket died has a task token and no way to
+     * learn what became of it — so it polls here.
+     *
+     * This is the method that makes the async design survivable, and it is also the
+     * only reason the approved result is still worth holding after the broadcast.
+     */
+    if (!session.established) {
+      return serialise(failure(id, RPC.TENANT_REFUSED, "this session has not been initialised"));
+    }
+    return handleAsyncResult(id, args, session, deps);
+  }
+
   if (method === "elicitation/verdict") {
     /**
      * WHERE A PORTAL VERDICT ENTERS.
@@ -852,7 +952,21 @@ export async function serve(
    * because a process that cannot ask an operator must not be one step away from
    * being able to.
    */
-  precheck?: { gate?: ApprovalGate | undefined; credentialReader?: (() => ApprovedCredentialReader) | undefined },
+  precheck?: {
+    gate?: ApprovalGate | undefined;
+    credentialReader?: (() => ApprovedCredentialReader) | undefined;
+    /** Absent means the synchronous gate is the only path, which stays the default. */
+    asyncApproval?: AsyncApprovalGate | undefined;
+  },
+  /**
+   * THE SSE HUB verdicts are broadcast on.
+   *
+   * Optional, and its absence is meaningful rather than a gap: with no hub the async
+   * gate still works end to end over `elicitation/result`, and only the push is lost.
+   * That is the right degradation — an agent recovers its state by polling a token
+   * it already holds, so a dropped stream costs latency and nothing else.
+   */
+  hub?: VerdictHub | undefined,
 ): Promise<void> {
   /**
    * A BROKEN PIPE MUST NOT BECOME AN UNCAUGHT EXCEPTION.
@@ -885,6 +999,7 @@ export async function serve(
     fetchImpl,
     gate: precheck?.gate,
     credentialReader: precheck?.credentialReader,
+    asyncApproval: precheck?.asyncApproval,
   };
   const session: SessionState = {
     credential: config.credential,
@@ -971,6 +1086,24 @@ export async function serve(
   }
 }
 
+/**
+ * THE HUB, WHEN ASYNC HITL IS ON.
+ *
+ * Created here rather than inside `buildPrecheck` so the wiring is in one readable
+ * place at the entry point, and so an operator embedding this gateway can pass their
+ * OWN hub — which is the actual production case, because the operator portal's SSE
+ * route and the embassy are two halves of one process that has to share a subscriber
+ * set. A hub constructed privately inside the precheck would broadcast to nobody.
+ */
+function asyncHitlHub(env: Readonly<Record<string, string | undefined>>): VerdictHub | undefined {
+  if (env["NEUROFEBRIC_ASYNC_HITL"] !== "1") return undefined;
+  return new AlertHub({
+    onSlowConsumer: (tenant) => {
+      process.stderr.write(`neurofebric-embassy: an SSE consumer for tenant ${tenant} fell behind and was disconnected\n`);
+    },
+  });
+}
+
 /** The process entry point. Used by the launcher, not by the tests. */
 export async function main(env: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
   const config = readConfig(env);
@@ -998,7 +1131,7 @@ export async function main(env: Readonly<Record<string, string | undefined>> = p
    * itself, so an operator who has not finished the setup gets a closed door rather
    * than a half-open one.
    */
-  const precheck = buildPrecheck(env);
+  const precheck = buildPrecheck(env, asyncHitlHub(env));
   await serve(process.stdin, process.stdout, config, undefined, precheck);
 }
 
@@ -1023,9 +1156,10 @@ export async function main(env: Readonly<Record<string, string | undefined>> = p
  * decisions are not being kept, so the whole approval path refuses instead of
  * degrading to a log line.
  */
-function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
+function buildPrecheck(env: Readonly<Record<string, string | undefined>>, hub?: VerdictHub): {
   gate: ApprovalGate;
   credentialReader: () => ApprovedCredentialReader;
+  asyncApproval?: AsyncApprovalGate | undefined;
 } | undefined {
   const capability = env["NEUROFEBRIC_CAPABILITY"];
   const keyHex = env["NEUROFEBRIC_VAULT_KEY"];
@@ -1137,5 +1271,84 @@ function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
     audit: createDurableExposureSink(ledger, { directory: auditDir }),
   });
 
-  return { gate, credentialReader: () => reader };
+  return { gate, credentialReader: () => reader, asyncApproval: buildAsyncApproval(env, ledger, hub) };
+}
+
+/**
+ * THE ASYNCHRONOUS APPROVAL GATE, OR NOTHING.
+ *
+ * Opt-in through `NEUROFEBRIC_ASYNC_HITL`, because turning this on changes how every
+ * restricted call is answered, and that is not a thing an operator should discover
+ * from a deployment log. Off, `asyncApproval` is `undefined` and the synchronous
+ * gate is the only path — which is the behaviour this repository has always had and
+ * which every existing test still exercises.
+ *
+ * The SSE broadcast is attached HERE, at the composition root, rather than inside
+ * the gate: the gate's job is the decision and the row, and a gate that also knew
+ * about a wire protocol would be harder to test and would break whenever the
+ * framing changed.
+ */
+function buildAsyncApproval(
+  env: Readonly<Record<string, string | undefined>>,
+  ledger: MemoryStore,
+  hub?: VerdictHub,
+): AsyncApprovalGate | undefined {
+  if (env["NEUROFEBRIC_ASYNC_HITL"] !== "1") return undefined;
+  if (hub === undefined) {
+    // stderr, because stdout is the protocol channel.
+    process.stderr.write(
+      "neurofebric-embassy: NEUROFEBRIC_ASYNC_HITL=1 but no SSE hub was supplied; verdicts will be retrievable by token only\n",
+    );
+  }
+
+  return createAsyncApprovalGate({
+    audit: (event) => {
+      /**
+       * THE SAME FAIL-CLOSED LEDGER, AND THE SAME THROW.
+       *
+       * `begin` writes APPROVAL_PENDING before the caller is told anything, so a
+       * ledger that cannot take the row refuses the request rather than producing an
+       * approval request that nothing will ever record.
+       */
+      try {
+        ledger.appendAudit(
+          event.subject.tenant,
+          event.approvedBy ?? "nobody",
+          `vault.approval.async.${event.outcome}`,
+          {
+            taskToken: event.taskToken,
+            capability: event.subject.capability,
+            tenant: event.subject.tenant,
+            credentialName: event.subject.credentialName,
+            tool: event.subject.tool,
+            exposure: event.subject.exposure,
+            decision: event.outcome,
+            reason: event.reason,
+            decidedAt: event.decidedAt,
+            ledger: env["NEUROFEBRIC_AUDIT_DIR"] ?? "",
+          },
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `neurofebric-embassy: the approval ledger did not accept an async decision; the request is being REFUSED: ${reason}\n`,
+        );
+        throw error;
+      }
+    },
+    ...(hub === undefined
+      ? {}
+      : {
+          broadcast: createVerdictBroadcaster(hub, {
+            // A consumer dropped for falling behind is a fact about the transport, and
+            // an agent whose verdict never arrived will poll `elicitation/result`.
+            // Saying so on stderr is what turns a silent delay into a visible one.
+            onDropped: (tenant, dropped) => {
+              process.stderr.write(
+                `neurofebric-embassy: ${dropped} verdict subscriber(s) for tenant ${tenant} were dropped for falling behind; agents will recover by token\n`,
+              );
+            },
+          }),
+        }),
+  });
 }
