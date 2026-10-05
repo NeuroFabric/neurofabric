@@ -314,3 +314,9 @@ Nothing here makes it survive a host loss, and the fail-closed guarantee means t
 it becomes unwritable mid-incident, credential reads stop rather than silently
 continuing — which is correct, and also an operational dependency someone has to own.
 Retention and backup policy remain unaddressed.
+
+### A6. Durable Read Trails and Containment
+The ephemeral `stderr` audit log for credential reads has been replaced. Read events (`vault.read.success`, `vault.read.failure`) and exposure events (`vault.exposure.*`) are now durably committed to the shared SQLite ledger alongside approval decisions, correlated via the Capability ID. The system strictly fails closed: if the SQLite append fails, the request yields an `INTERNAL_ERROR` and no credential reference is returned.
+
+### A7. Immutable V8 String Residuals
+While the credential store now reads values into a Node.js `Buffer` and applies synchronous `crypto.randomFillSync()` immediately following HMAC digest creation, byte-level memory erasure remains incomplete by construction. The underlying JSON file-source adapter relies on `JSON.parse()`, which allocates immutable V8 string primitives in the heap prior to `Buffer` conversion. True zeroing of the credential lifecycle requires migrating from JSON to a length-prefixed binary format.
