@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 
 import { createTenantSecretStore, type Capability, type VaultAuditEvent } from "./store.ts";
+import { createApprovedCredentialReader } from "./reader.ts";
+import { mintCapability, READ_SCOPE } from "./capability.ts";
 
 /**
  * TENANT-ISOLATED, CAPABILITY-BOUNDED SECRET RETRIEVAL.
@@ -38,9 +41,12 @@ const TENANT_B = "globex";
 
 const SECRET_VALUE = "sk-live-DO-NOT-LOG-THIS-VALUE";
 
+/** A signing key for the handover tests. Local to them, and never exported. */
+const HANDOVER_KEY = randomBytes(32);
+
 interface Harness {
   readonly retrieve: (capability: Capability, name: string) => Promise<
-    | { readonly ok: true; readonly value: string }
+    | { readonly ok: true; readonly value: Buffer }
     | { readonly ok: false; readonly code: string; readonly message: string }
   >;
   readonly audit: () => readonly VaultAuditEvent[];
@@ -63,8 +69,8 @@ function harness(): Harness {
           return {
             tenant,
             secrets: [
-              { name: "payments/api-key", value: SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
-              { name: "payments/secret-key", value: "shh-" + SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" },
+              { name: "payments/api-key", value: Buffer.from(SECRET_VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" },
+              { name: "payments/secret-key", value: Buffer.from("shh-" + SECRET_VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" },
             ],
           };
         }
@@ -76,7 +82,7 @@ function harness(): Harness {
           // other tenant" are indistinguishable at the boundary.
           return {
             tenant,
-            secrets: [{ name: "globex/only-here", value: "globex-" + SECRET_VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }],
+            secrets: [{ name: "globex/only-here", value: Buffer.from("globex-" + SECRET_VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }],
           };
         }
         return undefined;
@@ -110,7 +116,11 @@ test("AN ENTITLED CAPABILITY READS ITS OWN SECRET", async () => {
   const outcome = await retrieve(capability(), "payments/api-key");
 
   assert.equal(outcome.ok, true);
-  if (outcome.ok) assert.equal(outcome.value, SECRET_VALUE);
+  // BYTES, not a string. `deepEqual` on two Buffers compares length and contents,
+  // so this is a real equality assertion on the credential rather than on a
+  // reference -- a `.toString("utf8")` here would quietly reintroduce the string
+  // copy this change exists to remove.
+  if (outcome.ok) assert.deepEqual(outcome.value, Buffer.from(SECRET_VALUE, "utf8"));
 });
 
 test("A CAPABILITY CANNOT REACH ANOTHER TENANT'S OWN SECRET, AND THAT TENANT IS NEVER LOADED", async () => {
@@ -150,7 +160,7 @@ test("THE ENTITLED TENANT CAN STILL REACH ITS OWN SECRET, so the test above is i
   );
 
   assert.equal(outcome.ok, true);
-  if (outcome.ok) assert.equal(outcome.value, "globex-" + SECRET_VALUE);
+  if (outcome.ok) assert.deepEqual(outcome.value, Buffer.from("globex-" + SECRET_VALUE, "utf8"));
 });
 
 test("A CAPABILITY CANNOT REACH A SECRET IT WAS NOT GRANTED, IN ITS OWN TENANT", async () => {
@@ -294,7 +304,7 @@ test("A SOURCE THAT RETURNS A SET FOR A DIFFERENT TENANT IS REFUSED, not served"
   const store = createTenantSecretStore({
     source: {
       async load() {
-        return { tenant: TENANT_B, secrets: [{ name: "payments/api-key", value: SECRET_VALUE, rotatedAt: "now" }] };
+        return { tenant: TENANT_B, secrets: [{ name: "payments/api-key", value: Buffer.from(SECRET_VALUE, "utf8"), rotatedAt: "now" }] };
       },
     },
     audit: (event) => events.push(event),
@@ -304,4 +314,141 @@ test("A SOURCE THAT RETURNS A SET FOR A DIFFERENT TENANT IS REFUSED, not served"
   const outcome = await store.retrieve(capability({ tenant: TENANT_A }), "payments/api-key");
 
   assert.equal(outcome.ok, false, "a set labelled for another tenant must not be served to this one");
+});
+
+// THE BUFFER HANDOVER, AND THE OVERWRITE THAT FOLLOWS IT.
+
+// === WHY THIS FILE, WHEN THE OVERWRITE LIVES IN THE READER ===
+//
+// Because the PROPERTY being pinned spans both modules, and the part that is easy to
+// get wrong is the seam. The store hands the reader a buffer; the reader consumes it
+// and is supposed to leave it overwritten. A test inside either module alone can only
+// see half of that -- the store cannot know what the reader did afterwards, and a
+// reader test cannot prove what was actually handed to it. So the test lives at the
+// join and holds a handle on the exact buffer the source produced.
+//
+// === WHY "THE REFERENCE IS CORRECT" IS NOT THE TEST ===
+//
+// Every other assertion about a reference checks that it equals the right digest.
+// That assertion passes IDENTICALLY whether or not the credential is still sitting in
+// memory -- the bug and the fix produce the same reference. So the reference is
+// asserted here only as a secondary fact. The primary assertion is on the BUFFER:
+// that its bytes are no longer the credential's.
+
+test("THE STORE HANDS OUT A BUFFER, not a string, because a string cannot be cleared in place", async () => {
+  const handed: Buffer[] = [];
+  const store = createTenantSecretStore({
+    source: {
+      async load(tenant: string) {
+        const value = Buffer.from(SECRET_VALUE, "utf8");
+        handed.push(value);
+        return { tenant, secrets: [{ name: "payments/api-key", value, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+      },
+    },
+    audit: () => {},
+    now: () => 1_000_000,
+  });
+
+  const outcome = await store.retrieve(capability(), "payments/api-key");
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(Buffer.isBuffer(outcome.value), true, "the granted value is bytes, not text");
+  assert.equal(outcome.value.toString("utf8"), SECRET_VALUE, "and it is the right bytes");
+});
+
+test("AFTER THE LIFECYCLE THE BUFFER IS OVERWRITTEN, and the reference is still correct", async () => {
+  // The two halves of the claim, asserted separately because they fail differently.
+  //
+  // If only the reference were checked, a store that loaded the credential and
+  // dropped it would pass. If only the buffer were checked, a reader that wiped the
+  // buffer before hashing would pass while returning a digest of nothing. Together
+  // they say: the bytes were read, the digest is of those bytes, and the bytes are
+  // gone afterwards.
+  const handed: Buffer[] = [];
+  const store = createTenantSecretStore({
+    source: {
+      async load(tenant: string) {
+        const value = Buffer.from(SECRET_VALUE, "utf8");
+        handed.push(value);
+        return { tenant, secrets: [{ name: "payments/api-key", value, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+      },
+    },
+    audit: () => {},
+    now: () => 1_000_000,
+  });
+
+  const reader = createApprovedCredentialReader({
+    store,
+    capability: mintCapability(
+      { capabilityId: "cap-01", tenant: TENANT_A, scopes: [READ_SCOPE], expiresAt: 2_000_000 },
+      HANDOVER_KEY,
+    ),
+    verificationKey: HANDOVER_KEY,
+    now: () => 1_000_000,
+  });
+
+  const outcome = await reader.read({ tenant: TENANT_A, credentialName: "payments/api-key" });
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+
+  // SECONDARY: the reference was computed from the real bytes, not from an empty or
+  // pre-wiped buffer. A reader that wiped first would produce a stable but WRONG
+  // digest, and this assertion is what notices.
+  assert.match(outcome.reference, /^<redacted_credential_ref:[0-9a-f]{16}>$/);
+  assert.equal(outcome.reference.includes(SECRET_VALUE), false);
+  assert.equal(outcome.exposed, false);
+
+  // PRIMARY: the buffer the source handed out no longer holds the credential.
+  const buffer = handed[0];
+  assert.ok(buffer !== undefined, "the source was consulted");
+  assert.equal(
+    buffer.toString("utf8").includes(SECRET_VALUE),
+    false,
+    "the credential is no longer in the buffer that was handed over",
+  );
+  assert.equal(
+    buffer.length,
+    Buffer.byteLength(SECRET_VALUE, "utf8"),
+    "overwritten in place -- same length, different bytes -- rather than truncated or reallocated",
+  );
+});
+
+test("THE RAW PATH OVERWRITES TOO, so returning a value does not leave the bytes behind", async () => {
+  // The raw path is the one that hands a credential to somebody, so it is the one
+  // where leaving the bytes behind would matter most.
+  const handed: Buffer[] = [];
+  const store = createTenantSecretStore({
+    source: {
+      async load(tenant: string) {
+        const value = Buffer.from(SECRET_VALUE, "utf8");
+        handed.push(value);
+        return { tenant, secrets: [{ name: "payments/api-key", value, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+      },
+    },
+    audit: () => {},
+    now: () => 1_000_000,
+  });
+
+  const reader = createApprovedCredentialReader({
+    store,
+    capability: mintCapability(
+      { capabilityId: "cap-01", tenant: TENANT_A, scopes: [READ_SCOPE], expiresAt: 2_000_000 },
+      HANDOVER_KEY,
+    ),
+    verificationKey: HANDOVER_KEY,
+    now: () => 1_000_000,
+  });
+
+  const outcome = await reader.read({
+    tenant: TENANT_A,
+    credentialName: "payments/api-key",
+    exposure: "raw",
+    acknowledged: true,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.ok ? outcome.exposed : false, true, "the caller did receive the value");
+  assert.equal(handed[0]?.toString("utf8").includes(SECRET_VALUE), false, "and the buffer is still cleared");
 });

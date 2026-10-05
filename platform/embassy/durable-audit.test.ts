@@ -307,7 +307,7 @@ test("AN APPROVED READ COMMITS BEFORE THE REFERENCE IS RETURNED", async () => {
     source: {
       async load(tenant: string) {
         order.push(`loaded:${tenant}`);
-        return { tenant, secrets: [{ name: CREDENTIAL, value: VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+        return { tenant, secrets: [{ name: CREDENTIAL, value: Buffer.from(VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }] };
       },
     },
     audit: () => {},

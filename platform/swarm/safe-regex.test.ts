@@ -75,9 +75,30 @@ test("EVERY SUPPORTED PATTERN AGREES WITH V8 ON EVERY SUBJECT", () => {
   // The single most important assertion in this file.
   const disagreements: string[] = [];
   let compared = 0;
+  let timeouts = 0;
 
   for (const pattern of SUPPORTED) {
-    const mine = SafePattern.compile(pattern);
+    /**
+     * THE EVALUATION BUDGET IS OFF HERE, DELIBERATELY.
+     *
+     * `DEFAULT_EVALUATION_BUDGET_MS` is a WALL-CLOCK tripwire: inside the NFA loop,
+     * `now() - scanStartedAt > budgetMs` abandons the search and answers `false`
+     * (safe-regex.ts, and the header there calls it "the alarm, not the door"). That
+     * is a deployment guard, not part of the matching semantics this test compares.
+     *
+     * Left on, it makes the test wrong in a way that looks like an engine bug: a
+     * pattern needing more than 50ms of simulated steps returns `false` while V8
+     * returns `true`, and the corpus is reported as disagreeing. Because the budget
+     * is wall-clock, whether it fires depends on how loaded the machine is -- so a
+     * full-suite run under parallel load can fail while a standalone run of the
+     * identical committed tree passes. That is what happened: 16 disagreements of
+     * 9600, then a green run with no code change.
+     *
+     * `timeouts` below is asserted rather than ignored, so if a budget is ever
+     * reintroduced on this path it fails as "a pattern reported an evaluation
+     * timeout" instead of resurfacing as phantom disagreements.
+     */
+    const mine = SafePattern.compile(pattern, { budgetMs: Number.POSITIVE_INFINITY });
     for (const subject of SUBJECTS) {
       const theirs = new RegExp(pattern).test(subject);
       const ours = mine.test(subject);
@@ -86,9 +107,11 @@ test("EVERY SUPPORTED PATTERN AGREES WITH V8 ON EVERY SUBJECT", () => {
         disagreements.push(`${pattern} against ${JSON.stringify(subject)}: engine ${ours}, V8 ${theirs}`);
       }
     }
+    timeouts += mine.stats().timeouts;
   }
 
   assert.ok(compared > 1000, `the corpus should be large, compared only ${compared}`);
+  assert.equal(timeouts, 0, "a pattern reported an evaluation timeout");
   assert.deepEqual(disagreements, [], `${disagreements.length} disagreement(s)`);
 });
 
@@ -100,7 +123,11 @@ test("A SEEDED GENERATIVE SWEEP AGREES WITH V8 ACROSS THOUSANDS OF RANDOM PATTER
   // So this builds patterns from the grammar itself and checks all of them.
   //
   // SEEDED, deliberately: a generative differential test that fails intermittently
-  // is worse than none, because it gets rerun until it passes.
+  // is worse than none, because it gets rerun until it passes. Seeding alone is not
+  // enough to guarantee that, and did not: the evaluation budget is wall-clock, so
+  // this sweep disagreed with V8 on a loaded machine and agreed with it on an idle
+  // one, from the same seed. The budget is therefore disabled below, and the timeout
+  // count asserted, so a failure here means a real semantic difference.
   let seed = 0x2f6e2b1;
   const random = () => {
     // mulberry32: small, fast, and reproducible from the seed above.
@@ -135,12 +162,16 @@ test("A SEEDED GENERATIVE SWEEP AGREES WITH V8 ACROSS THOUSANDS OF RANDOM PATTER
   let patterns = 0;
   let comparisons = 0;
   let refused = 0;
+  let timeouts = 0;
 
   for (let round = 0; round < 1200; round += 1) {
     const pattern = build(3);
     let mine;
     try {
-      mine = SafePattern.compile(pattern);
+      // Budget off -- see the header of the corpus test above for why, and for the
+      // failure this fixes. A pattern that bails out of the NFA loop answers `false`,
+      // which the comparison below would record as an engine disagreement.
+      mine = SafePattern.compile(pattern, { budgetMs: Number.POSITIVE_INFINITY });
     } catch {
       // A refusal is a legitimate outcome of a random pattern, not a disagreement.
       refused += 1;
@@ -154,10 +185,12 @@ test("A SEEDED GENERATIVE SWEEP AGREES WITH V8 ACROSS THOUSANDS OF RANDOM PATTER
         disagreements.push(`${pattern} against ${JSON.stringify(text)}`);
       }
     }
+    timeouts += mine.stats().timeouts;
   }
 
   assert.ok(patterns > 800, `too few patterns compiled: ${patterns} (${refused} refused)`);
   assert.ok(comparisons > 5000, `too few comparisons: ${comparisons}`);
+  assert.equal(timeouts, 0, "a random pattern reported an evaluation timeout");
   assert.deepEqual(disagreements.slice(0, 10), [], `${disagreements.length} disagreement(s) of ${comparisons}`);
 });
 

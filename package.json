@@ -9,16 +9,18 @@
     "generate-data": "node --experimental-strip-types scripts/generate-synthetic-data.ts",
     "generate-flood": "node --experimental-strip-types scripts/generate-synthetic-data.ts --flood",
     "dev:boot": "node --experimental-strip-types scripts/dev-boot.mjs",
-    "test": "npm run typecheck && npm run test:mjs && npm run test:ts",
+    "test": "npm run typecheck && npm run test:mjs && npm run test:ts && node --experimental-strip-types --test platform/**/*.test.ts scripts/**/*.test.ts",
     "test:mjs": "node --test platform/*.test.mjs",
     "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts scripts/*.test.ts platform/memory/*.test.ts platform/embassy/*.test.ts",
     "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
     "demo": "node --experimental-strip-types scripts/demo.ts",
     "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
+	"archify": "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.entries.json"
   },
   "devDependencies": {
     "@types/node": "22.7.5",
+    "dependency-cruiser": "^18.5.0",
     "typescript": "5.6.3"
   }
 }
