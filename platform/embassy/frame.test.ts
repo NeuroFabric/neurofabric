@@ -253,8 +253,8 @@ test("no tool's ARGUMENT SCHEMA accepts a tenant, a token, or a credential", () 
   );
   assert.deepEqual(
     ((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: { exposure?: { enum?: unknown } } }).properties?.exposure?.enum) ?? [],
-    ["reference", "raw"],
-    "and exposure is a closed enum, so no third mode can be invented at the call site",
+    ["metadata", "reference", "raw"],
+    "and exposure is a closed enum, so no fourth mode can be invented at the call site",
   );
 });
 

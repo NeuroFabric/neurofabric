@@ -100,7 +100,7 @@ export const TOOLS = [
           type: "string",
           description:
             "Omit, or use reference, to get a stable non-reversible label and never the bytes. raw returns the plaintext and requires a separate acknowledgement from the operator.",
-          enum: ["reference", "raw"],
+          enum: ["metadata", "reference", "raw"],
           default: "reference",
         },
       },
@@ -412,8 +412,8 @@ export function readCredentialArgs(args: Readonly<Record<string, unknown>>): Too
   // caller that invents a third mode gets a refusal rather than silently landing on
   // whichever branch happens to be the default.
   const exposure = args["exposure"];
-  if (exposure !== undefined && exposure !== "reference" && exposure !== "raw") {
-    return invalid('the exposure argument must be "reference" or "raw"');
+  if (exposure !== undefined && exposure !== "metadata" && exposure !== "reference" && exposure !== "raw") {
+    return invalid('the exposure argument must be "metadata", "reference" or "raw"');
   }
   return null;
 }

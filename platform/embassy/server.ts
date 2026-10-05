@@ -115,9 +115,9 @@ export interface ApprovedCredentialReader {
   read(subject: {
     tenant: string;
     credentialName: string;
-    exposure?: "reference" | "raw";
+    exposure?: "metadata" | "reference" | "raw";
     acknowledged?: boolean;
-  }): Promise<{ ok: true; reference: string; exposed: boolean } | { ok: false }>;
+  }): Promise<{ ok: true; reference: string; exposed: boolean; metadata?: { present: boolean; rotatedAt: string } } | { ok: false }>;
 }
 
 /** What the dispatcher is given, so tests can drive it without a pipe. */
@@ -289,6 +289,12 @@ async function resolveResponse(
               // read. The model is told plainly which it got rather than being left to
               // infer it from a field that is sometimes a label.
               result: outcome.reference,
+              // Present only for a metadata read, and the whole reason that mode
+              // exists: an agent triaging at 2am can learn WHEN a credential was last
+              // rotated and never cause one to be loaded.
+              ...(outcome.metadata === undefined
+                ? {}
+                : { exists: outcome.metadata.present, rotatedAt: outcome.metadata.rotatedAt }),
             }),
           },
         ],
@@ -329,7 +335,9 @@ async function handleCredentialCall(
   // Defaulted HERE rather than trusted from the argument, so an absent or misspelled
   // field lands on the safe answer. `readCredentialArgs` has already rejected
   // anything outside the published enum.
-  const raw = args["exposure"] === "raw";
+  const mode = args["exposure"];
+  const exposure = mode === "raw" || mode === "metadata" ? mode : "reference";
+  const raw = exposure === "raw";
 
   const { frame } = deps.gate.begin(
     {
@@ -337,13 +345,15 @@ async function handleCredentialCall(
       tenant: session.tenant,
       capability: session.capability,
       credentialName,
-      exposure: raw ? "raw" : "reference",
+      exposure,
       sideEffects: raw
         ? [
             "a LIVE credential in PLAINTEXT is placed into the model's context window",
             "the decision is recorded permanently against your name",
           ]
-        : ["a non-reversible reference is returned, never the value", "the decision is recorded permanently against your name"],
+        : exposure === "metadata"
+          ? ["the credential is never loaded; only its existence and last rotation are answered", "the decision is recorded permanently against your name"]
+          : ["a non-reversible reference is returned, and the credential is loaded here to compute it", "the decision is recorded permanently against your name"],
     },
     id,
   );

@@ -57,7 +57,7 @@ export interface ApprovalSubject {
    * into a model's memory" are different decisions, and the prompt rendering the
    * second one has to say so in the operator's face before the box exists.
    */
-  readonly exposure: "reference" | "raw";
+  readonly exposure: "metadata" | "reference" | "raw";
   /** Stated to the operator, because an approval with no consequences is a stamp. */
   readonly sideEffects: readonly string[];
 }
@@ -146,6 +146,22 @@ export interface ApprovalGate {
 function buildElicitation(subject: ApprovalSubject): { message: string; requestedSchema: unknown } {
   const effects = subject.sideEffects.join("; ");
   const raw = subject.exposure === "raw";
+  const metadata = subject.exposure === "metadata";
+
+  /**
+   * THE COST OF EACH MODE, STATED WHERE THE OPERATOR READS IT.
+   *
+   * The three modes are not a spectrum the caller picks from freely: metadata
+   * never materialises the credential, a reference never returns it but does load
+   * it in order to hash it, and raw returns it into a model's context. Saying which
+   * is which is the difference between an operator agreeing to something and
+   * agreeing to something they thought they were agreeing to.
+   */
+  const costLine = raw
+    ? "You will receive the LIVE VALUE in plaintext."
+    : metadata
+      ? "You will receive existence and last-rotation only. The credential is never loaded."
+      : "You will receive a non-reversible label. The credential is loaded here only to compute it.";
 
   /**
    * THE WARNING, AND WHY IT IS PROSE RATHER THAN A FIELD TITLE.
@@ -181,7 +197,8 @@ function buildElicitation(subject: ApprovalSubject): { message: string; requeste
       `Tenant: ${subject.tenant}\n` +
       `Capability: ${subject.capability}\n` +
       `Requested credential: ${subject.credentialName}\n` +
-      `Requested as: ${raw ? "RAW PLAINTEXT" : "a reference, not the value"}\n\n` +
+      `Requested as: ${raw ? "RAW PLAINTEXT" : metadata ? "METADATA ONLY (value never loaded)" : "a reference, not the value"}\n\n` +
+      `${costLine}\n\n` +
       `If you approve, ${effects}.\n\n` +
       (raw ? "Approve only if you know why a model needs the live value here." : "Approve only if you know why this agent needs it."),
     requestedSchema: {
@@ -194,7 +211,11 @@ function buildElicitation(subject: ApprovalSubject): { message: string; requeste
         exposure: {
           type: "string",
           title: "Requested as",
-          description: raw ? "RAW PLAINTEXT -- see the warning above." : "a reference, not the value",
+          description: raw
+            ? "RAW PLAINTEXT -- see the warning above."
+            : metadata
+              ? "METADATA ONLY -- existence and last rotation, value never loaded."
+              : "a reference, not the value",
         },
         sideEffects: { type: "string", title: "If approved", description: effects },
         approve: {

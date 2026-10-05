@@ -72,6 +72,28 @@ export interface SecretSet {
   readonly secrets: readonly SecretEntry[];
 }
 
+/** One entry's existence and age, and NO value. The point of this whole path. */
+export interface SecretMetadata {
+  readonly name: string;
+  /** ISO instant of the last rotation. */
+  readonly rotatedAt: string;
+  /**
+   * Whether an entry with this name exists for the tenant.
+   *
+   * Distinguishable from "the caller may not ask" only because the GRANT has already
+   * been checked: a granted name that is absent answers `false`, an ungranted name
+   * refuses outright. The grant, not existence, is the thing the caller must
+   * already know.
+   */
+  readonly present: boolean;
+}
+
+/** A tenant's metadata, with no values anywhere in it. */
+export interface SecretSetMetadata {
+  readonly tenant: string;
+  readonly entries: readonly SecretMetadata[];
+}
+
 /**
  * Where a tenant's secrets come from.
  *
@@ -79,9 +101,24 @@ export interface SecretSet {
  * than importing one: a store that reached into a file itself would make the
  * credential location a property of this module, and the operator's control over
  * where those bytes live is the one lever they should not have to argue for.
+ *
+ * `describe` is SEPARATE from `load` and is what makes a metadata read honest. If
+ * `describe` were derived from `load`, "we answered without materialising the
+ * value" would be true of the return type and false of the process -- the exact
+ * distinction ADR-010 section 5 refused to blur.
  */
 export interface SecretSource {
   load(tenant: string): Promise<SecretSet | undefined>;
+  /**
+   * Metadata without values. OPTIONAL, and a source that omits it can still serve
+   * value reads -- it simply cannot serve metadata ones, which REFUSE.
+   *
+   * That refusal is the design. Falling back to `load` would make the safe path
+   * depend on every source being configured a particular way, and the resulting
+   * failure would be invisible until somebody noticed a credential being pulled for
+   * a question that only asked when it was rotated.
+   */
+  describe?(tenant: string): Promise<SecretSetMetadata | undefined>;
 }
 
 /**
@@ -126,6 +163,11 @@ export interface RetrievalRefused {
 
 export type RetrievalOutcome = RetrievalGranted | RetrievalRefused;
 
+/** Metadata answers existence and age. There is deliberately no granted-with-value shape. */
+export type DescribeOutcome =
+  | { ok: true; readonly metadata: SecretMetadata }
+  | RetrievalRefused;
+
 /** What the trail records. Never carries a value. */
 export interface VaultAuditEvent {
   readonly at: string;
@@ -145,6 +187,13 @@ export interface TenantSecretStoreOptions {
 
 export interface TenantSecretStore {
   retrieve(capability: Capability, name: string): Promise<RetrievalOutcome>;
+  /**
+   * Whether an entry exists and when it was rotated, WITHOUT loading its value.
+   *
+   * Gated by exactly the same rules as `retrieve`, because a metadata read that
+   * skipped them would still be a way to enumerate what a tenant has.
+   */
+  describe(capability: Capability, name: string): Promise<DescribeOutcome>;
 }
 
 /** Constant-time string equality, over equal-length buffers only. */
@@ -178,7 +227,14 @@ export function createTenantSecretStore(options: TenantSecretStoreOptions): Tena
   const refuse = (
     capability: Capability,
     name: string,
-    reason: "absent" | "expired" | "revoked" | "ungranted" | "unknown-tenant" | "audit-unavailable",
+    reason:
+      | "absent"
+      | "expired"
+      | "revoked"
+      | "ungranted"
+      | "unknown-tenant"
+      | "audit-unavailable"
+      | "no-metadata-path",
   ): RetrievalRefused => {
     // `reason` is deliberately consumed and never emitted. It exists so the
     // control flow can say why, and the output deliberately cannot.
@@ -249,6 +305,86 @@ export function createTenantSecretStore(options: TenantSecretStoreOptions): Tena
 
       trail("granted");
       return { ok: true, name: entry.name, value: entry.value, rotatedAt: entry.rotatedAt };
+    },
+
+    /**
+     * === A READ THAT NEVER MATERIALISES THE VALUE ===
+     *
+     * Same gate, same refusals, same tenant rules -- because a metadata read that
+     * skipped them would still be a way to enumerate what a tenant has, and
+     * "which credential names are real" is just as sensitive without the values as
+     * with them.
+     *
+     * The difference is entirely in what crosses the process boundary, which is why
+     * this is a second method and not a flag. A flag would change what comes back
+     * while the credential was still loaded to produce it.
+     */
+    async describe(capability: Capability, name: string): Promise<DescribeOutcome> {
+      const trail = (outcome: "granted" | "refused"): void => {
+        record({
+          at: new Date(now()).toISOString(),
+          tenant: capability.tenant,
+          capabilityId: capability.id,
+          name,
+          outcome,
+        });
+      };
+
+      // Revocation, expiry and the grant, in the order that avoids an I/O for a no.
+      if (capability.revoked === true) {
+        trail("refused");
+        return refuse(capability, name, "revoked");
+      }
+      if (typeof capability.expiresAt !== "number" || !Number.isFinite(capability.expiresAt)) {
+        trail("refused");
+        return refuse(capability, name, "expired");
+      }
+      if (capability.expiresAt <= now()) {
+        trail("refused");
+        return refuse(capability, name, "expired");
+      }
+      if (!capability.secrets.some((granted) => equalConstantTime(granted, name))) {
+        trail("refused");
+        return refuse(capability, name, "ungranted");
+      }
+
+      /**
+       * NO FALLBACK TO `load`.
+       *
+       * A source without `describe` REFUSES. Deriving metadata from the value would
+       * make the safe path depend on every source being configured a particular way,
+       * and the resulting failure would be invisible until somebody noticed a
+       * credential being pulled in order to answer a question about when it was last
+       * rotated. Refusing is loud, immediate, and cheap to diagnose.
+       */
+      const describeEntry = options.source.describe;
+      if (typeof describeEntry !== "function") {
+        trail("refused");
+        return refuse(capability, name, "no-metadata-path");
+      }
+
+      const set = await describeEntry.call(options.source, capability.tenant);
+      // A set labelled for a different tenant is refused rather than served: that is
+      // a bug in the source, and serving it would convert the bug into a
+      // cross-tenant disclosure -- exactly as in the value read.
+      if (set === undefined || set.tenant !== capability.tenant) {
+        trail("refused");
+        return refuse(capability, name, "unknown-tenant");
+      }
+
+      const entry = set.entries.find((candidate) => candidate.name === name);
+      if (entry === undefined) {
+        trail("refused");
+        return refuse(capability, name, "absent");
+      }
+
+      trail("granted");
+      // Only the two fields that answer the question. No value, and no field a value
+      // could be added to later without a type change being noticed.
+      return {
+        ok: true,
+        metadata: { name: entry.name, rotatedAt: entry.rotatedAt, present: entry.present },
+      };
     },
   };
 }
