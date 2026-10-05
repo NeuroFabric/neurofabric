@@ -92,13 +92,31 @@ test("A TENANT EDITED IN THE PAYLOAD IS REFUSED, which is what binding means", (
   if (!verdict.ok) assert.equal(verdict.code, "BAD_SIGNATURE", "a payload signed by another key is not this capability");
 });
 
-test("A SCOPE ADDED TO THE PAYLOAD IS REFUSED", () => {
-  const forged = reSign(Buffer.from(JSON.stringify({ ...CLAIMS, scopes: [READ_SCOPE, "vault:write"] })).toString("base64url"), KEY);
+test("A SCOPE ADDED WITHOUT THE KEY IS REFUSED", () => {
+  const forged = reSign(
+    Buffer.from(JSON.stringify({ ...CLAIMS, scopes: [READ_SCOPE, "vault:write"] })).toString("base64url"),
+    OTHER_KEY,
+  );
 
   const verdict = verifyCapability(forged, KEY, { tenant: "acme", scope: "vault:write", now: 1_000_000 });
 
   assert.equal(verdict.ok, false);
-  if (!verdict.ok) assert.equal(verdict.code, "BAD_SIGNATURE", "the signature covers the scopes, so adding one breaks it");
+  if (!verdict.ok) assert.equal(verdict.code, "BAD_SIGNATURE", "the signature covers the scopes, so widening needs the key");
+});
+
+test("POSSESSING THE KEY IS MINTING AUTHORITY, and that is the reason it stays in one place", () => {
+  // Deliberately asserting that a widened capability DOES verify when signed with
+  // the real key. It is true, and it is the load-bearing fact about this module:
+  // the signature is not a proof of good intent, it is a proof of who minted this.
+  //
+  // Pinning it means a future edit cannot "harden" the verifier by refusing
+  // well-formed capabilities -- which would break every outstanding grant -- and
+  // it names the real risk: the key must live in exactly one process, because
+  // anything holding it can mint any capability that process would accept.
+  const minted = mintCapability({ ...CLAIMS, scopes: [READ_SCOPE, "vault:write"] }, KEY);
+
+  const verdict = verifyCapability(minted, KEY, { tenant: "acme", scope: "vault:write", now: 1_000_000 });
+  assert.equal(verdict.ok, true, "the holder of the key can mint, and the verifier must accept what the holder mints");
 });
 
 test("A TAMPERED SIGNATURE IS REFUSED", () => {
