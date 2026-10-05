@@ -44,7 +44,9 @@ import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArg
 import { approvalRefusal, createApprovalGate, type ApprovalGate } from "./elicitation.ts";
 import { createApprovedCredentialReader } from "../vault/reader.ts";
 import { createTenantSecretStore } from "../vault/store.ts";
+import { MemoryStore } from "../memory/store.ts";
 import { createFileSecretSource } from "../vault/file-source.ts";
+import { createDurableApprovalSink } from "../vault/audit-sink.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -697,6 +699,12 @@ export async function main(env: Readonly<Record<string, string | undefined>> = p
  * environment's protections -- which for most deployments is to say it inherits
  * very little. Rotation, and a source that is not a file, remain open and are named
  * as such in ADR-010 rather than left to be discovered during an incident.
+ *
+ * `NEUROFEBRIC_AUDIT_DIR` is REQUIRED here rather than optional, which is a
+ * deliberate difference from the credential store. Credentials can be absent and the
+ * embassy still refuses every read safely; an approval ledger that is absent means
+ * decisions are not being kept, so the whole approval path refuses instead of
+ * degrading to a log line.
  */
 function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
   gate: ApprovalGate;
@@ -723,16 +731,48 @@ function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
     audit: (event) => process.stderr.write(`neurofebric-embassy: vault ${event.outcome} ${event.tenant} ${event.name}\n`),
   });
 
+  /**
+   * THE APPROVAL LEDGER, AND WHY IT IS A SEPARATE STORE FROM `store`.
+   *
+   * `store` holds credentials and is deliberately openable without one -- a
+   * deployment with no record still gets a working, refusing embassy. Approvals are
+   * different: an approval ledger that cannot be opened is a fail-closed refusal,
+   * not a degraded feature, so it is required whenever the approval path is wired at
+   * all. Failing to open it refuses the precheck entirely rather than falling back
+   * to a log line, because falling back is precisely the gap this closes.
+   */
+  const auditDir = env["NEUROFEBRIC_AUDIT_DIR"];
+  if (auditDir === undefined || auditDir.trim() === "") {
+    process.stderr.write(
+      "neurofebric-embassy: NEUROFEBRIC_AUDIT_DIR is required with the approval path; approvals are not logged to stderr\n",
+    );
+    process.exitCode = 2;
+    return undefined;
+  }
+
+  const ledger = MemoryStore.open({ directory: auditDir });
+  const approvalSink = createDurableApprovalSink(ledger, { directory: auditDir });
+
   const gate = createApprovalGate({
-    // No trail sink is passed, so the gate treats the audit as optional -- which
-    // means an approval here is NOT durably recorded. That is a real gap and it is
-    // called out rather than papered over: this adapter is for deployments that have
-    // not yet wired the durable log ADR-009 describes. See ADR-010 section 5.
-    audit: (event) =>
-      process.stderr.write(
-        `neurofebric-embassy: approval ${event.outcome} ${event.tenant} ${event.credentialName}` +
-          `${event.approvedBy === undefined ? "" : ` by ${event.approvedBy}`}\n`,
-      ),
+    /**
+     * DURABLE, AND THE FAILURE IS NOT SWALLOWED.
+     *
+     * If the ledger will not take the write, the sink throws and the gate downgrades
+     * the decision to a refusal. A stderr line is still written, but only to say the
+     * ledger failed -- never INSTEAD of it, which is the failure mode ADR-010 A5
+     * recorded and the one this wiring exists to remove.
+     */
+    audit: (event) => {
+      try {
+        approvalSink(event);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `neurofebric-embassy: the approval ledger did not accept a decision; the decision is being REFUSED: ${reason}\n`,
+        );
+        throw error;
+      }
+    },
   });
 
   const reader = createApprovedCredentialReader({ store, capability, verificationKey });

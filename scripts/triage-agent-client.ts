@@ -206,7 +206,11 @@ async function main(): Promise<boolean> {
 
   // A real core, so `get_verdict` is a real measurement and not a stub.
   const cwd = await makeTempWorkspace("nf-triage-");
-  const store = MemoryStore.open({ directory: mkdtempSync(join(tmpdir(), "nf-triage-store-")), inMemory: true });
+  // The wedge's ledger is a FILE, not memory, because the embassy process has to
+  // write approvals into it. Two processes, one ledger, and WAL is what makes that
+  // possible -- which is exactly the arrangement a deployment would run.
+  const ledgerDir = mkdtempSync(join(tmpdir(), "nf-triage-ledger-"));
+  const store = MemoryStore.open({ directory: ledgerDir });
   const token = { id: TENANT, credential: "triage-value", providers: ["portal", "memory"] };
   const wedge = await startWedgeServer({
     cwd,
@@ -262,6 +266,8 @@ async function main(): Promise<boolean> {
     NEUROFEBRIC_CAPABILITY: capability,
     NEUROFEBRIC_VAULT_KEY: key.toString("hex"),
     NEUROFEBRIC_VAULT_FILE: vaultPath,
+    NEUROFEBRIC_AUDIT_DIR: ledgerDir,
+    NEUROFEBRIC_CAPABILITY_ID: "cap-triage",
   });
 
   const seen: { method: string; warning: string; exposure: string; required: readonly string[] }[] = [];
@@ -345,6 +351,50 @@ async function main(): Promise<boolean> {
     record("the raw prompt carried the high-severity warning", seen.some((s) => s.exposure === "raw" && s.warning.includes("RAW CREDENTIAL EXPOSURE REQUESTED")));
     record("the raw prompt required its own acknowledgement box", seen.some((s) => s.exposure === "raw" && s.required.includes("acknowledgeRawExposure")));
     record("the metadata prompt did not", seen.some((s) => s.exposure === "metadata" && !s.required.includes("acknowledgeRawExposure")));
+
+    /**
+     * 7. THE REFUSAL IS IN SQLITE. Not "the client was told", not "a log line said
+     * so" -- the row, read back with the same query an investigator would use.
+     *
+     * This is the check that would have caught ADR-010 §A5. Before the durable sink,
+     * everything above still passed: the client saw a refusal, the operator saw a
+     * prompt, and nothing anywhere said who declined what. The proof that the
+     * decision SURVIVED the process is that it is still here, after that process is
+     * gone, in a store this script opens independently.
+     *
+     * The embassy has already exited by the time this runs, so the row cannot be
+     * anything the embassy is still holding.
+     */
+    const rows = store.auditFor(TENANT).filter((row) => row.action.startsWith("vault.approval."));
+    const approvalRows = rows.filter((row) => row.action === "vault.approval.granted");
+    const refusalRows = rows.filter((row) => row.action === "vault.approval.refused");
+
+    record("the approval is queryable from SQLite", approvalRows.length === 1);
+    record("the refusal is queryable from SQLite", refusalRows.length === 1);
+
+    const document = (raw: unknown): Record<string, unknown> =>
+      typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as Record<string, unknown>);
+
+    const granted = approvalRows[0];
+    record("the row names the operator", granted?.actor === "on-call");
+    record("the row records what was approved, not merely that it was", document(granted?.document)["exposure"] === "metadata");
+
+    const grantedDocument = document(granted?.document);
+    record("the row names the capability", grantedDocument["capability"] === "cap-triage");
+    record("the row names the tenant", grantedDocument["tenant"] === TENANT);
+    record("the row names the target item", grantedDocument["credentialName"] === CREDENTIAL);
+    record("the row carries the operator's reason", String(grantedDocument["reason"]).includes("incident 4471"));
+
+    const refused = refusalRows[0];
+    const refusedDocument = document(refused?.document);
+    record("the refusal names the capability too", refusedDocument["capability"] === "cap-triage");
+    record("the refusal says what was requested", refusedDocument["exposure"] === "raw");
+    record("the refusal carries a reason", String(refusedDocument["reason"]).length > 0);
+    record("no ledger row carries a credential", !JSON.stringify(rows).includes("sk-live"));
+
+    notes.push(
+      `ledger holds ${approvalRows.length} approval and ${refusalRows.length} refusal, written by the embassy process`,
+    );
   } finally {
     client.end();
     await wedge.close();

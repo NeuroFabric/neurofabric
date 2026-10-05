@@ -69,6 +69,19 @@ function harness() {
   return { directory, ledger, gate, events };
 }
 
+/**
+ * READ A ROW'S DOCUMENT, whichever shape the driver hands back.
+ *
+ * `auditFor` types `document` as `unknown` and that is honest: whether it arrives as
+ * JSON text or as a parsed value is the driver's business, not the caller's. A test
+ * that assumed either would be testing the driver.
+ */
+function readDocument(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") return JSON.parse(raw) as Record<string, unknown>;
+  if (raw !== null && typeof raw === "object") return raw as Record<string, unknown>;
+  throw new Error("the audit row carried no document");
+}
+
 function answer(id: string, result: unknown): ReturnType<typeof parseFrame> {
   return parseFrame(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
@@ -90,11 +103,11 @@ test("AN APPROVAL IS IN THE LEDGER, WITH WHO, WHAT, WHICH, AND WHY", async () =>
 
     const row = rows[0];
     assert.equal(row?.actor, "on-call", "WHO approved");
-    assert.equal(row?.action, "vault.granted");
+    assert.equal(row?.action, "vault.approval.granted", "namespaced so an approval row is distinguishable from a reader row in the same table");
     assert.equal(typeof row?.at, "number", "WHEN, as an epoch the ledger can sort on");
 
     // The document carries the four facts a reader cannot reconstruct from the row.
-    const document = JSON.parse(String(row?.document)) as Record<string, unknown>;
+    const document = readDocument(row?.document);
     assert.equal(document["capability"], "cap-01", "WHICH capability");
     assert.equal(document["tenant"], TENANT, "WHICH tenant");
     assert.equal(document["credentialName"], CREDENTIAL, "WHICH entry");
@@ -115,10 +128,10 @@ test("A DENIAL IS IN THE LEDGER TOO, because a trail of successes cannot answer 
 
     const rows = ledger.auditFor(TENANT);
     assert.equal(rows.length, 1);
-    assert.equal(rows[0]?.action, "vault.refused");
+    assert.equal(rows[0]?.action, "vault.approval.refused");
     // A refusal has no operator, and inventing one would be worse than the gap.
     assert.equal(rows[0]?.actor, "nobody");
-    const document = JSON.parse(String(rows[0]?.document)) as Record<string, unknown>;
+    const document = readDocument(rows[0]?.document);
     assert.ok(typeof document["reason"] === "string" && document["reason"].length > 0, "but it says WHY it was refused");
   } finally {
     gate.dispose();
@@ -133,7 +146,7 @@ test("A MALFORMED ANSWER IS IN THE LEDGER, because a decision nobody made is sti
     const id = String((JSON.parse(frame) as Record<string, unknown>)["id"]);
     gate.offer(answer(id, { action: "accept", content: { approve: true } })); // no actor, no reason
 
-    assert.equal(ledger.auditFor(TENANT)[0]?.action, "vault.refused");
+    assert.equal(ledger.auditFor(TENANT)[0]?.action, "vault.approval.refused");
   } finally {
     gate.dispose();
     ledger.close();
@@ -146,7 +159,7 @@ test("A TIMEOUT IS IN THE LEDGER, or nobody can tell a refusal from an operator 
     gate.begin(subject(), 7);
     gate.sweep(1_000_000 + 30_001);
 
-    assert.equal(ledger.auditFor(TENANT)[0]?.action, "vault.refused");
+    assert.equal(ledger.auditFor(TENANT)[0]?.action, "vault.approval.refused");
   } finally {
     gate.dispose();
     ledger.close();

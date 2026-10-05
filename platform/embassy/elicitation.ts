@@ -102,6 +102,16 @@ export interface ApprovalAuditEvent {
   readonly tenant: string;
   readonly capability: string;
   readonly credentialName: string;
+  /**
+   * WHAT WAS APPROVED -- reference, metadata, or raw.
+   *
+   * Carried on the audit event because "a person approved this read" is an
+   * incomplete claim without it. An operator who agreed to a non-reversible
+   * reference and an operator who agreed to put a live value into a model's context
+   * have agreed to materially different things, and an investigator reading the row
+   * months later cannot tell them apart unless the row says which.
+   */
+  readonly exposure: string;
 }
 
 /**
@@ -138,8 +148,28 @@ export interface ApprovalGate {
   /** Settle anything past its window. The timer calls this; a test calls it too. */
   sweep(nowMs: number): ResolvedApproval[];
   pendingCount(): number;
+  /**
+   * What the gate has settled, and what it could not keep.
+   *
+   * `unrecordedDecisions` is the one that matters operationally. A failing
+   * precondition is the gate doing its job; an unrecordable decision is the gate
+   * working with the safety net removed, which is the state in which somebody
+   * disables the trail. It is counted so that state is VISIBLE rather than inferred
+   * from the absence of rows.
+   */
+  stats(): ApprovalStats;
   /** Release every pending approval and the timer that sweeps them. */
   dispose(): void;
+}
+
+export interface ApprovalStats {
+  /** Decisions settled, granted or not. */
+  readonly settled: number;
+  readonly approved: number;
+  readonly refused: number;
+  /** Decisions the AUDIT could not commit. Any non-zero value is an incident. */
+  readonly unrecordedDecisions: number;
+  readonly pending: number;
 }
 
 /** The prompt. Built from constants and the subject; no value ever reaches it. */
@@ -263,6 +293,11 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
   /** Correlation id for OUR outbound requests. Separate space, see `elicitationId`. */
   let nextId = 0;
   const pending = new Map<string, PendingApproval>();
+  let settledCount = 0;
+  let approvedCount = 0;
+  let refusedCount = 0;
+  /** Decisions the audit could not commit. See `stats()`. */
+  let unrecorded = 0;
   let timer: { unref?(): void; ref?(): void } | undefined;
 
   /**
@@ -283,15 +318,29 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
         tenant: subject.tenant,
         capability: subject.capability,
         credentialName: subject.credentialName,
+        exposure: subject.exposure,
       });
       return true;
     } catch {
+      /**
+       * A SINK THAT WILL NOT TAKE THE WRITE IS COUNTED, NOT SWALLOWED.
+       *
+       * Failing closed is the CALLER's decision -- a grant is downgraded to a
+       * refusal -- and it is made where the decision is made. What this layer must
+       * not do is hide the failure, because the fastest way to end up with no trail
+       * at all is for the trail to fail quietly a few times before somebody turns
+       * it off.
+       */
+      unrecorded += 1;
       return false;
     }
   };
 
   const settle = (row: PendingApproval, decision: ApprovalDecision, approvedBy?: string): ResolvedApproval => {
     pending.delete(row.elicitationId);
+    settledCount += 1;
+    if (decision.approved) approvedCount += 1;
+    else refusedCount += 1;
     if (pending.size === 0) stopTimer();
     return { pending: row, decision };
   };
@@ -413,6 +462,14 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
     sweep: (nowMs: number) => sweep(nowMs),
 
     pendingCount: () => pending.size,
+
+    stats: (): ApprovalStats => ({
+      settled: settledCount,
+      approved: approvedCount,
+      refused: refusedCount,
+      unrecordedDecisions: unrecorded,
+      pending: pending.size,
+    }),
 
     dispose(): void {
       stopTimer();
