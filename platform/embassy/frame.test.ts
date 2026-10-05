@@ -9,7 +9,7 @@ import {
   serialise,
   success,
 } from "./jsonrpc.ts";
-import { TOOLS, callTool, isTool } from "./tools.ts";
+import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, isTool } from "./tools.ts";
 import { CORE_PATHS, type CoreFetch } from "./core.ts";
 import { readConfig } from "./server.ts";
 
@@ -184,14 +184,28 @@ test("an internal fault never carries its cause outward", () => {
   assert.equal(envelope.error.message.includes("/"), false);
 });
 
-test("THE PUBLISHED SURFACE IS EXACTLY THREE TOOLS", () => {
+test("THE PUBLISHED SURFACE IS EXACTLY FOUR TOOLS, AND THREE OF THEM PROXY A ROUTE", () => {
   // The array IS the capability surface, so its length is the assertion that
-  // matters most. A fourth tool added here is a fourth capability added.
-  assert.equal(TOOLS.length, 3);
-  assert.deepEqual(
-    TOOLS.map((tool) => tool.name).sort(),
-    ["get_verdict", "ingest_events", "install_schema"],
-  );
+  // matters most. The fourth is `read_credential`, and it is the tool that makes
+  // this assertion a tripwire rather than a number: adding a fifth tool here is a
+  // fifth capability, and the second assertion below is what makes it fail unless
+  // the new tool has somewhere to go.
+  assert.equal(TOOLS.length, 4);
+  assert.deepEqual(TOOLS.map((tool) => tool.name).sort(), [
+    "get_verdict",
+    "ingest_events",
+    "install_schema",
+    "read_credential",
+  ]);
+
+  // Every published tool must be either proxied to a core route or routed through
+  // the approval path. A tool that is neither is advertised to every connecting
+  // client and then refuses at the call -- which is the one failure a published
+  // list can have that no amount of correct handler code prevents.
+  const routed = new Set([...PROXIED_TOOLS, READ_CREDENTIAL_TOOL]);
+  for (const tool of TOOLS) {
+    assert.ok(routed.has(tool.name), `${tool.name} is published but routed nowhere`);
+  }
 });
 
 test("EVERY TOOL REFUSES ADDITIONAL PROPERTIES", () => {
@@ -211,12 +225,32 @@ test("no tool's ARGUMENT SCHEMA accepts a tenant, a token, or a credential", () 
   // prose that legitimately say which tenant a tool answers for -- "this session's
   // tenant" is the whole point of the sentence -- and a bare substring search over
   // the serialised tool would flag the documentation for being accurate.
+  // Asserted on the PROPERTY NAMES, not on the serialised schema.
+  //
+  // A description is prose that legitimately says which tenant a tool answers for
+  // -- "this session's tenant" is the whole point of the sentence -- and searching
+  // the serialised text flagged the documentation for being accurate. What must be
+  // absent is a PROPERTY, because a property is something a caller can pass.
+  //
+  // `read_credential` is the deliberate exception and the reason this test needed
+  // rewriting rather than deleting. It NAMES a credential -- that is its entire
+  // purpose, and a schema that hid the parameter would only move the argument out
+  // of the published surface and into a place an agent cannot see it. What it must
+  // not accept is the pair that would defeat the approval: a TENANT, or a bearer
+  // value. Those stay absent, so the tenant still comes from the session and the
+  // capability still comes from the operator.
   for (const tool of TOOLS) {
-    const schema = JSON.stringify(tool.inputSchema);
-    for (const forbidden of ["tenant", "token", "credential", "provider"]) {
-      assert.equal(schema.includes(forbidden), false, `${tool.name} accepts "${forbidden}"`);
+    const properties = Object.keys((tool.inputSchema as { properties?: object }).properties ?? {});
+    const forbidden = tool.name === READ_CREDENTIAL_TOOL ? ["tenant", "token", "provider"] : ["tenant", "token", "credential", "provider"];
+    for (const word of forbidden) {
+      assert.equal(properties.includes(word), false, `${tool.name} accepts a "${word}" property`);
     }
   }
+  assert.deepEqual(
+    Object.keys((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: object }).properties ?? {}),
+    ["credentialName"],
+    "and it names exactly one thing: the entry, never the tenant and never a value",
+  );
 });
 
 test("an unknown tool is refused and the surface is NOT echoed", async () => {

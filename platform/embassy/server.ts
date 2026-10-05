@@ -40,7 +40,8 @@ import {
   success,
   type RpcId,
 } from "./jsonrpc.ts";
-import { TOOLS, callTool, type HandlerContext } from "./tools.ts";
+import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs, type HandlerContext } from "./tools.ts";
+import { approvalRefusal, type ApprovalGate } from "./elicitation.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -58,6 +59,15 @@ export const PROTOCOL_VERSION = "2025-06-18";
 export interface EmbassyConfig {
   readonly credential: string;
   readonly endpoint: CoreEndpoint;
+  /**
+   * Names for the prompt: which tenant, and which capability is being exercised.
+   *
+   * IDENTITY for a human deciding, never authority. The tenant here is for the
+   * label on the approval; the credential still decides who the data belongs to,
+   * and the store still derives that from what it proves.
+   */
+  readonly tenant?: string;
+  readonly capability?: string;
 }
 
 /** Read configuration from the environment. Returns `undefined` when incomplete. */
@@ -80,6 +90,31 @@ export function readConfig(env: Readonly<Record<string, string | undefined>>): E
   };
 }
 
+/**
+ * HOW THE GATEWAY REACHES A CREDENTIAL ONCE, AND ONLY ONCE, SOMEONE APPROVED.
+ *
+ * A PORT, not the vault. This module must not be able to name the vault's store
+ * module by path, for two reasons that point the same way: the embassy would
+ * acquire a dependency on a store whose authority is still deliberately scoped, and
+ * a future change could reach for the store from anywhere in the dispatcher instead
+ * of from the one branch that earned it.
+ *
+ * There is a test that scans this directory's import graph for that path, and it is
+ * not decorative -- it caught this very comment the first time it was written.
+ *
+ * It arrives as a FACTORY for the sharper reason. A function that returns a reader
+ * cannot be called at startup, at configuration time, or in any handler that is not
+ * an approved read -- so "the store is reachable only through an approval" becomes
+ * a fact about construction that a test can COUNT, rather than a promise about
+ * discipline.
+ *
+ * Whoever implements this owns the capability construction, which ADR-008 §4.1
+ * flagged as the seam the store deliberately does not hold.
+ */
+export interface ApprovedCredentialReader {
+  read(subject: { tenant: string; credentialName: string }): Promise<{ ok: true; value: string } | { ok: false }>;
+}
+
 /** What the dispatcher is given, so tests can drive it without a pipe. */
 export interface DispatcherDeps {
   readonly config: EmbassyConfig;
@@ -87,6 +122,10 @@ export interface DispatcherDeps {
   readonly write: (line: string) => void;
   /** Injected so a test can prove the core was never contacted before `initialize`. */
   readonly fetchImpl?: ((...args: never[]) => Promise<unknown>) | undefined;
+  /** The precheck. Absent means no credential tool can be served at all. */
+  readonly gate?: ApprovalGate | undefined;
+  /** Consulted ONLY inside an approved read. Never at startup. */
+  readonly credentialReader?: (() => ApprovedCredentialReader) | undefined;
 }
 
 /**
@@ -101,7 +140,29 @@ export interface DispatcherDeps {
  */
 interface SessionState {
   readonly credential: string;
+  /**
+   * The tenant this session's credential resolves to, for naming in a prompt.
+   *
+   * Taken from the credential's own id rather than from anything the caller sends.
+   * It is used ONLY to label an operator's decision, never to select data -- the
+   * store derives the tenant from the credential it proves, in its own process, and
+   * a session that could choose its tenant would be a second authority for the one
+   * question the core answers.
+   */
+  readonly tenant: string;
+  /** The capability's identifier, shown to the operator so they know what is exercised. */
+  readonly capability: string;
   established: boolean;
+  /**
+   * Whether the client DECLARED it can ask an operator, from
+   * `initialize.params.capabilities.elicitation`.
+   *
+   * Recorded rather than assumed. The specification says a server must not send an
+   * elicitation in a mode the client did not declare, and asking anyway would park
+   * the call until it timed out -- a refusal that also spends an operator's time
+   * for a decision nobody can give.
+   */
+  elicitation: boolean;
 }
 
 /**
@@ -131,23 +192,7 @@ export async function dispatch(
   }
 
   if (frame.kind === "response") {
-    /**
-     * AN ANSWER TO A REQUEST WE NEVER SENT IS SILENTLY DROPPED.
-     *
-     * A JSON-RPC response is not a request and gets no reply -- answering one is
-     * starting a conversation the peer did not open, the same rule that governs
-     * notifications. So there is nothing to write here.
-     *
-     * It is worth being explicit that this is the SAFE answer and not merely the
-     * polite one. A peer that sends an answer to an id we are not waiting on is
-     * either confused or probing, and the two interesting behaviours -- accepting
-     * it, or reporting it -- both hand back information about what this gateway
-     * is doing. Silence discloses nothing.
-     *
-     * The precheck path overrides this in Task 3, where an answer IS expected and
-     * is matched against a pending row.
-     */
-    return [];
+    return resolveResponse(frame.id, frame.result, frame.error !== undefined, session, deps);
   }
 
   const id = frame.id;
@@ -160,6 +205,115 @@ export async function dispatch(
     // forwarded -- an internal message can name files, paths and values.
     return [serialise(failure(id, RPC.INTERNAL_ERROR, "the request did not complete"))];
   }
+}
+
+/**
+ * AN ANSWER, MATCHED AGAINST A PENDING ROW.
+ *
+ * The counterpart of the branch in `dispatch`. An answer to an id nothing is
+ * waiting on resolves nothing and produces NO REPLY -- a JSON-RPC response is not a
+ * request and gets none, the same rule that governs notifications. That is also the
+ * safe reading: a peer answering an id we are not waiting on is confused or
+ * probing, and the two interesting behaviours -- accepting it, or reporting it --
+ * both hand back information about what this gateway is doing.
+ *
+ * On a REFUSAL the answer goes to the ORIGINAL tool call's id, not to the
+ * elicitation's. The caller is waiting on id 2; id 1 was ours, and answering it
+ * would be the gateway talking to itself in front of the client.
+ */
+async function resolveResponse(
+  id: RpcId,
+  result: unknown,
+  isError: boolean,
+  session: SessionState,
+  deps: DispatcherDeps,
+): Promise<readonly string[]> {
+  const gate = deps.gate;
+  if (gate === undefined) return [];
+
+  const settled = gate.offer({
+    kind: "response",
+    id,
+    result,
+    ...(isError ? { error: { code: -32603, message: "the peer declined to answer" } } : {}),
+  });
+  if (settled === undefined) return [];
+
+  const callId = settled.pending.toolCallId;
+  if (!settled.decision.approved) {
+    // HARD BLOCK. The refusal is a protocol error on the caller's own id, and the
+    // reader is not consulted -- not "consulted and then refused", which would
+    // still have constructed it.
+    return [approvalRefusal(callId)];
+  }
+
+  const factory = deps.credentialReader;
+  if (factory === undefined) return [approvalRefusal(callId)];
+
+  /**
+   * THE ONE PLACE THE READER EXISTS.
+   *
+   * Everything above is refusal-shaped and every one of those paths returns without
+   * reaching here. Constructing the reader is therefore the proof that an approval
+   * happened -- which is why the tripwire tests count factory invocations rather
+   * than checking that a value came back.
+   */
+  const reader = factory();
+  const outcome = await reader.read({
+    tenant: settled.pending.subject.tenant,
+    credentialName: settled.pending.subject.credentialName,
+  });
+  if (!outcome.ok) return [approvalRefusal(callId)];
+
+  return [
+    serialise(
+      success(callId, { content: [{ type: "text", text: JSON.stringify({ credentialName: settled.pending.subject.credentialName, value: outcome.value }) }], isError: false }),
+    ),
+  ];
+}
+
+/**
+ * THE PRECHECK, AND WHERE IT SITS.
+ *
+ * Inside the `tools/call` handler rather than around it, so the ordering is
+ * structural: a credential call is intercepted before it can reach a core route at
+ * all, and the other three tools are untouched by any of this.
+ *
+ * Three refusals happen before an operator is ever interrupted, in this order:
+ * a malformed call, a client that cannot ask, and a gateway with no precheck
+ * configured. Interrupting a person to tell them their request was malformed would
+ * spend their attention on nothing.
+ */
+async function handleCredentialCall(
+  id: RpcId,
+  args: Readonly<Record<string, unknown>>,
+  session: SessionState,
+  deps: DispatcherDeps,
+): Promise<string> {
+  const malformed = readCredentialArgs(args);
+  if (malformed !== null) {
+    return serialise(success(id, { content: [{ type: "text", text: JSON.stringify(malformed.data ?? { message: malformed.message }) }], isError: true }));
+  }
+
+  if (!session.elicitation || deps.gate === undefined) {
+    return serialise(failure(id, RPC.METHOD_NOT_FOUND, "this tool needs an approval path this session cannot use"));
+  }
+
+  const credentialName = String(args["credentialName"]).trim();
+  const { frame } = deps.gate.begin(
+    {
+      tool: READ_CREDENTIAL_TOOL,
+      tenant: session.tenant,
+      capability: session.capability,
+      credentialName,
+      sideEffects: ["the value is returned to the calling agent", "the decision is recorded permanently against your name"],
+    },
+    id,
+  );
+
+  // Only the request. The call is answered by a LATER line, which is what makes
+  // this non-blocking: there is no suspended call, only a row the gate holds.
+  return frame;
 }
 
 async function handleNotification(method: string, session: SessionState, deps: DispatcherDeps): Promise<void> {
@@ -183,10 +337,19 @@ async function handleRequest(
 
   if (method === "initialize") {
     // THE ONE DOOR, TAKEN ONCE. Before this, nothing is reachable; after it, the
-    // session carries a credential. `params` is not read: the credential came from
-    // the environment at start-up, not from a frame, so there is nothing here that
-    // a caller could have put in it.
+    // session carries a credential. `params` is not read for a credential: it came
+    // from the environment at start-up, not from a frame, so there is nothing here
+    // that a caller could have put in it.
+    //
+    // The ONE thing read is the client's declared capabilities, because the
+    // precheck may only send an elicitation the client said it can handle.
+    const capabilities = args["capabilities"];
+    const declared =
+      capabilities !== null && typeof capabilities === "object" && !Array.isArray(capabilities)
+        ? (capabilities as Record<string, unknown>)["elicitation"]
+        : undefined;
     session.established = true;
+    session.elicitation = declared !== null && typeof declared === "object" && !Array.isArray(declared);
     return serialise(
       success(id, {
         protocolVersion: PROTOCOL_VERSION,
@@ -242,6 +405,17 @@ async function handleRequest(
     if (typeof name !== "string") {
       return serialise(failure(id, RPC.INVALID_PARAMS, "a tool call needs a tool name"));
     }
+
+    // THE INTERCEPT, BEFORE ANY DISPATCH. The published surface includes this tool
+    // so a client can discover it, and `callTool` refuses it so nothing can reach a
+    // handler by accident -- this branch is the only way in.
+    if (name === READ_CREDENTIAL_TOOL) {
+      const credentialArgs =
+        callArgs === undefined || callArgs === null || typeof callArgs !== "object" || Array.isArray(callArgs)
+          ? {}
+          : (callArgs as Readonly<Record<string, unknown>>);
+      return await handleCredentialCall(id, credentialArgs, session, deps);
+    }
     const forwarded =
       callArgs !== undefined && (callArgs === null || typeof callArgs !== "object")
         ? {}
@@ -293,6 +467,16 @@ export async function serve(
   output: NodeJS.WritableStream,
   config: EmbassyConfig,
   fetchImpl?: DispatcherDeps["fetchImpl"],
+  /**
+   * The precheck and the credential reader.
+   *
+   * A fifth parameter rather than two more positional ones, and both are OPTIONAL:
+   * a gateway with neither serves the three core tools exactly as before, and the
+   * credential tool refuses itself rather than pretending. Absence is the default
+   * because a process that cannot ask an operator must not be one step away from
+   * being able to.
+   */
+  precheck?: { gate?: ApprovalGate | undefined; credentialReader?: (() => ApprovedCredentialReader) | undefined },
 ): Promise<void> {
   /**
    * A BROKEN PIPE MUST NOT BECOME AN UNCAUGHT EXCEPTION.
@@ -319,8 +503,20 @@ export async function serve(
     process.stderr.write("neurofebric-embassy: the input channel failed\n");
   });
 
-  const deps: DispatcherDeps = { config, write: (line) => void output.write(line), fetchImpl };
-  const session: SessionState = { credential: config.credential, established: false };
+  const deps: DispatcherDeps = {
+    config,
+    write: (line) => void output.write(line),
+    fetchImpl,
+    gate: precheck?.gate,
+    credentialReader: precheck?.credentialReader,
+  };
+  const session: SessionState = {
+    credential: config.credential,
+    tenant: config.tenant ?? "unknown",
+    capability: config.capability ?? config.tenant ?? "unknown",
+    established: false,
+    elicitation: false,
+  };
 
   /**
    * OBLIGATION 3, AND WHY IT NEEDS A TAP.

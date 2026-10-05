@@ -59,8 +59,17 @@ export type ApprovalDecision =
 
 /** One awaiting decision. The row the whole module exists to hold. */
 export interface PendingApproval {
-  /** The id of OUR request to the client. Answers correlate on this. */
-  readonly elicitationId: number;
+  /**
+   * The id of OUR request to the client. Answers correlate on this.
+   *
+   * A STRING, and deliberately not in the same space as the client's own request
+   * ids. This server is bidirectional now, so it both sends and receives ids, and
+   * a shared numeric space means our outbound id 1 is indistinguishable from the
+   * client's inbound request 1 -- which is a correlation that can be aimed. The
+   * prefix makes the direction of every id self-evident to anything reading the
+   * stream, and the specification permits a string id.
+   */
+  readonly elicitationId: string;
   /** The tool call that is waiting, so the result goes back to the right id. */
   readonly toolCallId: RpcId;
   readonly subject: ApprovalSubject;
@@ -174,9 +183,9 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
     options.setIntervalFn ?? ((fn: () => void, ms: number) => setInterval(fn, ms) as unknown as { unref?(): void; ref?(): void });
   const clearIntervalFn = options.clearIntervalFn ?? ((handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>));
 
-  /** Correlation id for OUR outbound requests. Separate from anything inbound. */
+  /** Correlation id for OUR outbound requests. Separate space, see `elicitationId`. */
   let nextId = 0;
-  const pending = new Map<number, PendingApproval>();
+  const pending = new Map<string, PendingApproval>();
   let timer: { unref?(): void; ref?(): void } | undefined;
 
   /**
@@ -242,7 +251,7 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
 
   return {
     begin(subject: ApprovalSubject, toolCallId: RpcId): { frame: string; pending: PendingApproval } {
-      const elicitationId = (nextId += 1);
+      const elicitationId = `el-${(nextId += 1)}`;
       const row: PendingApproval = { elicitationId, toolCallId, subject, startedAt: now() };
       pending.set(elicitationId, row);
       startTimer();
@@ -255,7 +264,7 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
 
     offer(frame: ParsedFrame): ResolvedApproval | undefined {
       if (frame.kind !== "response") return undefined;
-      const row = pending.get(frame.id as number);
+      const row = pending.get(String(frame.id));
       // An answer for an id nothing is waiting on resolves nothing, and in
       // particular is not matched to somebody else's request.
       if (row === undefined) return undefined;

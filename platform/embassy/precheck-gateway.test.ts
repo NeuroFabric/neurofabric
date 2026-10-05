@@ -59,13 +59,18 @@ function session(extras: {
   let factoryCalls = 0;
   const readerFactory = () => {
     factoryCalls += 1;
-    return {
-      calls,
-      read: async (subject: { tenant: string; credentialName: string }) => {
-        calls.push(subject.credentialName);
-        return { ok: true as const, value: "value-for-" + subject.credentialName };
-      },
-    };
+    // An override is honoured, but the counter and the default value are not: the
+    // counting is the point of the whole harness, so a substitute reader replaces
+    // only the VALUE, never the fact of construction.
+    return extras.reader === undefined
+      ? {
+          calls,
+          read: async (subject: { tenant: string; credentialName: string }) => {
+            calls.push(subject.credentialName);
+            return { ok: true as const, value: "value-for-" + subject.credentialName };
+          },
+        }
+      : extras.reader();
   };
 
   const done = serve(
@@ -86,8 +91,23 @@ function session(extras: {
   /** Let the readline loop turn over. A real tick, so ordering is real. */
   const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
 
+  /**
+   * Send a line, then FLUSH.
+   *
+   * The loop holds one line back on purpose -- a line is only known-complete when
+   * something follows it, because only that proves a terminator arrived. So a
+   * reply to line N is written when line N+1 arrives, and a test that writes one
+   * line and waits sees nothing. The blank line is the follow-on that releases it,
+   * and blank lines are ignored rather than answered as parse errors.
+   *
+   * That behaviour is correct and was already pinned by the framing tests. It is
+   * re-stated here because a precheck test that forgets it fails in a way that
+   * looks like the precheck is broken: nothing is ever emitted, ever.
+   */
   const send = async (line: string) => {
     input.write(`${line}\n`);
+    await settle();
+    input.write("\n");
     await settle();
   };
 

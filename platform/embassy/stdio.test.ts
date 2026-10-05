@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { serve, readConfig, type EmbassyConfig } from "./server.ts";
-import { TOOLS, callTool } from "./tools.ts";
+import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs } from "./tools.ts";
 import { RPC } from "./jsonrpc.ts";
 
 /**
@@ -282,7 +282,7 @@ test("DISCOVERY AFTER THE HANDSHAKE ANSWERS, with a schema for every tool", asyn
 
   assert.deepEqual(
     tools.map((tool) => tool["name"]),
-    ["get_verdict", "install_schema", "ingest_events"],
+    ["get_verdict", "install_schema", "ingest_events", "read_credential"],
     "every published tool is discoverable",
   );
 
@@ -336,18 +336,23 @@ test("EVERY PUBLISHED TOOL REACHES ITS OWN CORE ROUTE, so the listing cannot dri
     ingest_events: { events: [{ fields: { a: "1" } }] },
   };
 
+  // The fourth published tool has no core route and is not in this file's remit:
+  // `read_credential` is routed through the approval path and never reaches the
+  // core, which is exactly why it must appear here. A published tool with neither
+  // a route nor an approval path would be advertised to every client and refused at
+  // the call, and this assertion is the one that says so.
   assert.deepEqual(
     TOOLS.map((tool) => tool.name).sort(),
-    Object.keys(ROUTES).sort(),
-    "every published tool declares the core route it must reach",
+    [...Object.keys(ROUTES), READ_CREDENTIAL_TOOL].sort(),
+    "every published tool either reaches a core route or goes through the approval path",
   );
   assert.deepEqual(
-    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ROUTES).sort(),
     Object.keys(ARGS).sort(),
-    "every published tool declares the arguments this test calls it with",
+    "every core-routed tool declares the arguments this test calls it with",
   );
 
-  for (const tool of TOOLS.map((entry) => entry.name)) {
+  for (const tool of Object.keys(ROUTES)) {
     seen.length = 0;
     const source = Readable.from([
       Buffer.from(
