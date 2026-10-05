@@ -167,3 +167,87 @@ Also open, carried from ADR-008 and unchanged by this record:
 | Raw needs its own acknowledgement, checked in the gate | `elicitation.ts` |
 | No vault import from the gateway | import-graph scan in `stdio.test.ts` |
 | The value still transits this process | §5, stated rather than implied |
+---
+
+# ADDENDUM — the residual is closed (2026-10-04)
+
+**Status: the residual in §5 is CLOSED.** What is NOT closed is listed below, and
+it is not the same list.
+
+## A1. The metadata path, and what "without loading" now means
+
+`store.ts` gains a second method, `describe`, and `SecretSource` gains an optional
+`describe`. The reader gains a `metadata` exposure.
+
+The distinction that matters: the reference path **hashes the credential**, so it
+has to hold it. The default "safe" answer therefore still pulled a live credential
+into this process to produce a label containing none of it. That is closed by a
+different *port method*, not a different argument — a flag would change what came
+back while the credential was still loaded to produce it.
+
+**The guarantee, precisely:**
+
+> A credential is never handed to the store, the reader, or the model by a metadata
+> read. The store's value-loading method is never called.
+
+The tests assert that by **counting** the value load and requiring zero. Asserting
+the answer merely looks metadata-shaped would prove nothing: a store that loaded the
+value and carefully left it out of the return type would pass.
+
+**No fallback.** A source without `describe` **refuses**. Deriving metadata from a
+value would make the safe path depend on every source being configured a particular
+way, and the failure would be invisible until somebody noticed a credential being
+pulled to answer a question about when it was last rotated.
+
+## A2. What this still does not close, stated plainly
+
+The shipped file-backed source reads the whole JSON document to answer either
+question, because a document has no query planner. So `describe` returns no values
+and the store never sees one — but the bytes pass through *that adapter's read*.
+
+The guarantee is about the credential not reaching the store, the reader or the
+model. It is **not** "no process ever touched the bytes". A database source that
+selects named columns gets the stronger property, and the port is shaped so such a
+source can exist without changing anything else. This adapter is the weakest one
+that satisfies the port, and its header says so.
+
+## A3. The precheck needed a client, and the client found a defect
+
+Validating this required an actual MCP client — `scripts/triage-agent-client.ts` —
+because nothing else exercised the direction that matters: a server sending a
+request and a client answering it.
+
+It immediately found that **the embassy could not be talked to by any MCP client.**
+The loop dispatched a line only when the next one arrived, which is sound for the
+final line at end of stream and useless between messages, because stdio does not
+reach end of stream between messages. A client sending `initialize` and waiting
+waited forever. The suite was green throughout, because every other test either fed
+several lines or ended the stream, and both released the held line.
+
+Fixed by counting terminators in the byte tap rather than recording whether the last
+chunk ended on one — which makes early release safe and keeps obligation 3 intact
+rather than trading it away.
+
+**This is the argument for building a consumer before shipping a server.** The
+defect was not subtle, and it was invisible to every test written from the server's
+own side of the wire.
+
+## A4. Status of the open items from §5
+
+| # | Question | Status |
+|---|---|---|
+| 1 | Where does the signing key come from, and how is it rotated? | **Partly answered.** `main` reads it from the environment as hex, beside the credential it authorises, and refuses anything under 256 bits. Rotation and a non-environment source remain open. The choice is recorded as the weakest that works rather than presented as solved. |
+| 2 | Should the operator-supplied location sit inside the workspace boundary? | **Open.** Unchanged. |
+| 3 | Does every deploy actually mint capabilities? | **Partly answered.** `main` refuses unless all four variables are present together — a half-configured vault is refused rather than half-armed, because a gate with no reader would ask an operator to approve reads that can only ever be refused, which trains people to approve without reading. No deployment has been checked in production. |
+
+### A5. One new gap this exposed
+
+The approvals the gate records go to **stderr, not the durable log**. So in the
+shipped adapter an approval is *not* permanently recorded against a named human,
+which is the property ADR-009 §3.3 and the precheck's whole justification rest on.
+It is visible in the log line and nowhere else.
+
+Closing it means giving the composition root a durable audit sink, which is a
+deployment concern rather than a protocol one — but until it is done, **the shipped
+path emits an approval that is recorded less durably than the design says it should
+be**, and that is better said here than discovered during an incident review.
