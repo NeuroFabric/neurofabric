@@ -251,3 +251,66 @@ Closing it means giving the composition root a durable audit sink, which is a
 deployment concern rather than a protocol one — but until it is done, **the shipped
 path emits an approval that is recorded less durably than the design says it should
 be**, and that is better said here than discovered during an incident review.
+
+---
+
+# A5 AMENDMENT — the audit durability gap is RESOLVED (2026-10-04)
+
+**Status: CLOSED.** §A5 recorded that approvals were logged to stderr. They are now
+committed to the SQLite ledger before the gateway emits the response frame, and the
+path refuses when it cannot commit.
+
+## What was wrong
+
+The gate's justification is that *a named person approved a specific read*. That is a
+claim the platform makes to an operator and, later, to an investigator. A stderr line
+is rotated and eventually deleted, so it could not support the claim. The mechanism
+and the claim had drifted apart, and nothing tested for the difference.
+
+## What changed
+
+| Before | After |
+|---|---|
+| `process.stderr.write` from `buildPrecheck` | `createDurableApprovalSink` → `MemoryStore.appendAudit` |
+| Approval rows and credential rows indistinguishable | namespaced `vault.approval.*` |
+| The row said a read was approved, not what was approved | the exposure travels on the audit event |
+| A failing sink was invisible | `stats().unrecordedDecisions` counts it |
+| `NEUROFEBRIC_AUDIT_DIR` optional | **required** wherever the approval path is wired |
+
+**Fail-closed, specifically.** If the ledger will not take the write, the sink throws,
+the gate downgrades the decision to a refusal, and **no reference, metadata or value
+is returned**. stderr still gets a line saying the ledger failed — but *in addition
+to*, never *instead of*, which was the failure mode A5 recorded.
+
+The asymmetry with the credential store is deliberate and worth stating: a deployment
+with no credential store still gets a working embassy that refuses every read
+safely. A deployment with no **approval ledger** is not in that position, because it
+means decisions are not being kept at all — so that configuration refuses the
+approval path rather than degrading back to a log line.
+
+## What is verified, and by what
+
+`platform/embassy/durable-audit.test.ts` reads rows back with the query an
+investigator would use, against a real store on a real directory:
+
+- an approval row carries **capability, tenant, entry name, operator and reason**;
+- a **denial**, a **malformed answer** and a **timeout sweep** all land too — a trail
+  of successes cannot answer a question, and a decision nobody made is still a
+  decision;
+- the ledger **survives the process** that wrote it (closed and reopened);
+- a closed store makes an approval **refuse**;
+- the commit happens **before** the credential is loaded, asserted by ordering two
+  sinks on one list;
+- no row carries a credential, not even a prefix.
+
+`scripts/triage-agent-client.ts` closes the loop end to end: the wedge runs on a real
+file so the embassy subprocess and the script share one ledger through WAL, and after
+the embassy has exited the script reads back both the approval and the refusal.
+
+## One thing this does not close
+
+The ledger is a **file** the operator must protect, backup and retain on a schedule.
+Nothing here makes it survive a host loss, and the fail-closed guarantee means that if
+it becomes unwritable mid-incident, credential reads stop rather than silently
+continuing — which is correct, and also an operational dependency someone has to own.
+Retention and backup policy remain unaddressed.
