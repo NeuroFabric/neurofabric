@@ -130,6 +130,26 @@ export async function dispatch(
     return [serialise(failure(frame.id, frame.code, frame.message))];
   }
 
+  if (frame.kind === "response") {
+    /**
+     * AN ANSWER TO A REQUEST WE NEVER SENT IS SILENTLY DROPPED.
+     *
+     * A JSON-RPC response is not a request and gets no reply -- answering one is
+     * starting a conversation the peer did not open, the same rule that governs
+     * notifications. So there is nothing to write here.
+     *
+     * It is worth being explicit that this is the SAFE answer and not merely the
+     * polite one. A peer that sends an answer to an id we are not waiting on is
+     * either confused or probing, and the two interesting behaviours -- accepting
+     * it, or reporting it -- both hand back information about what this gateway
+     * is doing. Silence discloses nothing.
+     *
+     * The precheck path overrides this in Task 3, where an answer IS expected and
+     * is matched against a pending row.
+     */
+    return [];
+  }
+
   const id = frame.id;
   try {
     const handled = await handleRequest(id, frame.method, frame.params, session, deps);
