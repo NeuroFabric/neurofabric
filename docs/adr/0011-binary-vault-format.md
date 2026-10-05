@@ -1,25 +1,31 @@
 # ADR-011 — LENGTH-PREFIXED BINARY CREDENTIAL STORAGE
 
-- **Status:** **IMPLEMENTED — read path only.** The reader in §4 exists, in
-  `platform/vault/worker/crypto-worker.ts`, and it refuses on every branch §4
-  specifies. **There is still no writer and no migration.** Nothing produces a
-  binary vault yet, so the only files this reader has ever opened are ones built by
-  hand in a test fixture. The format is live on the read side and inert on the write
-  side, and §6 remains entirely ahead of the code.
-- **Date:** 2026-10-04 (proposed) · 2026-10-04 (read path implemented)
-- **Ratified by:** §3 and §4 are ratified by
-  `platform/vault/worker/crypto-worker.ts`, committed as the read path. §6 is not
-  ratified by anything, because nothing implements it.
+- **Status:** **IMPLEMENTED — read path and write path.** The reader in §4 is
+  `platform/vault/worker/crypto-worker.ts`, the writer is
+  `platform/vault/writer.ts`, and each is proven against the other rather than
+  against a copy of the format. **There is still no migration.** No deployment holds
+  a vault in this format, so §6 remains entirely ahead of the code and §3 is now a
+  contract with a producer attached to it.
+- **Date:** 2026-10-04 (proposed) · 2026-10-04 (read path) · 2026-10-04 (write path; §3.3 amended)
+- **Ratified by:** §3 and §4 by `platform/vault/worker/crypto-worker.ts` and
+  `platform/vault/writer.ts`. §6 by nothing, because nothing implements it.
 - **Closes:** the first of the three residuals in ADR-010 §A7.2
 - **Relates to:** ADR-010 (§A7.2, §A7.3), ADR-008, `platform/vault/store.ts`,
-  `platform/vault/file-source.ts`, `platform/vault/reader.ts`
+  `platform/vault/file-source.ts`, `platform/vault/reader.ts`,
+  `platform/vault/writer.ts`
 
-> **Read-before-build gate: CLOSED for §3 and §4, OPEN for §6.** The byte layout was
-> implemented rather than ratified first, which is the order this document exists to
-> prevent, and the reason it was safe is that the reader is not wired to anything:
-> no vault in any deployment is in this format, so no file has been written against
-> a contract that could still move. **The gate re-opens the moment a writer exists.**
-> If the layout changes after that point, §6 is not optional and is not a follow-up.
+> **Read-before-build gate: CLOSED, AND IT IS NOW LOAD-BEARING.**
+>
+> §3 and §4 were implemented before ratification, which is the order this document
+> exists to prevent. That was survivable while the reader was wired to nothing: no
+> file existed against a contract that could still move, so a change to §3 was a doc
+> edit. **That is no longer true.** `writeVault` can now produce a file, so the
+> layout is frozen in the only sense that matters — changing it is a data migration
+> for every file ever written, not a revision.
+>
+> The gate was not closed by ratification. It was closed by the existence of a
+> writer, and the lesson for the next format here is that a read-only implementation
+> is genuinely cheap to change and a read-write one is not.
 
 ---
 
@@ -144,7 +150,41 @@ remove, in the one field the metadata path actually reads.
 
 | Off from EOF | Size | Type | Field | Rule |
 |---|---|---|---|---|
-| −32 | 32 | bytes | `DIGEST` | SHA-256 over `[0, EOF−32)` |
+| −32 | 32 | bytes | `DIGEST` | **HMAC-SHA256** under the vault key, over `[0, EOF−32)` |
+
+> **AMENDED. This said `SHA-256`, and that was wrong.**
+>
+> The read path shipped before this section was revisited, and the reader computes
+> **HMAC-SHA256** under the vault key. §4's pass-2 pseudocode already said
+> `HMAC_SHA256(key, ...)`; this table did not. The table is now the one that is
+> correct and the pseudocode is unchanged.
+>
+> The difference is not cosmetic and not a naming preference:
+>
+> - A bare SHA-256 over a credential file is a **corruption check**. Anyone who can
+>   write the file can recompute the digest, and the file verifies. It detects a
+>   truncated disk, and it detects nothing else.
+> - HMAC makes forgery require the key, so "the digest matches" means "this was
+>   written by somebody holding the vault key", not "this file is internally
+>   consistent".
+>
+> For a file whose entire contents are credentials, the second is the property worth
+> having, and a document that specifies the wrong algorithm is worse than no
+> document — because it reads as though the weaker guarantee had been the intended one.
+>
+> `writer.ts` matches this, and a writer that emitted bare SHA-256 would produce
+> files its own reader refuses. `createHmac` accepts a zero-length key without
+> complaint, so an unkeyed vault would be *writable and readable* and would protect
+> nothing at all; `writeVault` therefore **refuses an empty key** rather than
+> producing a file that only looks like a vault.
+
+### 3.3.1 Entry ordering is a writer contract, not an accident
+
+Entries appear in the order `writeVault` is given them, and the offsets in the file
+follow from that. There is no index, so **a reader must not assume a tenant's
+entries are contiguous** — a reader that seeks from one match to the next breaks the
+first time two tenants are interleaved. `crypto-worker.ts` walks the whole region,
+and `writer.test.ts` asserts it with interleaved tenants.
 
 ### 3.4 Whole file
 
@@ -315,6 +355,30 @@ been to name residuals before relying on them.
    available in pure Node.** No in-process change can fix this. It is the largest
    remaining exposure and it belongs to the deployment — encrypted swap, or a
    `mlock`-capable runtime.
+
+   > **PARTIALLY ADDRESSED BY CONTAINMENT (Phase 8). READ THIS BEFORE CREDITING IT.**
+   >
+   > `docker-compose.yml` sets `memswap_limit` equal to `mem_limit` on the service.
+   > In cgroup terms the container's footprint — memory plus swap — may not exceed
+   > the limit, and since memory alone may already reach it, the swap allowance is
+   > exactly zero. The kernel therefore cannot page this process's anonymous memory
+   > out to disk.
+   >
+   > **What that closes:** swap. **What it does not:** it is not `mlock`. It removes
+   > the kernel's permission to move pages; it does not pin them. They remain ordinary
+   > reclaimable memory, so the exposure is *moved* rather than eliminated, and what
+   > is left is: a privileged process on the host, a hibernation image, or a core
+   > dump can still read them.
+   >
+   > The price is an OOM kill. Under pressure the kernel reclaims cache or kills the
+   > container; it can no longer swap. For credentials in an unswappable buffer that
+   > is the right trade — a loud, logged, restarted failure beats a quiet, permanent
+   > copy to disk — but it is a trade, and it is not free.
+   >
+   > Unchanged and still open: **the page cache of the vault FILE**, which is neither
+   > swap nor anonymous memory and is not constrained by `memswap_limit` at all, and
+   > **core dumps** (item 3 below), which still capture resident memory in full.
+   > Neither is closable from inside the container.
 3. **Core dumps and crash reports** capture resident memory.
 4. **Copies V8 made internally** while the buffer was alive.
 5. **The digest pass reads every byte.** §1.1 bounds how much is *held*; it cannot
@@ -435,6 +499,9 @@ not a wrong answer. That assumption is the residual.
 | Unknown versions and reserved bits are not ignored | §3.1, §4 |
 | Rotation readable without decoding anything | §3.2 `ROTATED_AT` |
 | Residual stated before anyone relies on it | §5 |
-| Read path exists; write path and migration do not | Status, §9 |
+| Read and write paths exist; migration does not | Status, §9 |
+| Digest is keyed, and an unkeyed vault is refused | §3.3, `writer.ts` |
+| A writer never produces a file its own reader rejects | `writer.test.ts` |
 | Size TOCTOU across passes recorded as an accepted defect | §8.1 |
 | Swap exposure is out of scope and named | §5(2) |
+| Swap is bounded by `memswap_limit`; page cache and core dumps are not | §5(2), `docker-compose.yml` |

@@ -67,7 +67,15 @@ export interface CryptoWorkerClientOptions {
    * header. A deployment that needs the key off this thread should pass the worker
    * a key-file path.
    */
-  readonly hmacKey: Buffer;
+  /**
+   * THE VAULT KEYS, PRIMARY FIRST.
+   *
+   * A single `Buffer` is a ring of one, so a deployment that has not been migrated
+   * keeps working. With several, the reader tries every key -- which is what lets a
+   * vault written before a rotation still be read, since the NFV1 trailer records
+   * no key index.
+   */
+  readonly hmacKey: Buffer | readonly Buffer[];
   /** Ceiling on the vault this client will open. A larger file is a refusal. */
   readonly maxVaultBytes?: number;
   /** Terminate the worker after this long with no in-flight request. Default 30s. */
@@ -230,17 +238,18 @@ export function createCryptoWorkerClient(options: CryptoWorkerClientOptions): Cr
      */
     spawned.unref();
 
-    const keyCopy = Buffer.from(options.hmacKey);
+    const supplied = Array.isArray(options.hmacKey) ? [...(options.hmacKey as readonly Buffer[])] : [options.hmacKey as Buffer];
+    const keyCopies = supplied.map((key) => Buffer.from(key));
     const init: CryptoWorkerInbound = {
       type: "init",
-      hmacKey: keyCopy,
+      hmacKeys: keyCopies,
       ...(maxVaultBytes === undefined ? {} : { maxVaultBytes }),
     };
     spawned.postMessage(init);
-    // The structured clone already gave the worker its own copy. This one is dead on
-    // arrival and is overwritten here so it is not sitting in the main thread's
+    // The structured clone already gave the worker its own copies. These are dead on
+    // arrival and are overwritten here so they are not sitting in the main thread's
     // heap waiting for a collection it may never come due for.
-    randomFillSync(keyCopy);
+    for (const copy of keyCopies) randomFillSync(copy);
 
     worker = spawned;
     return spawned;

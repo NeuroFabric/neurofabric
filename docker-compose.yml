@@ -114,6 +114,35 @@ services:
     mem_limit: 512m
     pids_limit: 128
 
+    # === NO SWAP. THIS IS THE PHASE 8 CONTAINMENT, AND IT IS A CONSTRAINT ===
+    #
+    # `memswap_limit` EQUAL TO `mem_limit` means the container's total footprint --
+    # resident memory PLUS swap -- may not exceed the limit. Memory alone is already
+    # allowed to reach it, so the swap allowance is exactly zero, and the kernel
+    # cannot page this process's anonymous memory out to disk. That is the exposure
+    # ADR-011 section 5(2) named as the largest remaining one, and the one `mlock`
+    # would have closed.
+    #
+    # WHAT THIS IS NOT: it is not mlock. It does not pin pages, it removes the
+    # kernel's permission to move them. The difference only shows under pressure,
+    # and it is why this is a trade rather than a free win.
+    #
+    # THE TRADE. Under memory pressure the kernel now has two options and swap is not
+    # one of them: reclaim cache, or OOM-KILL this container. For a process holding
+    # credentials in an unswappable buffer, a clean kill that loses the plaintext
+    # beats a paging decision that copies it to disk. An OOM kill is loud, logged,
+    # and `restart: unless-stopped` brings the service back. Swap is quiet and
+    # permanent, and it is the failure mode this line exists to prevent.
+    #
+    # NOT COVERED. The kernel's page cache of the vault FILE is neither swap nor
+    # anonymous memory and is not constrained by this. Neither are core dumps.
+    # ADR-011 section 5(2) still stands for both, and says so.
+    #
+    # REQUIRES swap accounting on the host (cgroup v2, or v1 with swapaccount=1).
+    # Without it this value is accepted and does nothing -- worth confirming once
+    # rather than assuming.
+    memswap_limit: 512m
+
     # Read-only root, with the two paths the process genuinely writes to
     # mounted as writable volumes. A process that does not need to write to its
     # own image should not be able to: this turns "the image was modified at
@@ -141,6 +170,78 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ===================== THE LITESTREAM SIDECAR =====================
+  #
+  # Phase 7 made the ledger replicable. This is the thing that actually does it, in
+  # a SEPARATE container sharing the SQLite volume -- a sidecar is the only
+  # arrangement where the database's writer and its backup have separate lifetimes.
+  # In-process replication would mean a crash takes the backup down with it.
+  #
+  # THE VOLUME IS MOUNTED READ-ONLY, and that is the point: Litestream only reads
+  # the database and its WAL, so the process responsible for restoring this data
+  # cannot modify it. That prevents the classic disaster -- a replication agent
+  # writing to the thing it is protecting, then failing quietly for a week -- by the
+  # mount rather than by a convention somebody has to remember.
+  #
+  # IT DOES NOT REPLICATE THE LEDGER THAT MATTERS MOST. This backs up the WEDGE's
+  # memory record only. The embassy's approval ledger -- who approved which
+  # credential read, at what exposure -- is in a different container on a different
+  # volume and is NOT covered by this file. See `litestream.sidecar.yml`.
+  litestream:
+    # Pinned. `:latest` means the agent that restores your database may be a
+    # different binary from the one that backed it up, with nothing recording it.
+    image: ghcr.io/benbjohnson/litestream:0.3.9
+    restart: unless-stopped
+    depends_on:
+      - wedge
+
+    volumes:
+      - wedge-data:/app/workspace:ro
+      # THE EMBASSY'S APPROVAL LEDGER. Read-only for the same reason as the volume
+      # above: the process that backs this up must not be able to alter it.
+      #
+      # THIS IS THE CROWN JEWEL. Every row here is a record of which person approved
+      # which credential read, at what exposure, and when. It is the document an
+      # auditor asks for, and until it was mounted here it existed on exactly one
+      # disk -- which is not a backup, it is a hope.
+      - embassy-audit:/app/embassy-audit:ro
+      - litestream-data:/var/lib/litestream
+      # Mounted rather than baked, so changing a replica or retention does not
+      # require rebuilding an image.
+      - ./litestream.sidecar.yml:/etc/litestream.yml:ro
+
+    command: ["litestream", "replicate", "-config", "/etc/litestream.yml"]
+
+    environment:
+      # Passed through from the host environment. NOTHING SECRET IS IN THIS FILE.
+      # Compose interpolates these from the operator's shell or a .env the host
+      # keeps; an unset variable becomes empty and fails loudly at replication time
+      # rather than silently writing to nowhere.
+      LITESTREAM_ACCESS_KEY_ID: ${LITESTREAM_ACCESS_KEY_ID}
+      LITESTREAM_SECRET_ACCESS_KEY: ${LITESTREAM_SECRET_ACCESS_KEY}
+      REPLICA_URL: ${REPLICA_URL}
+      REPLICA_BUCKET: ${REPLICA_BUCKET}
+      REPLICA_REGION: ${REPLICA_REGION}
+
+    # Same posture as the wedge: unprivileged, read-only root, capped. The agent is
+    # not a trusted process on this host and does not need to be.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   wedge-data:
     # Named explicitly rather than left to Compose's default, so `docker volume
@@ -148,3 +249,25 @@ volumes:
     # accident. The developer's learned schema memory lives in here, which is the
     # correct place for it: per deployment, and gone when the volume is removed.
     name: neurofebric-wedge-data
+
+  # Scratch space where the replication agent assembles snapshots before upload.
+  # A SEPARATE volume from the database on purpose: a replica sharing the volume it
+  # backs up can be damaged by the same event it exists to survive.
+  litestream-data:
+    name: neurofebric-litestream-data
+
+  # THE EMBASSY'S APPROVAL LEDGER.
+  #
+  # Declared here so the sidecar has something to mount and replicate. NOTE THIS
+  # HONESTLY: the embassy is NOT a service in this compose file, so nothing here
+  # writes to it yet. Until the embassy is deployed with
+  # `NEUROFEBRIC_AUDIT_DIR=/app/embassy-audit` on this volume, the sidecar finds
+  # no database at this path and replicates nothing for it -- silently, because
+  # Litestream treats "no database matched" as a normal state.
+  #
+  # A backup that quietly backs up nothing is worse than no backup, because it is
+  # counted. So this is stated in three places rather than implied: here, in
+  # `litestream.sidecar.yml`, and in ADR-011. Deploying the embassy on this volume
+  # is a separate piece of work and is not this commit.
+  embassy-audit:
+    name: neurofebric-embassy-audit

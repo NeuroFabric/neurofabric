@@ -99,6 +99,31 @@ function sign(message: string, key: Buffer): string {
   return createHmac("sha256", key).update(message).digest("base64url");
 }
 
+/**
+ * A SET OF KEYS, IN ORDER. INDEX 0 IS THE PRIMARY.
+ *
+ * This is the KMS pattern, and the ordering is the whole contract rather than a
+ * convenience: **new tokens are signed with index 0 and only index 0**, and
+ * verification tries every key. That combination is what makes a rotation possible
+ * without invalidating anything already handed out — a verifier that only knew the
+ * new key would refuse every capability minted an hour ago, and a deployment that
+ * reacted to that by keeping the old key forever would never rotate at all.
+ *
+ * The reason a single `Buffer` is still accepted everywhere is that a rotation is
+ * an upgrade, not a day one: a caller that has not been migrated must keep working,
+ * and the multi-key path is a superset of the single-key one rather than a
+ * replacement for it.
+ */
+export type KeyRing = Buffer | readonly Buffer[];
+
+/** Normalise to an ordered array, refusing anything that is not a usable key. */
+export function normaliseKeyRing(keys: KeyRing): Buffer[] | undefined {
+  const list = Array.isArray(keys) ? [...(keys as readonly Buffer[])] : [keys as Buffer];
+  if (list.length === 0) return undefined;
+  if (!list.every((key) => usableKey(key as Buffer))) return undefined;
+  return list as Buffer[];
+}
+
 /** Constant-time over equal-length buffers; the length check happens first. */
 function sameBytes(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
@@ -141,17 +166,24 @@ function decodePayload(payload: string): CapabilityClaims | undefined {
 /**
  * Mint a capability. Deterministic for a given key and claims, so a restart does not
  * invalidate anything already handed out.
+ *
+ * Accepts a key ring but signs with the PRIMARY only. Deliberately: minting with
+ * every key and accepting whichever verifies would mean a token's validity depended
+ * on which key happened to be in the set at the moment it was checked, and a
+ * deployment that could not say which key signed a token could not revoke it.
  */
-export function mintCapability(claims: CapabilityClaims, key: Buffer): string {
-  if (!usableKey(key)) {
+export function mintCapability(claims: CapabilityClaims, keys: KeyRing): string {
+  const ring = normaliseKeyRing(keys);
+  if (ring === undefined) {
     throw new Error(`a signing key of at least ${MIN_KEY_BYTES} bytes is required`);
   }
+  const primary = ring[0] as Buffer;
   if (typeof claims.expiresAt !== "number" || !Number.isFinite(claims.expiresAt)) {
     throw new Error("a capability must carry a numeric expiry");
   }
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
   const head = `${VERSION}.${payload}`;
-  return `${head}.${sign(head, key)}`;
+  return `${head}.${sign(head, primary)}`;
 }
 
 /**
@@ -161,23 +193,40 @@ export function mintCapability(claims: CapabilityClaims, key: Buffer): string {
  * signature, and only then read the claims for a decision. Everything that can
  * refuse on the token alone refuses before any claim is believed.
  */
-export function verifyCapability(token: string, key: Buffer, expected: Expectation): Verification {
+export function verifyCapability(token: string, keys: KeyRing, expected: Expectation): Verification {
   if (typeof token !== "string" || token === "") return { ok: false, code: "MALFORMED" };
-  if (!usableKey(key)) return { ok: false, code: "WEAK_KEY" };
+  const ring = normaliseKeyRing(keys);
+  if (ring === undefined) return { ok: false, code: "WEAK_KEY" };
 
   const segments = token.split(".");
   if (segments.length !== 3) return { ok: false, code: "MALFORMED" };
   const [version, payload, signature] = segments as [string, string, string];
+  // A token whose version this build does not know is refused, not guessed at. A v2
+  // build that read a v1 payload because the shape happened to look close is a v2
+  // that accepts claims it cannot audit.
   if (version !== VERSION) return { ok: false, code: "MALFORMED" };
 
   const claims = decodePayload(payload);
   if (claims === undefined) return { ok: false, code: "MALFORMED" };
 
-  // THE GATE. Nothing above this line has believed a claim; nothing below it can be
-  // reached without the key.
-  if (!sameBytes(signature, sign(`${VERSION}.${payload}`, key))) {
-    return { ok: false, code: "BAD_SIGNATURE" };
+  /**
+   * THE GATE. Nothing above this line has believed a claim; nothing below it can be
+   * reached without a key.
+   *
+   * EVERY KEY IS TRIED, and the comparison stays constant-time per key. The loop is
+   * bounded by the ring length, which is an operator-controlled number rather than
+   * attacker-controlled -- an attacker cannot make this loop longer by sending a
+   * different token.
+   *
+   * No early return on match failure and no "which key" signal anywhere: a caller
+   * that could tell WHICH key verified could learn something about the deployment's
+   * key set from a token it does not hold a key for.
+   */
+  let signed = false;
+  for (const key of ring) {
+    if (sameBytes(signature, sign(`${VERSION}.${payload}`, key))) signed = true;
   }
+  if (!signed) return { ok: false, code: "BAD_SIGNATURE" };
 
   // From here the claims are this deployment's own, so acting on them is safe.
   if (claims.expiresAt <= expected.now) return { ok: false, code: "EXPIRED" };

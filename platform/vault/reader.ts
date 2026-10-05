@@ -56,7 +56,7 @@
 
 import { createHash, randomFillSync } from "node:crypto";
 
-import { READ_SCOPE, verifyCapability, type CapabilityClaims } from "./capability.ts";
+import { READ_SCOPE, verifyCapability, type CapabilityClaims, type KeyRing } from "./capability.ts";
 import { AuditUnavailableError, type TenantSecretStore } from "./store.ts";
 
 /** What every reference starts with, so one is recognisable in a transcript. */
@@ -110,7 +110,15 @@ export interface ApprovedCredentialReaderOptions {
   /** The opaque capability. Verified on every read, never cached past the call. */
   readonly capability: string;
   /** The signing key. Held here and nowhere else -- see `capability.ts`. */
-  readonly verificationKey: Buffer;
+  /**
+   * The verification keys, PRIMARY FIRST.
+   *
+   * A ring, not one key, so a rotation does not invalidate capabilities that are
+   * already in flight. See `KeyRing`: index 0 is what new tokens are signed with,
+   * and every key is tried on verification. A single `Buffer` is still accepted and
+   * means a ring of one, so nothing that has not been migrated breaks.
+   */
+  readonly verificationKey: KeyRing;
   readonly now?: () => number;
   /** Optional trail. The durable log is wired here by the composition root. */
   readonly audit?: (event: ReaderAuditEvent) => void;

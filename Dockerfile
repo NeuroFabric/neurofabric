@@ -91,7 +91,20 @@ COPY --chown=node:node start-ui.mjs ./
 ENV WEDGE_WORKSPACE=/app/workspace \
     NODE_ENV=production
 
-EXPOSE 3000
+EXPOSE 8080
+
+# THE PORT IS 8080 HERE BECAUSE scripts/dev-endpoints.ts SAYS IT IS 8080.
+#
+# `WEDGE_PORT = 8080` is the single declaration this repository has. The image and
+# the compose file both used to say 3000 while that constant said 8080, which is
+# three truths about one number and a foot-gun: an operator running the image
+# directly hit 3000, an operator running compose hit 8080, and a script that
+# followed the constant dialled the one that was not listening. It presented as a
+# dead port rather than as a disagreement.
+#
+# Both now say 8080 and follow the constant. A copy is still a copy -- compose
+# cannot read TypeScript -- so the number is written literally in three places and
+# that is worth a sweep rather than a comment.
 
 # 0.0.0.0, and this is the ONE place the loopback default is deliberately
 # widened. Inside a container a loopback bind is unreachable from the host:
@@ -138,4 +151,4 @@ EXPOSE 3000
 # too large is an OOM kill on the host that is quieter. If a deployment needs
 # more, `docker-compose.yml` exposes the same command so it can be raised without
 # a rebuild.
-CMD ["node", "--max-old-space-size=256", "--max-semi-space-size=2", "--experimental-strip-types", "start-ui.mjs", "--workspace", "/app/workspace", "--port", "3000", "--host", "0.0.0.0"]
+CMD ["node", "--max-old-space-size=256", "--max-semi-space-size=2", "--experimental-strip-types", "start-ui.mjs", "--workspace", "/app/workspace", "--port", "8080", "--host", "0.0.0.0"]

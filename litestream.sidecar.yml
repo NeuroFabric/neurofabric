@@ -1,0 +1,55 @@
+# LITESTREAM, SCOPED TO THE WEDGE DATABASE.
+#
+# === WHAT THIS FILE COVERS NOW, AND WHAT IT STILL DOES NOT ===
+#
+# BOTH databases. The wedge's memory record AND the embassy's approval ledger --
+# every row recording which person approved which credential read, at what
+# exposure, and when. That ledger is the document an auditor asks for, and for most
+# of this project's life it existed on exactly one disk, which is a hope rather than
+# a backup.
+#
+# === AND THE HONEST CAVEAT, WHICH IS NOT OPTIONAL ===
+#
+# The embassy is NOT a service in docker-compose.yml. Nothing in this deployment
+# writes to `/app/embassy-audit` yet. Until the embassy is deployed with
+# `NEUROFEBRIC_AUDIT_DIR=/app/embassy-audit` on the `neurofebric-embassy-audit`
+# volume, the glob below matches no file and this sidecar replicates NOTHING for the
+# ledger -- silently, because Litestream treats "no database matched" as normal.
+#
+# A backup that quietly backs up nothing is worse than no backup, because it appears
+# in the status output. Before you rely on this, verify the replica actually has
+# the ledger:
+#
+#   litestream snapshots -config /etc/litestream.yml
+#
+# Config is split, not duplicated: credentials, endpoint, retention and sync
+# interval are identical to `litestream.yml` and must be changed in both.
+
+access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+
+replicas:
+  - name: primary
+    type: s3
+    endpoint: ${REPLICA_URL}
+    bucket: ${REPLICA_BUCKET}
+    region: ${REPLICA_REGION}
+    sync-interval: 1s
+    retention: 720h
+    retention-check-interval: 1h
+
+dbs:
+  # The wedge's durable record. start-ui.mjs resolves the workspace to
+  # $WEDGE_WORKSPACE and puts the database at `<workspace>/workspace/memory`.
+  - path: /app/workspace/workspace/memory/*.sqlite
+    replica: primary
+
+  # THE APPROVAL LEDGER. Read by this sidecar from a read-only mount; written by the
+  # embassy, which is not in this compose file -- see the caveat at the top.
+  #
+  # Globbed for the same reason as the database above, and for one more: a
+  # non-existent path here would mean asking the agent to replicate a database it
+  # cannot open, which is how a replication agent ends up refusing to start at all.
+  # A glob that matches nothing is inert; a path that does not exist may not be.
+  - path: /app/embassy-audit/*.sqlite
+    replica: primary
