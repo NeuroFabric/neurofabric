@@ -55,6 +55,7 @@
 
 import { randomBytes } from "node:crypto";
 
+import type { AsyncApprovalGate } from "../embassy/async-approval.ts";
 import type { SwarmDispatcher } from "./swarm-dispatcher.ts";
 
 /** What an agent says when it wants another to take over. */
@@ -139,15 +140,22 @@ export type HandoffOutcome =
 /**
  * THE APPROVAL PORT.
  *
- * Deliberately narrow and deliberately NOT the concrete gate. Two reasons: the gate
- * lives on a branch this is not merged against, and a handoff protocol coupled to a
- * concrete approval implementation would be untestable without one — and would have
- * to be rewritten, not reconfigured, if the gate changed.
+ * A PORT, satisfied by the real `AsyncApprovalGate` — see
+ * `createAsyncApprovalAdapter` below, which binds the live gate to it.
  *
- * `resolve` must return undefined for anything that is not a REAL, currently
- * approved decision. That single method is the whole of this protocol's authority,
- * and it is the only thing standing between a forged token and an inherited
- * approval.
+ * It was defined here rather than imported straight from the gate for two reasons,
+ * and both have now been paid for:
+ *
+ *  1. The gate lives on a different branch than the dispatcher that uses it, and a
+ *     handoff protocol coupled to a concrete approval implementation would be
+ *     untestable without one.
+ *  2. A protocol that can only be exercised against the real gate is a protocol
+ *     whose failure modes are only discovered in production.
+ *
+ * Now that the branches are unified, the ADAPTER below is the only thing between
+ * the two, and it is exercised by the live harness. The port stays because it is
+ * still the smaller surface, and because a handoff protocol that could be pointed at
+ * a fake approval source would be untestable in the one place that matters.
  */
 export interface ApprovalLookup {
   resolve(token: string):
@@ -162,6 +170,37 @@ export interface ApprovalLookup {
         readonly decidedAt: number;
       }
     | undefined;
+}
+
+/**
+ * BIND THE LIVE GATE TO THE PORT.
+ *
+ * `approval()` rather than `subject()`: `subject` deliberately returns undefined once
+ * a task stops being pending, so an approved-and-unclaimed decision — exactly what a
+ * handoff inherits — would look forged. `approval` answers for an APPROVED task whose
+ * result is still held, and it consumes nothing.
+ *
+ * This is the piece that was missing while the branches were separate, and it is
+ * what makes a handoff validate against a REAL TaskToken rather than against whatever
+ * a test put in a map.
+ */
+export function createAsyncApprovalAdapter(gate: AsyncApprovalGate): ApprovalLookup {
+  return {
+    resolve(token: string) {
+      const found = gate.approval(token);
+      if (found === undefined) return undefined;
+      return {
+        subject: {
+          tenant: found.subject.tenant,
+          credentialName: found.subject.credentialName,
+          exposure: found.subject.exposure,
+          tool: found.subject.tool,
+        },
+        ...(found.approvedBy === undefined ? {} : { approvedBy: found.approvedBy }),
+        decidedAt: found.decidedAt,
+      };
+    },
+  };
 }
 
 export interface HandoffRouterOptions {

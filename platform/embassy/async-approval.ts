@@ -192,6 +192,22 @@ export interface AsyncApprovalGate {
    */
   subject(token: string): ApprovalSubject | undefined;
   /**
+   * AN APPROVED SUBJECT, WITHOUT CONSUMING IT.
+   *
+   * This is what `ContextHandoff` binds to. Agent A holds an approval; agent B has
+   * to assume the incident WITHOUT re-prompting a human, which means B must be able
+   * to LOOK at the decision and collect it later, when it is actually ready.
+   *
+   * `subject()` cannot serve that: it deliberately returns undefined once a task
+   * stops being pending, so a settled task cannot authorise anything new. This is
+   * narrower and weakens nothing — it requires the task to be APPROVED with its
+   * result still held, so there is a live decision to inherit and nothing to invent.
+   *
+   * It returns NO result. `collect` remains the only path to a credential and
+   * remains single-use, so a handoff can carry a decision and never the value.
+   */
+  approval(token: string): { readonly subject: ApprovalSubject; readonly approvedBy: string | undefined; readonly decidedAt: number } | undefined;
+  /**
    * WHY A TOKEN CANNOT BE COLLECTED.
    *
    * The polling case needs this. A client whose SSE connection dropped has a token
@@ -439,6 +455,15 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
       const task = tasks.get(key);
       if (task !== undefined) return task.status;
       return terminal.get(key)?.status;
+    },
+
+    approval(token: string): { readonly subject: ApprovalSubject; readonly approvedBy: string | undefined; readonly decidedAt: number } | undefined {
+      const task = tasks.get(digestOf(token).toString("hex"));
+      // APPROVED and still holding its result. NOT "pending": inheriting a pending
+      // decision would be inheriting a question nobody has answered.
+      if (task === undefined || task.status !== "approved" || task.result === undefined) return undefined;
+      if (task.resultExpiresAt !== undefined && now() >= task.resultExpiresAt) return undefined;
+      return { subject: task.subject, approvedBy: task.approvedBy, decidedAt: task.decidedAt ?? now() };
     },
 
     collect(token: string): VerdictBroadcast | undefined {
