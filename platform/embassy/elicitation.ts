@@ -49,6 +49,15 @@ export interface ApprovalSubject {
   /** The capability's identifier. NOT the bearer value that proves it. */
   readonly capability: string;
   readonly credentialName: string;
+  /**
+   * Whether the caller asked for a reference or for the plaintext.
+   *
+   * Carried on the subject because it CHANGES WHAT THE OPERATOR IS BEING ASKED TO
+   * AGREE TO. "Approve this read" and "approve this read AND put a live credential
+   * into a model's memory" are different decisions, and the prompt rendering the
+   * second one has to say so in the operator's face before the box exists.
+   */
+  readonly exposure: "reference" | "raw";
   /** Stated to the operator, because an approval with no consequences is a stamp. */
   readonly sideEffects: readonly string[];
 }
@@ -136,15 +145,45 @@ export interface ApprovalGate {
 /** The prompt. Built from constants and the subject; no value ever reaches it. */
 function buildElicitation(subject: ApprovalSubject): { message: string; requestedSchema: unknown } {
   const effects = subject.sideEffects.join("; ");
+  const raw = subject.exposure === "raw";
+
+  /**
+   * THE WARNING, AND WHY IT IS PROSE RATHER THAN A FIELD TITLE.
+   *
+   * A field titled "I understand the risks" is one line in a form, and forms are
+   * scrolled past. This block is the first thing above the fold, it is prose somebody
+   * actually reads, and it names the specific mechanism -- a context window that gets
+   * quoted, summarised, logged and carried into later turns -- rather than gesturing
+   * at "risk" in the abstract.
+   */
+  const warning = raw
+    ? [
+        "========================================================",
+        "  RAW CREDENTIAL EXPOSURE REQUESTED",
+        "========================================================",
+        "Approving this places a LIVE credential in PLAINTEXT into a language",
+        "model's context window. From there it can be quoted, summarised,",
+        "written to logs, echoed in later turns, and pasted into a ticket.",
+        "A model asked to hold a credential cannot be relied on not to repeat",
+        "it, and no redaction downstream will help.",
+        "",
+        "If you only need to REFER to this credential, decline: the default",
+        "returns a stable label that carries no value at all.",
+        "========================================================",
+        "",
+      ].join("\n")
+    : "";
+
   return {
     message:
-      `A credential read needs your approval.\n\n` +
+      `${warning}A credential read needs your approval.\n\n` +
       `Tool: ${subject.tool}\n` +
       `Tenant: ${subject.tenant}\n` +
       `Capability: ${subject.capability}\n` +
-      `Requested credential: ${subject.credentialName}\n\n` +
+      `Requested credential: ${subject.credentialName}\n` +
+      `Requested as: ${raw ? "RAW PLAINTEXT" : "a reference, not the value"}\n\n` +
       `If you approve, ${effects}.\n\n` +
-      `Approve only if you know why this agent needs it.`,
+      (raw ? "Approve only if you know why a model needs the live value here." : "Approve only if you know why this agent needs it."),
     requestedSchema: {
       type: "object",
       properties: {
@@ -152,12 +191,29 @@ function buildElicitation(subject: ApprovalSubject): { message: string; requeste
         tenant: { type: "string", title: "Tenant", description: "Whose credential is named." },
         capability: { type: "string", title: "Capability", description: "The identifier of the grant being exercised." },
         credentialName: { type: "string", title: "Credential", description: "The specific entry requested." },
+        exposure: {
+          type: "string",
+          title: "Requested as",
+          description: raw ? "RAW PLAINTEXT -- see the warning above." : "a reference, not the value",
+        },
         sideEffects: { type: "string", title: "If approved", description: effects },
         approve: {
           type: "boolean",
           title: "Approve this read",
           description: "Leave unticked to decline. This is the decision; nothing proceeds without it.",
         },
+        // Present ONLY for raw. In the reference case there is nothing extra to
+        // agree to, and a box that always appears teaches people to tick boxes.
+        ...(raw
+          ? {
+              acknowledgeRawExposure: {
+                type: "boolean",
+                title: "Yes -- put the plaintext credential into the model's context",
+                description:
+                  "A separate acknowledgement, required in addition to approving the read. It exists because the cost of this is paid later, by somebody who is not in this conversation.",
+              },
+            }
+          : {}),
         approvedBy: {
           type: "string",
           title: "Approved by",
@@ -171,7 +227,7 @@ function buildElicitation(subject: ApprovalSubject): { message: string; requeste
           minLength: 1,
         },
       },
-      required: ["approve", "approvedBy", "reason"],
+      required: raw ? ["approve", "acknowledgeRawExposure", "approvedBy", "reason"] : ["approve", "approvedBy", "reason"],
     },
   };
 }
@@ -299,6 +355,26 @@ export function createApprovalGate(options: ApprovalGateOptions): ApprovalGate {
       if (!approved || by === "" || reason === "") {
         const cause = !approved ? `the operator answered ${String(answer["action"] ?? "nothing")}` : "the approval carried no named human or no reason";
         const decision: ApprovalDecision = { approved: false, code: APPROVAL_REFUSED, reason: cause };
+        record(row.subject, decision);
+        return settle(row, decision);
+      }
+
+      /**
+       * RAW EXPOSURE NEEDS ITS OWN TICK, ON TOP OF APPROVING THE READ.
+       *
+       * Separate from `approve` so neither field alone is sufficient, and checked
+       * HERE rather than in the reader -- because by the time a reader sees an
+       * unacknowledged raw request the decision has already been granted and written
+       * to the trail, and a refusal that leaves a granted approval on the record is
+       * worse than one that never happened. If the box is missing, the whole answer
+       * is treated as not given.
+       */
+      if (row.subject.exposure === "raw" && body["acknowledgeRawExposure"] !== true) {
+        const decision: ApprovalDecision = {
+          approved: false,
+          code: APPROVAL_REFUSED,
+          reason: "raw exposure was requested without its separate acknowledgement",
+        };
         record(row.subject, decision);
         return settle(row, decision);
       }

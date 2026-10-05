@@ -168,7 +168,10 @@ test("AN APPROVAL COMPLETES THE CALL, AND THE READER IS CONSULTED ONLY THEN", as
       calls: [],
       read: async (subject: { credentialName: string }) => {
         order.push(`read:${subject.credentialName}`);
-        return { ok: true as const, value: "the-value" };
+        // The port now answers with a REFERENCE by default. A stub returning a raw
+        // value here would have kept passing after redaction shipped, which is the
+        // exact way a redaction gets undone by a test fixture rather than a decision.
+        return { ok: true as const, reference: "<redacted_credential_ref:abc123>", exposed: false };
       },
     }),
     audit: () => order.push("audit"),
@@ -191,10 +194,74 @@ test("AN APPROVAL COMPLETES THE CALL, AND THE READER IS CONSULTED ONLY THEN", as
     const answered = s.frames().find((f) => f["id"] === 2);
     assert.ok(answered !== undefined, "the original call is answered, on its own id");
     assert.equal(answered["error"], undefined, "with a result rather than a refusal");
-    assert.match(JSON.stringify(answered["result"]), /the-value/);
+    assert.match(JSON.stringify(answered["result"]), /redacted_credential_ref/);
     assert.equal(s.factoryCalls(), 1, "and the reader was constructed exactly once");
 
     assert.deepEqual(order, ["audit", "read:payments/api-key"], "the decision is recorded BEFORE the value is read");
+  } finally {
+    await s.close();
+  }
+});
+
+test("A RAW READ IS REFUSED WITHOUT ITS OWN TICK, AND THE READER IS NEVER BUILT", async () => {
+  // The end-to-end half of redacted-by-default: approving the READ is not enough
+  // to approve RAW EXPOSURE, so an agent that ticks the first box and forgets the
+  // second gets nothing -- and cannot even tell that it tried, which is correct.
+  const s = session({ reader: () => ({ calls: [], read: async () => ({ ok: true as const, reference: "x", exposed: true }) }) });
+  try {
+    await s.send(INIT_WITH_ELICITATION);
+    await s.send('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_credential","arguments":{"credentialName":"payments/api-key","exposure":"raw"}}}');
+
+    const elicitation = s.frames().find((f) => f["method"] === "elicitation/create");
+    const message = String((elicitation?.["params"] as Record<string, unknown>)["message"] ?? "");
+    const schema = (elicitation?.["params"] as Record<string, unknown>)["requestedSchema"] as Record<string, unknown>;
+
+    assert.match(message, /RAW CREDENTIAL EXPOSURE REQUESTED/, "the operator is warned, in prose, before the box exists");
+    assert.match(message, /context window/, "and told the specific mechanism rather than gesturing at risk");
+    assert.deepEqual(schema["required"], ["approve", "acknowledgeRawExposure", "approvedBy", "reason"]);
+
+    // Approve the read, decline the exposure.
+    await s.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: elicitation?.["id"],
+        result: { action: "accept", content: { approve: true, approvedBy: "operator", reason: "why" } },
+      }),
+    );
+
+    const answered = s.frames().find((f) => f["id"] === 2);
+    assert.ok(answered?.["error"] !== undefined, "the whole answer is treated as not given");
+    assert.equal(s.factoryCalls(), 0, "and nothing was read");
+  } finally {
+    await s.close();
+  }
+});
+
+test("A REFERENCE READ ASKS FOR NO EXPOSURE TICK, because a box that always appears teaches people to tick boxes", async () => {
+  const s = session({});
+  try {
+    await s.send(INIT_WITH_ELICITATION);
+    await s.send(CALL);
+
+    const elicitation = s.frames().find((f) => f["method"] === "elicitation/create");
+    const message = String((elicitation?.["params"] as Record<string, unknown>)["message"] ?? "");
+    const schema = (elicitation?.["params"] as Record<string, unknown>)["requestedSchema"] as Record<string, unknown>;
+
+    assert.equal(message.includes("RAW CREDENTIAL EXPOSURE REQUESTED"), false, "no warning nobody needs");
+    assert.deepEqual(schema["required"], ["approve", "approvedBy", "reason"]);
+  } finally {
+    await s.close();
+  }
+});
+
+test("AN EXPOSURE THE SCHEMA DOES NOT PUBLISH IS REFUSED, so no third mode can be invented", async () => {
+  const s = session({ reader: () => ({ calls: [], read: async () => ({ ok: true as const, reference: "x", exposed: false }) }) });
+  try {
+    await s.send(INIT_WITH_ELICITATION);
+    await s.send('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_credential","arguments":{"credentialName":"payments/api-key","exposure":"everything"}}}');
+
+    assert.equal(s.frames().some((f) => f["method"] === "elicitation/create"), false, "nobody is interrupted");
+    assert.equal(s.factoryCalls(), 0);
   } finally {
     await s.close();
   }

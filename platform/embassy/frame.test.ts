@@ -247,9 +247,14 @@ test("no tool's ARGUMENT SCHEMA accepts a tenant, a token, or a credential", () 
     }
   }
   assert.deepEqual(
-    Object.keys((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: object }).properties ?? {}),
-    ["credentialName"],
-    "and it names exactly one thing: the entry, never the tenant and never a value",
+    Object.keys((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: object }).properties ?? {}).sort(),
+    ["credentialName", "exposure"],
+    "and it names exactly two things: the entry, and whether the value or a reference is wanted. Never a tenant, never a bearer.",
+  );
+  assert.deepEqual(
+    ((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: { exposure?: { enum?: unknown } } }).properties?.exposure?.enum) ?? [],
+    ["reference", "raw"],
+    "and exposure is a closed enum, so no third mode can be invented at the call site",
   );
 });
 

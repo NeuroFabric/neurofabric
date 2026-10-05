@@ -112,7 +112,12 @@ export function readConfig(env: Readonly<Record<string, string | undefined>>): E
  * flagged as the seam the store deliberately does not hold.
  */
 export interface ApprovedCredentialReader {
-  read(subject: { tenant: string; credentialName: string }): Promise<{ ok: true; value: string } | { ok: false }>;
+  read(subject: {
+    tenant: string;
+    credentialName: string;
+    exposure?: "reference" | "raw";
+    acknowledged?: boolean;
+  }): Promise<{ ok: true; reference: string; exposed: boolean } | { ok: false }>;
 }
 
 /** What the dispatcher is given, so tests can drive it without a pipe. */
@@ -262,12 +267,33 @@ async function resolveResponse(
   const outcome = await reader.read({
     tenant: settled.pending.subject.tenant,
     credentialName: settled.pending.subject.credentialName,
+    exposure: settled.pending.subject.exposure,
+    // The gate has ALREADY required the operator's separate acknowledgement for a
+    // raw read -- it would never have approved without it. Carrying the fact across
+    // means the reader does not have to trust this dispatcher to have checked, and
+    // a second caller wiring the port cannot skip the rule by omitting a field.
+    acknowledged: settled.pending.subject.exposure === "raw",
   });
   if (!outcome.ok) return [approvalRefusal(callId)];
 
   return [
     serialise(
-      success(callId, { content: [{ type: "text", text: JSON.stringify({ credentialName: settled.pending.subject.credentialName, value: outcome.value }) }], isError: false }),
+      success(callId, {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              credentialName: settled.pending.subject.credentialName,
+              exposure: settled.pending.subject.exposure,
+              // The only result field, and it holds the value ONLY on an approved raw
+              // read. The model is told plainly which it got rather than being left to
+              // infer it from a field that is sometimes a label.
+              result: outcome.reference,
+            }),
+          },
+        ],
+        isError: false,
+      }),
     ),
   ];
 }
@@ -300,13 +326,24 @@ async function handleCredentialCall(
   }
 
   const credentialName = String(args["credentialName"]).trim();
+  // Defaulted HERE rather than trusted from the argument, so an absent or misspelled
+  // field lands on the safe answer. `readCredentialArgs` has already rejected
+  // anything outside the published enum.
+  const raw = args["exposure"] === "raw";
+
   const { frame } = deps.gate.begin(
     {
       tool: READ_CREDENTIAL_TOOL,
       tenant: session.tenant,
       capability: session.capability,
       credentialName,
-      sideEffects: ["the value is returned to the calling agent", "the decision is recorded permanently against your name"],
+      exposure: raw ? "raw" : "reference",
+      sideEffects: raw
+        ? [
+            "a LIVE credential in PLAINTEXT is placed into the model's context window",
+            "the decision is recorded permanently against your name",
+          ]
+        : ["a non-reversible reference is returned, never the value", "the decision is recorded permanently against your name"],
     },
     id,
   );

@@ -52,6 +52,7 @@ const SUBJECT: ApprovalSubject = {
   tenant: "acme",
   capability: "cap-01",
   credentialName: "payments/api-key",
+  exposure: "reference",
   sideEffects: ["the value is returned to the calling agent", "the read is recorded"],
 };
 
@@ -104,6 +105,55 @@ test("THE PROMPT NAMES THE ACTION, so the operator is approving something legibl
     assert.ok(properties[field] !== undefined, `the schema presents ${field}`);
   }
   assert.deepEqual(schema["required"], ["approve", "approvedBy", "reason"], "a decision and its justification are required");
+  g.dispose();
+});
+
+test("A RAW SUBJECT CARRIES THE WARNING AND ITS OWN REQUIRED BOX, and a reference subject carries neither", () => {
+  // The two prompts must not look alike. A warning that appears on every request
+  // is a warning people learn to skip, so the raw-only artefacts are asserted to be
+  // ABSENT from the reference prompt rather than merely present in the raw one.
+  const time = clock();
+  const { g } = gate(time.now);
+
+  const rawFrame = JSON.parse(g.begin({ ...SUBJECT, exposure: "raw" }, 7).frame) as Record<string, unknown>;
+  const referenceFrame = JSON.parse(g.begin(SUBJECT, 8).frame) as Record<string, unknown>;
+
+  const rawParams = rawFrame["params"] as Record<string, unknown>;
+  const referenceParams = referenceFrame["params"] as Record<string, unknown>;
+  const rawMessage = String(rawParams["message"]);
+  const referenceMessage = String(referenceParams["message"]);
+
+  assert.match(rawMessage, /RAW CREDENTIAL EXPOSURE REQUESTED/);
+  assert.match(rawMessage, /context window/);
+  assert.deepEqual((rawParams["requestedSchema"] as Record<string, unknown>)["required"], [
+    "approve",
+    "acknowledgeRawExposure",
+    "approvedBy",
+    "reason",
+  ]);
+
+  assert.equal(referenceMessage.includes("RAW CREDENTIAL EXPOSURE"), false, "no warning nobody needs");
+  assert.deepEqual((referenceParams["requestedSchema"] as Record<string, unknown>)["required"], ["approve", "approvedBy", "reason"]);
+  assert.equal(
+    ((referenceParams["requestedSchema"] as { properties?: object }).properties as Record<string, unknown>)["acknowledgeRawExposure"],
+    undefined,
+    "and no box to tick for a decision that was not being made",
+  );
+  g.dispose();
+});
+
+test("RAW EXPOSURE WITHOUT THE BOX IS REFUSED, AND THE WARNING IS NOT SUBSTITUTE FOR IT", () => {
+  const time = clock();
+  const { g } = gate(time.now);
+  const { frame } = g.begin({ ...SUBJECT, exposure: "raw" }, 7);
+
+  const resolved = g.offer(
+    parseFrame(
+      answerLine(JSON.parse(frame).id as number, { action: "accept", content: { approve: true, approvedBy: "operator", reason: "a good reason" } }),
+    ),
+  ) as ResolvedApproval;
+
+  assert.equal(resolved.decision.approved, false, "approving the read is not approving the exposure");
   g.dispose();
 });
 

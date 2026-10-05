@@ -96,6 +96,13 @@ export const TOOLS = [
           description: "The specific entry to read. No tenant: that comes from the session.",
           minLength: 1,
         },
+        exposure: {
+          type: "string",
+          description:
+            "Omit, or use reference, to get a stable non-reversible label and never the bytes. raw returns the plaintext and requires a separate acknowledgement from the operator.",
+          enum: ["reference", "raw"],
+          default: "reference",
+        },
       },
       additionalProperties: false,
     },
@@ -392,12 +399,21 @@ export async function callTool(name: string, ctx: HandlerContext, args: Readonly
 // tool outcome, and so a malformed call cannot become a modal dialog for an
 // operator who was never asked about anything.
 export function readCredentialArgs(args: Readonly<Record<string, unknown>>): ToolOutcome | null {
-  const unknown = rejectUnknown(args, ["credentialName"]);
+  const unknown = rejectUnknown(args, ["credentialName", "exposure"]);
   if (unknown !== null) return unknown;
 
   const name = args["credentialName"];
   if (typeof name !== "string" || name.trim() === "") {
     return invalid("the credentialName argument must be a non-empty string");
+  }
+
+  // The exposure enum is enforced HERE as well as published, because the published
+  // schema is documentation to a client while this is the enforcement point. A
+  // caller that invents a third mode gets a refusal rather than silently landing on
+  // whichever branch happens to be the default.
+  const exposure = args["exposure"];
+  if (exposure !== undefined && exposure !== "reference" && exposure !== "raw") {
+    return invalid('the exposure argument must be "reference" or "raw"');
   }
   return null;
 }
