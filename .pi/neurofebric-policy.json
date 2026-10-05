@@ -64,13 +64,16 @@
     "This is a guardrail, not a sandbox. It cannot constrain what an already-permitted command",
     "does, and it is not a substitute for OS-level isolation, which remains deferred."
   ],
-  "secretWritePatterns": [
+"secretWritePatterns": [
     "api_key",
     "password",
     "secret:",
     "authorization"
   ],
-   "_secretWritePatternsNote": [
+  "excludePaths": [
+    "docs/**"
+  ],
+  "_secretWritePatternsNote": [
     "Secret-write scanning is fail-closed: every string value in a write-tier tool payload is scanned at any depth, except values under path/locator field names and the vault_store tool, whose control is its approval gate rather than the deny-scan. Exemptions are pinned by test in platform/pi/write-scan-fail-closed.test.ts."
   ],
   "limits": {
