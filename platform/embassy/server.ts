@@ -43,6 +43,7 @@ import {
 import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs, type HandlerContext } from "./tools.ts";
 import { approvalRefusal, createApprovalGate, type ApprovalGate } from "./elicitation.ts";
 import { createApprovedCredentialReader } from "../vault/reader.ts";
+import { evaluateStandingInstruction, type StandingInstruction } from "../vault/osi.ts";
 import { createTenantSecretStore } from "../vault/store.ts";
 import { MemoryStore } from "../memory/store.ts";
 import { createFileSecretSource } from "../vault/file-source.ts";
@@ -143,6 +144,22 @@ export interface DispatcherDeps {
   readonly gate?: ApprovalGate | undefined;
   /** Consulted ONLY inside an approved read. Never at startup. */
   readonly credentialReader?: (() => ApprovedCredentialReader) | undefined;
+  /** Standing instructions. Absent means every credential read asks a human. */
+  readonly standingInstructions?: readonly StandingInstruction[] | undefined;
+  /** Where an OSI decision is recorded. Same durability rule as a human approval. */
+  readonly recordStandingDecision?: ((event: StandingDecisionEvent) => void) | undefined;
+}
+
+/** One pre-approved decision, as it is written to the ledger. */
+export interface StandingDecisionEvent {
+  readonly at: string;
+  readonly actor: string;
+  readonly instructionId: string;
+  readonly tenant: string;
+  readonly capability: string;
+  readonly credentialName: string;
+  readonly exposure: "metadata" | "reference";
+  readonly justification: string;
 }
 
 /**
@@ -351,6 +368,25 @@ async function handleCredentialCall(
   const exposure = mode === "raw" || mode === "metadata" ? mode : "reference";
   const raw = exposure === "raw";
 
+  /**
+   * A STANDING INSTRUCTION IS CONSULTED BEFORE ANYBODY IS INTERRUPTED.
+   *
+   * Evaluated here, above the elicitation, so a covered request never reaches a
+   * human. That is the whole point -- and it is also why the path below still
+   * records durably: nobody watching is not the same as nobody recording.
+   *
+   * `raw` can never arrive here from an instruction (enforced in `osi.ts`, twice),
+   * so the check is belt to a brace. If that ever changes, this line keeps failing
+   * closed rather than silently pre-approving a value into a model's context.
+   */
+  if (deps.standingInstructions !== undefined && !raw) {
+    const verdict = evaluateStandingInstruction(deps.standingInstructions, { tenant: session.tenant, credentialName, exposure }, Date.now());
+    if (verdict.applies) {
+      recordStandingDecision(verdict.instruction, session, credentialName, exposure, deps);
+      return performCredentialRead(id, { tenant: session.tenant, credentialName, exposure, acknowledged: false }, deps);
+    }
+  }
+
   const { frame } = deps.gate.begin(
     {
       tool: READ_CREDENTIAL_TOOL,
@@ -373,6 +409,87 @@ async function handleCredentialCall(
   // Only the request. The call is answered by a LATER line, which is what makes
   // this non-blocking: there is no suspended call, only a row the gate holds.
   return frame;
+}
+
+// === THE STANDING-INSTRUCTION LEDGER ROW ===
+
+/**
+ * WRITE AN OSI DECISION, AND FAIL CLOSED IF IT CANNOT BE WRITTEN.
+ *
+ * Same rule as a human approval, for the same reason: a pre-approval that is not on
+ * the record is indistinguishable from a request that was never made. A distinct
+ * action, so a query can tell "a person approved this" from "an instruction covered
+ * this" -- which is the first question anybody asks about a grant they did not watch.
+ */
+function recordStandingDecision(
+  instruction: { id: string; approvedBy: string; justification: string },
+  session: SessionState,
+  credentialName: string,
+  exposure: "metadata" | "reference",
+  deps: DispatcherDeps,
+): void {
+  const sink = deps.recordStandingDecision;
+  if (sink === undefined) return;
+  sink({
+    at: new Date().toISOString(),
+    // The OFFICER, not the absent operator. The decision was not made by whoever is
+    // on call; it was made in advance by somebody named here.
+    actor: instruction.approvedBy,
+    instructionId: instruction.id,
+    tenant: session.tenant,
+    capability: session.capability,
+    credentialName,
+    exposure,
+    justification: instruction.justification,
+  });
+}
+
+// === THE READ ITSELF, AFTER WHATEVER AUTHORISED IT ===
+
+/**
+ * PERFORM AN APPROVED READ. One path, reached from a human approval or an
+ * instruction, so the two cannot diverge in what they actually do.
+ */
+async function performCredentialRead(
+  id: RpcId,
+  subject: { tenant: string; credentialName: string; exposure: "metadata" | "reference" | "raw"; acknowledged: boolean },
+  deps: DispatcherDeps,
+): Promise<string> {
+  const factory = deps.credentialReader;
+  if (factory === undefined) return approvalRefusal(id);
+
+  /**
+   * THE ONE PLACE THE READER EXISTS.
+   *
+   * Everything above is refusal-shaped and every one of those paths returns without
+   * reaching here. Constructing the reader is therefore the proof that something
+   * authorised the read.
+   */
+  const reader = factory();
+  const outcome = await reader.read({
+    tenant: subject.tenant,
+    credentialName: subject.credentialName,
+    exposure: subject.exposure,
+    acknowledged: subject.acknowledged,
+  });
+  if (!outcome.ok) return approvalRefusal(id);
+
+  return serialise(
+    success(id, {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            credentialName: subject.credentialName,
+            exposure: subject.exposure,
+            result: outcome.reference,
+            ...(outcome.metadata === undefined ? {} : { exists: outcome.metadata.present, rotatedAt: outcome.metadata.rotatedAt }),
+          }),
+        },
+      ],
+      isError: false,
+    }),
+  );
 }
 
 async function handleNotification(method: string, session: SessionState, deps: DispatcherDeps): Promise<void> {
