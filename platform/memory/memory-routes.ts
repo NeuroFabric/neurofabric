@@ -13,6 +13,7 @@ import {
   MAX_CONSUMER_BACKLOG_BYTES,
   SSE_HEADERS,
   bytesOf,
+  createAlertHub,
   frame,
   keepAliveFrame,
 } from "./alert-hub.ts";
@@ -100,6 +101,15 @@ export interface MemoryLive {
 
 export interface MemoryRoutesOptions {
   readonly store: MemoryStore;
+  /**
+   * THE SHARED HUB, OR NONE.
+   *
+   * Pass the SAME instance the verdict broadcaster uses and one subscriber set
+   * serves both. Omitted, this route builds its own — which is correct for a
+   * process that publishes nothing, and WRONG for one that does, because every
+   * verdict then goes to a hub nobody is subscribed to.
+   */
+  readonly hub?: AlertHub;
   readonly live: MemoryLive;
   readonly vault: VaultProvider;
   /** Fail closed when the vault reports a rejected entry. Default true. */
@@ -172,7 +182,7 @@ export interface MemoryRouter {
 
 export function createMemoryRoutes(options: MemoryRoutesOptions): MemoryRouter {
   const { store, live } = options;
-  const hub = new AlertHub({
+  const hub = options.hub ?? createAlertHub({
     onSlowConsumer: (tenant) => {
       // Named on the console rather than swallowed: a consumer being dropped is a
       // fact an operator needs, because the next question they will ask is "why
