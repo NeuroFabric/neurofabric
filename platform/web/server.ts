@@ -11,7 +11,7 @@ import { createEvaluationScheduler } from "../omniroute/evaluation-scheduler.ts"
 import { createMemoryRoutes, MEMORY_ALERTS_PATH, type MemoryRouter } from "../memory/memory-routes.ts";
 import { validateSchema, type AgentSchema } from "../swarm/dynamic-registry.ts";
 import { buildAlertPayload } from "../egress/webhook-dispatcher.ts";
-import { frame } from "../memory/alert-hub.ts";
+import { createAlertHub, frame, type AlertHub } from "../memory/alert-hub.ts";
 import type { MemoryStore } from "../memory/store.ts";
 import type { SwarmAlert } from "../omniroute/omniroute-gateway.ts";
 import { environmentVault, type VaultProvider } from "../omniroute/edge-security.ts";
@@ -86,6 +86,17 @@ export interface WedgeOptions {
   defaultsRoot?: string;
   /** 0 asks the OS for a free port, which is what the tests do. */
   port?: number;
+  /**
+   * THE SHARED ALERT HUB.
+   *
+   * Passed to the memory routes so an SSE subscriber and the async HITL verdict
+   * broadcaster are talking to ONE set of subscribers. Omitted, the routes build
+   * their own and verdicts published elsewhere in the process are invisible to
+   * them -- which presents as a verdict nobody ever received.
+   *
+   * Only helps WITHIN THIS PROCESS. See `createAlertHub` for the boundary.
+   */
+  hub?: AlertHub;
   /**
    * The interface to bind. LOOPBACK BY DEFAULT, and the default is the security
    * property: this process reads the user's files, so a listener on every
@@ -779,6 +790,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             accepts: (document) => validateSchema(document).ok,
           },
           vault: options.portalVault ?? environmentVault(),
+          ...(options.hub === undefined ? {} : { hub: options.hub }),
         });
   // The reference the decision path reads, now that it exists. Assigned once, at
   // boot, and never reassigned -- so there is one hub for the life of the process

@@ -74,6 +74,27 @@ export interface HubOptions {
   readonly onSlowConsumer?: (tenant: string) => void;
 }
 
+/**
+ * THE ONE PLACE AN ALERTHUB IS CONSTRUCTED.
+ *
+ * Two modules used to each call `new AlertHub(...)`, which is how a gateway and a
+ * portal end up with two subscriber sets in one process: every verdict published
+ * into the wrong one looks exactly like a verdict nobody received. There is now one
+ * construction site, so an operator who wants ONE hub for the process constructs one
+ * here and injects it everywhere.
+ *
+ * === AND THE BOUNDARY THIS DOES NOT CROSS ===
+ *
+ * A shared instance only shares within ONE PROCESS. The embassy runs as its own
+ * process (spawned by the client that speaks stdio to it) while the wedge and its
+ * SSE route are another, so in the shipped topology there is no instance to share
+ * and injection alone does not connect them. See `asyncHitlHub` in
+ * `platform/embassy/server.ts`, which says so at boot rather than assuming.
+ */
+export function createAlertHub(options: HubOptions = {}): AlertHub {
+  return new AlertHub(options);
+}
+
 export class AlertHub {
   readonly #subscribers = new Set<Subscription>();
   readonly #onSlowConsumer: ((tenant: string) => void) | undefined;

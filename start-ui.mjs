@@ -27,6 +27,7 @@ import { MemoryStore, MINIMUM_NODE } from "./platform/memory/store.ts";
 import { environmentVault, loadTokens } from "./platform/omniroute/edge-security.ts";
 import { WEDGE_PORT } from "./scripts/dev-endpoints.ts";
 import { describePort, inspectPort } from "./platform/core/port-probe.ts";
+import { createAlertHub } from "./platform/memory/alert-hub.ts";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -259,11 +260,35 @@ if (options.port !== 0) {
 // Port 0 asks the OS for a free one, which is what the tests do. Here the port
 // is chosen explicitly because a person has to type the URL, so the trade is
 // the other way: a known address beats an arbitrary one.
+/**
+ * THE ONE ALERT HUB FOR THIS PROCESS.
+ *
+ * Built here, at the bootstrap, and passed down rather than constructed by whichever
+ * module happens to need one. Two modules each building their own is how a gateway
+ * and a portal end up with two subscriber sets in one process, and every verdict
+ * published into the wrong one is indistinguishable from a verdict nobody received.
+ *
+ * === WHAT THIS DOES NOT SOLVE, STATED AT THE BOOT RATHER THAN IN A COMMIT ===
+ *
+ * The embassy is a SEPARATE PROCESS, spawned by the client that speaks stdio to it.
+ * This hub cannot reach it, and no in-memory instance can. An approval verdict is
+ * therefore still retrieved by an agent polling `elicitation/result` rather than by
+ * being pushed. That path exists and is single-use, so the failure costs a poll and
+ * not a credential -- but it is a real gap, and closing it needs a transport between
+ * the two processes (see `asyncHitlHub` in the embassy, which warns at boot for the
+ * same reason).
+ *
+ * Everything else in this process DOES share it, which is the part that can be fixed
+ * here and the part that was silently broken before.
+ */
+const alertHub = createAlertHub();
+
 const server = await startWedgeServer({
   cwd,
   port: options.port,
   host: options.host,
   installRoot: ROOT,
+  hub: alertHub,
   // OMITTED ENTIRELY when there is no record, rather than passed as a null the
   // server would have to check. With no store mounted the diff routes do not
   // exist and answer 404, so a caller cannot mistake "nothing is kept" for

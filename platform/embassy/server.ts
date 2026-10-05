@@ -59,7 +59,7 @@ import { createTenantSecretStore } from "../vault/store.ts";
 import { MemoryStore } from "../memory/store.ts";
 import { createFileSecretSource } from "../vault/file-source.ts";
 import { createDurableApprovalSink, createDurableExposureSink, createDurableReadSink } from "../vault/audit-sink.ts";
-import { AlertHub } from "../memory/alert-hub.ts";
+import { createAlertHub, type AlertHub } from "../memory/alert-hub.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -1091,13 +1091,35 @@ export async function serve(
  *
  * Created here rather than inside `buildPrecheck` so the wiring is in one readable
  * place at the entry point, and so an operator embedding this gateway can pass their
- * OWN hub — which is the actual production case, because the operator portal's SSE
- * route and the embassy are two halves of one process that has to share a subscriber
- * set. A hub constructed privately inside the precheck would broadcast to nobody.
+ * OWN hub — which is the only case in which one instance serves both the gateway and
+ * the portal's SSE route.
+ *
+ * === THE BOUNDARY, STATED BECAUSE IT INVALIDATES AN ASSUMPTION ===
+ *
+ * `main()` runs in the embassy's OWN PROCESS (spawned by whichever client speaks
+ * stdio to it) while the wedge and its `/alert` stream are a different one. **No
+ * in-memory instance can be shared across that boundary.** Passing a hub here makes
+ * sharing possible within one process and removes the accidental double-construction
+ * that makes the split invisible; it does not connect two processes.
+ *
+ * So `NEUROFEBRIC_ALERT_HUB_URL`, when set, is the only thing that can carry a
+ * verdict to a portal in another process, and nothing in this repository implements
+ * that transport yet. Until it does, the honest statement is the one this function
+ * makes at boot: verdicts are retrievable by token, and the push is lost across the
+ * process boundary. An agent still recovers, because `elicitation/result` exists —
+ * it just polls instead of being told.
  */
-function asyncHitlHub(env: Readonly<Record<string, string | undefined>>): VerdictHub | undefined {
+function asyncHitlHub(env: Readonly<Record<string, string | undefined>>, injected?: AlertHub): VerdictHub | undefined {
   if (env["NEUROFEBRIC_ASYNC_HITL"] !== "1") return undefined;
-  return new AlertHub({
+  if (injected !== undefined) return injected;
+  if (env["NEUROFEBRIC_ALERT_HUB_URL"] === undefined) {
+    // stderr, because stdout is the protocol channel. Named at BOOT rather than at
+    // verdict time, so nobody discovers it by wondering why a stream is quiet.
+    process.stderr.write(
+      "neurofebric-embassy: async HITL has no shared hub; this process is separate from the portal's SSE route, so verdicts will NOT be pushed. Agents recover by polling elicitation/result.\n",
+    );
+  }
+  return createAlertHub({
     onSlowConsumer: (tenant) => {
       process.stderr.write(`neurofebric-embassy: an SSE consumer for tenant ${tenant} fell behind and was disconnected\n`);
     },
@@ -1105,7 +1127,7 @@ function asyncHitlHub(env: Readonly<Record<string, string | undefined>>): Verdic
 }
 
 /** The process entry point. Used by the launcher, not by the tests. */
-export async function main(env: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
+export async function main(env: Readonly<Record<string, string | undefined>> = process.env, hub?: AlertHub): Promise<void> {
   const config = readConfig(env);
   if (config === undefined) {
     // stderr, because stdout is the protocol channel and writing a diagnostic into
@@ -1131,7 +1153,7 @@ export async function main(env: Readonly<Record<string, string | undefined>> = p
    * itself, so an operator who has not finished the setup gets a closed door rather
    * than a half-open one.
    */
-  const precheck = buildPrecheck(env, asyncHitlHub(env));
+  const precheck = buildPrecheck(env, asyncHitlHub(env, hub));
   await serve(process.stdin, process.stdout, config, undefined, precheck);
 }
 
@@ -1325,7 +1347,14 @@ function buildAsyncApproval(
             decision: event.outcome,
             reason: event.reason,
             decidedAt: event.decidedAt,
-            ledger: env["NEUROFEBRIC_AUDIT_DIR"] ?? "",
+            // The key is OMITTED rather than written empty, exactly as
+            // `createDurableApprovalSink` does it. An empty string is a committed
+            // value: an investigator reading the row would find a ledger address
+            // that is the empty string, which is worse than no address because it
+            // looks like an answer.
+            ...(env["NEUROFEBRIC_AUDIT_DIR"] === undefined
+              ? {}
+              : { ledger: env["NEUROFEBRIC_AUDIT_DIR"] }),
           },
         );
       } catch (error) {
