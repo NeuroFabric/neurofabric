@@ -104,13 +104,34 @@ export interface RpcRejection {
   readonly message: string;
 }
 
-/** A Response: an answer from the peer to a request WE sent. Carries an id and no method. */
-export interface RpcResponse {
+/** A Response: an answer from the peer to a request WE sent. Carries an id and no method. */export interface RpcResponse {
   readonly kind: "response";
   /** The id of the request being answered, echoed exactly. */
   readonly id: RpcId;
   readonly result?: unknown;
   readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
+}
+
+/** A Request WE send. Added for elicitation, the one place this server speaks first. */
+export interface RpcOutboundRequest {
+  readonly jsonrpc: "2.0";
+  readonly id: RpcId;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
+/**
+ * An outbound Request envelope.
+ *
+ * Separate from `success` on purpose. Elicitation makes this server the SENDER of
+ * a request, and a request envelope is not a response envelope with different
+ * contents -- it has `method` and `params` where a response has `result`. Building
+ * one through the other's helper would have produced a well-formed frame carrying
+ * the wrong shape, which is worse than a malformed one because nothing would
+ * object.
+ */
+export function request(id: RpcId, method: string, params?: unknown): RpcOutboundRequest {
+  return { jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) };
 }
 
 export type ParsedFrame = RpcRequest | RpcNotification | RpcRejection | RpcResponse;
@@ -293,7 +314,7 @@ export interface RpcFailure {
  * in our own code rather than caller input, and it surfaces as an internal error
  * at the dispatcher's outermost layer rather than as a corrupt frame.
  */
-export function serialise(envelope: RpcSuccess | RpcFailure): string {
+export function serialise(envelope: RpcSuccess | RpcFailure | RpcOutboundRequest): string {
   const line = JSON.stringify(envelope);
   // A literal newline here would split one frame into two and desynchronise the
   // reader. Nothing in a JSON.stringify result can contain one today; if this

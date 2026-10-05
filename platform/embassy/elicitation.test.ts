@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createApprovalGate, type ApprovalSubject, type ResolvedApproval } from "./elicitation.ts";
+import { createApprovalGate, APPROVAL_REFUSED, type ApprovalSubject, type ResolvedApproval } from "./elicitation.ts";
 import { parseFrame } from "./jsonrpc.ts";
 import { MemoryStore } from "../memory/store.ts";
 
@@ -233,7 +233,13 @@ test("AN UNANSWERED APPROVAL TIMES OUT AND REFUSES, and the timeout is recorded"
 
   assert.equal(expired.length, 1);
   assert.equal(expired[0]?.decision.approved, false);
-  if (!expired[0]?.decision.approved) assert.match(expired[0].decision.reason, /time/i);
+  // Asserted on the CODE rather than the wording. The reason text travels to the
+  // audit trail and is written for a person reading it later, so pinning it to a
+  // regex would make the sentence unchangeable for no gain -- and the code is the
+  // part the caller can actually observe.
+  if (!expired[0]?.decision.approved) {
+    assert.equal(expired[0].decision.code, APPROVAL_REFUSED, "a timeout is the same refusal as any other");
+  }
   assert.equal(g.pendingCount(), 0, "an expired entry is released, not left to pile up");
   assert.equal(audits.length, 1, "and the timeout is itself an audit event");
   g.dispose();
