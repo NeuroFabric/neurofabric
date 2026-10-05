@@ -28,12 +28,44 @@ The others stay open and §6 says so plainly.
 The claim to be closed: **a credential read from disk never becomes a JavaScript
 string at any point in this process.**
 
-That is achievable because the primitive already exists and costs nothing:
-`fs.readFileSync(path)` with no encoding argument returns a `Buffer`. No decoder
-runs, no string is allocated. What forces a string today is not the file API — it is
-that **the file's content is JSON**, and JSON is a text format.
+That is achievable because the primitive already exists and costs nothing: a
+`Buffer` read with no encoding argument carries no decoder and allocates no string.
+What forces a string today is not the file API — it is that **the file's content is
+JSON**, and JSON is a text format.
 
 So this is a format change, not a reading change. That is the whole design.
+
+### 1.1 The read primitive is a STREAM, and that is normative
+
+A whole-file read — `fs.readFileSync(path)`, `fs.promises.readFile`, or
+`fs.readFile` with no `length`/`position` — **is prohibited by this ADR.** Not
+discouraged. Prohibited, in the same voice as the `RESERVED` rule in §3.1: a
+primitive that is available and wrong is a primitive somebody will reach for.
+
+Every reader built on this format **MUST** hold at most a bounded number of bytes at
+a time, using:
+
+- `fs.createReadStream(path, { start, end, highWaterMark })` for a region read, or
+- `fs.read(fd, buffer, offset, length, position)` in a loop into a **pre-allocated,
+  fixed-size scratch buffer** for a sequential chunk read,
+
+and **MUST NOT** allocate a buffer whose size is a function of `ENTRY_COUNT`,
+`PAYLOAD_BYTES`, or the file's total length. "Read one credential" and "load every
+credential in the vault" must not be the same code path with a different filter
+applied afterwards. If a reader can be made to pull the whole file by asking for one
+entry, it will be, eventually, by somebody who did not read this section.
+
+The reason is not style. A whole-file read means the peak heap cost of answering one
+question is the size of the entire secret estate, all of it resident in this
+process simultaneously, all of it equally addressable by anything that can reach
+this process's memory. The format's job is to make a credential's exposure
+proportional to that credential. A format that requires the whole file to be
+materialised to reach one entry does not do that, no matter how well it avoids
+decoding.
+
+`highWaterMark` is the unit of residency and **MUST be a named constant**, not a
+literal at each call site, so there is one number to reason about when someone asks
+how much of the vault can be resident at once.
 
 ---
 
@@ -127,25 +159,74 @@ or empty file and must refuse.
 
 ## 4. The read algorithm, and where it fails closed
 
-```
-buf = fs.readFileSync(path)          // no encoding argument — a Buffer, no decode
-if buf.length < 48:                        refuse  (too short to be valid)
-if buf[0..4)   != "NFV1":                  refuse
-if FORMAT_VERSION  != 1:                   refuse  (do not attempt to read a future file)
-if HEADER_BYTES    != 16:                  refuse
-if RESERVED        != 0:                   refuse  (unknown bits are not ignored)
-if DIGEST(buf)    != buf[EOF-32..):        refuse  (corruption or truncation)
-```
+The algorithm below is **three passes**, because §1.1 rules out holding the file and
+because §4.1 requires the digest to be known before any field is interpreted. No
+pass ever holds more than `CHUNK_BYTES` at once.
 
-Then walk entries from offset 16 to `EOF−32`, and **before every read**:
+**PASS 1 — size, header, trailer. Three bounded reads. No whole-file allocation.**
 
 ```
-if ENTRY_MAGIC != "NFE1":                  refuse  (misalignment, not a soft error)
-if remaining < 28:                         refuse
-if remaining < 28 + TENANT + KEY + PAY:    refuse  (truncated run)
+fd = open(path, O_RDONLY)                          // numeric handle; no decode, no path retention
+size = fstat(fd).size                              // the ONLY way to learn EOF
+
+if size < 48:                                      refuse  (too short to be valid)
+
+header = scratch(16)                               // FIXED size, allocated once
+read(fd, header, 0, 16, position=0)
+if header[0..4)  != "NFV1":                        refuse
+if FORMAT_VERSION != 1:                            refuse  (do not attempt to read a future file)
+if HEADER_BYTES   != 16:                           refuse
+if RESERVED       != 0:                            refuse  (unknown bits are not ignored)
+
+trailer = scratch(32)                              // FIXED size, allocated once
+read(fd, trailer, 0, 32, position=size - 32)
 ```
 
-And finally: **the number of entries parsed must equal `ENTRY_COUNT`**, or refuse.
+**PASS 2 — the digest, streamed. Same `CHUNK_BYTES` scratch buffer, reused.**
+
+```
+h = HMAC_SHA256(key, empty)
+for each chunk of size CHUNK_BYTES over [0, size - 32):     // createReadStream, or read() loop
+    h.update(chunk)
+    wipe(chunk)                                  // §4.3: the chunk held credential bytes
+if not constantTimeEqual(h.digest(), trailer):               refuse  (corruption or truncation)
+```
+
+The digest is over `[0, EOF−32)` because that is the only region a v1 writer ever
+signed, so the trailer is excluded from its own computation.
+
+**PASS 3 — walk entries, one bounded region at a time.** Entry offsets come from
+the fixed header sizes, so each entry is *seeked to*, not read through:
+
+```
+offset = HEADER_BYTES
+for i in 0 .. ENTRY_COUNT - 1:
+    if offset + 28 > size - 32:                          refuse
+    eh = scratch(28)                                     // FIXED size
+    read(fd, eh, 0, 28, position=offset)
+
+    if ENTRY_MAGIC != "NFE1":                            refuse  (misalignment, not a soft error)
+    if reserved bits in FLAGS != 0:                      refuse
+    TENANT_BYTES = u32(eh, 8);  KEY_BYTES = u32(eh, 12);  PAYLOAD_BYTES = u32(eh, 16)
+    ROTATED_AT     = i64(eh, 20)
+
+    if TENANT_BYTES + KEY_BYTES + PAYLOAD_BYTES overflows u32:   refuse  (untrusted arithmetic)
+    runBytes = 28 + TENANT_BYTES + KEY_BYTES + PAYLOAD_BYTES
+    if offset + runBytes > size - 32:                    refuse  (truncated run)
+
+    // Exactly the runs this call was asked for, and nothing else.
+    tenant = scratch(TENANT_BYTES)                       // only if comparing on bytes, §4.5
+    read(fd, tenant, 0, TENANT_BYTES, position=offset + 28)
+    payload = scratch(PAYLOAD_BYTES)                     // only if this call asked for the value
+    read(fd, payload, 0, PAYLOAD_BYTES, position=offset + 28 + TENANT_BYTES + KEY_BYTES)
+
+    offset = offset + runBytes
+    wipe(tenant); wipe(payload)                          // §4.3
+```
+
+And finally: `offset` **MUST** equal `size − 32`, and the number of entries walked
+**MUST** equal `ENTRY_COUNT`. Either mismatch is a refusal — trailing garbage and a
+short file are both refusals, and neither is "probably fine".
 
 Every one of these is a refusal rather than a repair. A format that "does its best"
 with a corrupt credential file is a format that eventually serves a truncated key as
@@ -156,9 +237,49 @@ though it were complete.
 Before any field is interpreted. A corrupted `PAYLOAD_BYTES` would otherwise send the
 reader to a plausible-looking offset inside a file whose contents are not what the
 operator last wrote. Verifying the whole file before trusting any part of it turns
-"probably fine" into "known", and it is one SHA-256 over a small buffer.
+"probably fine" into "known".
 
-### 4.2 Tenant is checked on BYTES, not on a decoded string
+It is also, now, the **expensive** part of the read: one SHA-256 over every byte
+below the trailer, streamed. That cost is accepted deliberately — it is a
+correctness-before-convenience trade, and §5(5) records what it costs in read
+amplification rather than pretending it is free.
+
+### 4.3 Every buffer that held credential bytes is wiped, including the chunks
+
+The `wipe` in `reader.ts` overwrites the value buffer after it has been hashed.
+That discipline extends to **every** buffer in this algorithm, and it is stated here
+because streaming makes it easy to forget: a pass-2 digest chunk and a pass-3 entry
+region contain live credential bytes just as much as the buffer the reader wipes
+does, and a chunk loop that does not wipe its scratch buffer has simply moved the
+exposure from "one buffer, wiped" to "one buffer, overwritten sixteen times over its
+lifetime".
+
+`randomFillSync`, synchronously, before the buffer is released — the same rule and
+for the same reason as `reader.ts`: a zero fill leaves the previous contents in any
+copy-on-write page the engine made on the way, and "whenever the collector gets
+round to it" is not a time.
+
+### 4.4 What §1.1 does and does not buy, stated before anyone relies on it
+
+Bounded residency means **this process's JavaScript heap** never holds more than
+`CHUNK_BYTES` of the vault. It does **not** mean the plaintext is absent from the
+machine:
+
+- the **OS page cache** will hold plaintext pages for as long as the file is being
+  read, and no userspace change can evict them;
+- the **digest pass reads every byte of the vault** to verify it, so a single
+  integrity check still touches every credential — it just no longer *retains* them,
+  which is a real reduction and is not the same claim as "only one credential was
+  read";
+- a **length-prefixed region read is still a random-access read** into a file that a
+  caller must know the size of, so an implementation that skips pass 1 and guesses
+  offsets has reintroduced §1.1's prohibition while appearing to comply.
+
+The honest claim is therefore: **the decode is gone, and peak heap residency is
+bounded by a constant rather than by the size of the secret estate.** §5 lists what
+is left.
+
+### 4.5 Tenant is checked on BYTES, not on a decoded string
 
 The store must refuse a capability whose tenant does not own the entry. Doing that
 comparison on bytes (`Buffer.compare`, or `timingSafeEqual` after a length check)
@@ -187,11 +308,13 @@ been to name residuals before relying on them.
    `mlock`-capable runtime.
 3. **Core dumps and crash reports** capture resident memory.
 4. **Copies V8 made internally** while the buffer was alive.
-5. **`fs.readFileSync` loads the entire file.** For a large vault, reading one
-   credential means reading every credential. That is itself an exposure, and it
-   argues for an index plus a per-entry read, or a stream with an explicit offset —
-   both of which are more complex than the primitive this ADR is built on, and
-   neither is designed here.
+5. **The digest pass reads every byte.** §1.1 bounds how much is *held*; it cannot
+   bound how much is *read*, because §4.1 verifies the whole file before trusting
+   any of it. A vault whose integrity must be re-verified per call therefore
+   touches every credential on every call. Closing this needs per-entry digests or a
+   signed index, which changes the format and is **not** designed here. Until then,
+   the residual is read amplification, not residency — and the two are commonly
+   confused, so it is named rather than folded into the claim in §4.4.
 
 So the honest claim is: **this removes the decode**, which was the copy this project
 could actually reach and actually measure. It does not make a credential impossible
@@ -239,7 +362,17 @@ format nobody has deployed yet cannot strand anybody.
   rewritten without them? Tombstones keep the format append-only, which is worth a
   great deal; rewriting is smaller.
 - Should `ENTRY_COUNT` be signed or protected against overflow when summed?
-  Untrusted input arithmetic is §4's job, but a bound on the total is cheap.
+  Untrusted input arithmetic is §4's job, but a bound on the total is cheap — and
+  §4 pass 3 now sums three u32 lengths, which is exactly the arithmetic that
+  overflows.
+- What is `CHUNK_BYTES`? §1.1 requires one named constant and deliberately does not
+  set a value, because the right number depends on the vault size and the memory
+  ceiling of the deployment. It needs a number, a floor, and a ceiling, and choosing
+  it is a decision rather than a default.
+- Does pass 1's `fstat` size need re-checking after pass 2? A file rewritten under
+  an open descriptor can change size between the two passes, and the trailer read
+  at `size - 32` would then be at the wrong offset. Either re-`fstat` before each
+  pass or open with a lock, and §4 currently says neither.
 - Does a v1 reader refuse an unknown `FORMAT_VERSION`, or read what it understands?
   §4 refuses. That is a migration decision as much as a safety one.
 
@@ -249,7 +382,10 @@ format nobody has deployed yet cannot strand anybody.
 
 | Obligation | Where |
 |---|---|
-| Credential never becomes a string on the read path | §3.2, §4.2 |
+| Credential never becomes a string on the read path | §3.2, §4.5 |
+| Whole-file reads prohibited; bounded residency required | §1.1, §4 pass 1–3 |
+| Every buffer that held credential bytes is wiped | §4.3 |
+| What bounded residency does not cover, stated | §4.4, §5(5) |
 | Truncation and corruption fail closed | §4, every branch refuses |
 | Unknown versions and reserved bits are not ignored | §3.1, §4 |
 | Rotation readable without decoding anything | §3.2 `ROTATED_AT` |

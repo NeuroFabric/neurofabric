@@ -152,8 +152,13 @@ export interface CredentialReader {
  * and the only symptom was that tooling classified the source as binary. It is an
  * escape now, and documented, so the next reader sees a decision rather than an
  * artefact.
+ *
+ * Exported because `worker/crypto-worker.ts` derives the reference digest from the
+ * same field order and MUST use the same separator: two implementations of
+ * "reference for this credential" that disagree produce two different references for
+ * one credential, and a caller comparing them concludes the value rotated.
  */
-const FIELD_SEP = "\u0000";
+export const FIELD_SEP = "\u0000";
 
 function referenceFor(claims: CapabilityClaims, credentialName: string, value: Buffer): string {
   const digest = createHash("sha256")
