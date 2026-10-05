@@ -417,3 +417,53 @@ test("A PUBLISHED TOOL WITH NO HANDLER IS REFUSED, not run as somebody else's fu
   assert.equal(outcome.ok, false);
   assert.equal(outcome.code, RPC.METHOD_NOT_FOUND, "an unknown name is refused before dispatch");
 });
+
+test("A LINE IS ANSWERED WITHOUT A FOLLOWING ONE, because a real client waits for it", async () => {
+  // FOUND BY THE TRIAGE CLIENT, AND IT IS NOT A CLIENT BUG.
+  //
+  // The loop dispatched a line only when the NEXT one arrived, on the reasoning
+  // that a line is known-complete when something follows it. That reasoning is
+  // sound for the final line at EOF -- but stdio does not reach EOF between
+  // messages. A client that sends `initialize` and waits therefore waited forever,
+  // and no amount of correct framing would have helped it.
+  //
+  // Every MCP client behaves this way, so this embassy could not have been talked
+  // to by one. Nothing else caught it because every other test either feeds several
+  // lines or ends the stream, and both release the held line.
+  const source = new PassThrough();
+  const sink = new PassThrough();
+  const chunks: string[] = [];
+  sink.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+
+  const done = serve(source, sink, CONFIG);
+  source.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.ok(
+    chunks.join("").includes('"id":1'),
+    "the reply must be written when the line is terminated, not when another line happens to follow",
+  );
+
+  source.end();
+  await done;
+});
+
+test("A TRUNCATED FINAL LINE IS STILL DISCARDED, because fixing the above must not weaken this", async () => {
+  // The guard the hold-back existed for. Dispatching on a terminator must not become
+  // dispatching on "whatever is buffered", or a host that dies mid-frame gets a
+  // refusal for a message it never finished writing.
+  const source = new PassThrough();
+  const sink = new PassThrough();
+  const chunks: string[] = [];
+  sink.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+
+  const done = serve(source, sink, CONFIG);
+  source.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  source.end('{"jsonrpc":"2.0","id":2,"method":"too');
+
+  await done;
+  const out = chunks.join("");
+  assert.ok(out.includes('"id":1'), "the complete line was answered");
+  assert.equal(out.includes('"id":2'), false, "the truncated one was discarded, not refused");
+});
