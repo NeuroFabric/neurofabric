@@ -437,3 +437,74 @@ async function assertRejected(outcome: Promise<{ ok: boolean; code?: number }>, 
   assert.equal(settled.ok, false);
   assert.equal(settled.code, code);
 }
+
+// RESPONSES, WHICH THE PRECHECK DEPENDS ON.
+
+test("A RESPONSE IS A RESPONSE, not a methodless frame", () => {
+  // The precheck sends an `elicitation/create` REQUEST to the client, so the
+  // client's answer arrives here as a RESPONSE: an id, a result, and NO method.
+  // The parser used to require a method string, so every approval would have been
+  // refused as an invalid request and every pending read would have timed out --
+  // a gate that looks correctly fail-closed while being entirely non-functional.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 3, result: { action: "accept" } }));
+
+  assert.equal(frame.kind, "response");
+  if (frame.kind === "response") {
+    assert.equal(frame.id, 3);
+    assert.deepEqual(frame.result, { action: "accept" });
+    assert.equal(frame.error, undefined);
+  }
+});
+
+test("AN ERROR RESPONSE IS A RESPONSE, and its code survives", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: "e1", error: { code: RPC.METHOD_NOT_FOUND, message: "no such method" } }));
+
+  assert.equal(frame.kind, "response");
+  if (frame.kind === "response") {
+    assert.equal(frame.id, "e1");
+    assert.equal(frame.error?.code, RPC.METHOD_NOT_FOUND);
+    assert.equal(frame.error?.message, "no such method");
+  }
+});
+
+test("A RESPONSE WITH NO id IS REFUSED, because there is nothing to answer", () => {
+  assert.equal(rejectCode(line({ jsonrpc: "2.0", result: { action: "accept" } })), RPC.INVALID_REQUEST);
+});
+
+test("A RESPONSE WITH AN UNUSABLE id IS REFUSED, and carries no id to answer on", () => {
+  // `id: true` is the classic way to make a dispatcher key a map on a boolean and
+  // collide every later lookup. A response must be refused the same way a request
+  // with the same id is, rather than being special-cased into acceptance.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: true, result: {} }));
+
+  assert.equal(frame.kind, "rejected");
+  if (frame.kind === "rejected") assert.equal(frame.id, null);
+});
+
+test("AN ERROR RESPONSE WITH A NON-NUMERIC code IS REFUSED, rather than believed", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 4, error: { code: "boom", message: "no" } }));
+
+  assert.equal(frame.kind, "rejected");
+});
+
+test("A FRAME WITH AN id BUT NEITHER METHOD, RESULT NOR ERROR IS STILL REJECTED", () => {
+  // The classification must not become a loophole: adding result recognition
+  // cannot turn every methodless frame into a response.
+  assert.equal(rejectCode(line({ jsonrpc: "2.0", id: 3 })), RPC.INVALID_REQUEST);
+});
+
+test("A FRAME CARRYING BOTH A METHOD AND A RESULT IS STILL A REQUEST", () => {
+  // The method is what makes it a request. A stray result member is not a
+  // response wearing a request's clothes, and answering it as one would let a
+  // caller smuggle an answer past the correlation check.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 5, method: "tools/list", result: { action: "accept" } }));
+
+  assert.equal(frame.kind, "request");
+  assert.equal(frame.kind === "request" ? frame.method : null, "tools/list");
+});
+
+test("A RESPONSE IS NOT A NOTIFICATION, because it expects an answer and carries an id", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 6, result: {} }));
+
+  assert.notEqual(frame.kind, "notification");
+});
