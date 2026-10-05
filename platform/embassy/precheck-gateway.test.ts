@@ -92,17 +92,14 @@ function session(extras: {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
 
   /**
-   * Send a line, then FLUSH.
+   * Send a line, then flush.
    *
-   * The loop holds one line back on purpose -- a line is only known-complete when
-   * something follows it, because only that proves a terminator arrived. So a
-   * reply to line N is written when line N+1 arrives, and a test that writes one
-   * line and waits sees nothing. The blank line is the follow-on that releases it,
-   * and blank lines are ignored rather than answered as parse errors.
-   *
-   * That behaviour is correct and was already pinned by the framing tests. It is
-   * re-stated here because a precheck test that forgets it fails in a way that
-   * looks like the precheck is broken: nothing is ever emitted, ever.
+   * The flush is now REDUNDANT and kept deliberately. The loop used to hold one line
+   * back until a follow-on arrived, so this was required; it was removed as a
+   * `read`/`write` interop defect rather than a test artefact, and a test that stops
+   * flushing would quietly stop covering the case that proves it fixed. The blank
+   * line is a follow-on, and blank lines are ignored rather than answered as parse
+   * errors, so sending one is harmless.
    */
   const send = async (line: string) => {
     input.write(`${line}\n`);

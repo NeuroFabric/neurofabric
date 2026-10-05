@@ -90,6 +90,13 @@ export function readConfig(env: Readonly<Record<string, string | undefined>>): E
     // `origin + path` is string concatenation and `http://h//api/portal/live` is a
     // different path to a different handler on some servers.
     endpoint: { origin: origin.replace(/\/+$/, ""), timeoutMs },
+    // NAMES for the approval prompt, and nothing more. The tenant here labels a
+    // decision; the credential still decides who the data belongs to, and the store
+    // still derives that from what it proves. Reading them here means an operator
+    // looking at a prompt sees which tenant and which capability are in play
+    // without either being a channel the caller can influence per call.
+    ...(env["NEUROFEBRIC_EMBASSY_TENANT"] === undefined ? {} : { tenant: env["NEUROFEBRIC_EMBASSY_TENANT"] as string }),
+    ...(env["NEUROFEBRIC_CAPABILITY_ID"] === undefined ? {} : { capability: env["NEUROFEBRIC_CAPABILITY_ID"] as string }),
   };
 }
 
@@ -574,17 +581,20 @@ export async function serve(
    * readline STRIPS the terminator before yielding, so by the time a line arrives
    * there is no way to tell a complete line from a truncated one. The only place
    * that knowledge still exists is the raw byte stream, so the input is tapped
-   * before readline sees it and the final byte is recorded there.
+   * before readline sees it and the terminators are COUNTED there.
    *
-   * This matters because readline ALWAYS emits the last partial line, even on a
-   * clean end. Without the tap, a host that closed the pipe mid-frame would get a
-   * -32700 parse error for a frame it never finished writing -- an error reported
-   * to a party that has already gone away, about a message that does not exist.
+   * A count rather than a flag is what makes the reply safe to send early. The
+   * previous tap recorded only whether the most recent chunk ended on a newline,
+   * which is enough to judge the final line at end of stream and not enough to
+   * release anything while the stream is still open -- and a stream between
+   * messages is always still open.
    */
-  let endedOnNewline = true;
+  let terminated = 0;
   const tap = new Transform({
     transform(chunk: Buffer, _encoding, done) {
-      if (chunk.length > 0) endedOnNewline = chunk[chunk.length - 1] === 0x0a;
+      for (let i = 0; i < chunk.length; i += 1) {
+        if (chunk[i] === 0x0a) terminated += 1;
+      }
       done(null, chunk);
     },
   });
@@ -603,29 +613,43 @@ export async function serve(
   };
 
   /**
-   * ONE LINE IS HELD BACK, because the last line is the one that cannot be trusted.
+   * A LINE IS DISPATCHED WHEN IT IS TERMINATED, NOT WHEN THE NEXT ONE ARRIVES.
    *
-   * A line is known-complete only when something FOLLOWS it -- that is what proves
-   * a terminator arrived. So each complete line is dispatched as the next one
-   * arrives, and the final line waits until the tap has said whether the stream
-   * ended on a newline. Dispatching it eagerly and reporting truncation afterwards
-   * would answer a frame the host never finished writing, which is precisely the
-   * defect obligation 3 exists to prevent.
+   * The previous loop held one line back, on the reasoning that a line is known
+   * complete only when something FOLLOWS it. That is true of the final line at end
+   * of stream, and it was the whole of obligation 3 -- but stdio does not reach end
+   * of stream between messages. A client that sends `initialize` and waits for the
+   * reply therefore waited forever, and every MCP client behaves that way. The
+   * triage client in scripts/ is what found it: the embassy was correct and
+   * unusable by its only real consumer, and no test caught it because every other
+   * test either fed several lines or ended the stream, both of which released the
+   * held line.
+   *
+   * So the terminator is the signal, and the tap has now counted them. A line read
+   * ahead of that count is held back, which is obligation 3 kept intact rather than
+   * traded away for the fix: a host that dies mid-frame still gets no answer for a
+   * message it never finished writing.
    */
-  let held: string | null = null;
+  const waiting: string[] = [];
+  let released = 0;
+
   for await (const line of reader) {
-    if (held !== null && held.trim() !== "") await emit(held);
-    held = line;
+    waiting.push(line);
+    // Release everything the tap has PROVEN terminated. On a well-behaved stream
+    // this is the line just read; on a truncated tail it is not, which is the point.
+    while (released < terminated && waiting.length > 0) {
+      const ready = waiting.shift() as string;
+      released += 1;
+      if (ready.trim() !== "") await emit(ready);
+    }
   }
 
-  if (held === null) return;
-  if (!endedOnNewline) {
-    // Discarded, and named on stderr. stdout is the protocol channel and the host
-    // has already closed its end, so a frame here would be a message to nobody.
+  // End of stream. Anything still waiting is a frame with no terminator, so it was
+  // never finished writing. Discarded, and named on stderr, because stdout is the
+  // protocol channel and a frame here would be a message to a host that has gone.
+  if (waiting.length > 0) {
     process.stderr.write("neurofebric-embassy: the final frame was truncated and was discarded\n");
-    return;
   }
-  if (held.trim() !== "") await emit(held);
 }
 
 /** The process entry point. Used by the launcher, not by the tests. */
