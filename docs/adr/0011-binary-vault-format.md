@@ -1,16 +1,25 @@
 # ADR-011 — LENGTH-PREFIXED BINARY CREDENTIAL STORAGE
 
-- **Status:** **PROPOSED. Not implemented. No reader, no writer, no migration.**
-- **Date:** 2026-10-04
-- **Ratified by:** — nothing here exists in code. The format below is a design, and
-  the tests that would falsify it have not been written.
+- **Status:** **IMPLEMENTED — read path only.** The reader in §4 exists, in
+  `platform/vault/worker/crypto-worker.ts`, and it refuses on every branch §4
+  specifies. **There is still no writer and no migration.** Nothing produces a
+  binary vault yet, so the only files this reader has ever opened are ones built by
+  hand in a test fixture. The format is live on the read side and inert on the write
+  side, and §6 remains entirely ahead of the code.
+- **Date:** 2026-10-04 (proposed) · 2026-10-04 (read path implemented)
+- **Ratified by:** §3 and §4 are ratified by
+  `platform/vault/worker/crypto-worker.ts`, committed as the read path. §6 is not
+  ratified by anything, because nothing implements it.
 - **Closes:** the first of the three residuals in ADR-010 §A7.2
 - **Relates to:** ADR-010 (§A7.2, §A7.3), ADR-008, `platform/vault/store.ts`,
-  `platform/vault/file-source.ts`
+  `platform/vault/file-source.ts`, `platform/vault/reader.ts`
 
-> **Read-before-build gate: OPEN.** Nothing in §3 may be implemented before
-> ratification, because the byte layout is a contract and a contract changed after a
-> file has been written is a migration nobody planned for.
+> **Read-before-build gate: CLOSED for §3 and §4, OPEN for §6.** The byte layout was
+> implemented rather than ratified first, which is the order this document exists to
+> prevent, and the reason it was safe is that the reader is not wired to anything:
+> no vault in any deployment is in this format, so no file has been written against
+> a contract that could still move. **The gate re-opens the moment a writer exists.**
+> If the layout changes after that point, §6 is not optional and is not a follow-up.
 
 ---
 
@@ -373,6 +382,42 @@ format nobody has deployed yet cannot strand anybody.
   an open descriptor can change size between the two passes, and the trailer read
   at `size - 32` would then be at the wrong offset. Either re-`fstat` before each
   pass or open with a lock, and §4 currently says neither.
+
+### 8.1 KNOWN RESIDUAL — the size TOCTOU (Phase 4)
+
+The question above is not open. It is a **known, accepted defect**, recorded here
+so that it is a decision rather than a surprise:
+
+> **`crypto-worker.ts` stats the file once, in pass 1, and every later offset in
+> passes 1, 2 and 3 is derived from that one number.** If the file is replaced or
+> rewritten between the `fstat` and the pass-3 seeks, the reader applies the entry
+> offsets of one file to the bytes of another.
+
+The window is small — a credential vault is not expected to be rewritten by
+anything but the writer, and there is no writer — and the failure is **refusal, not
+disclosure**, in the cases that matter:
+
+- the digest in pass 2 covers `[0, size − 32)` of whatever is actually there, so a
+  substituted file fails the HMAC unless it was signed with the same key;
+- a truncated-by-rewrite file fails the `offset + runBytes > digestLimit` bound;
+- the `ENTRY_COUNT` sanity bound is computed from the stale `size`, so a file that
+  grew after the stat is bounded by the *smaller* number, which fails closed.
+
+The residual that is **not** covered: a file rewritten *in place, same size, by a
+process holding the key* is indistinguishable from the original, because it is
+signed correctly by construction. That is true of any HMAC scheme and is not
+specific to this race.
+
+Deferred to **Phase 4**, and it should be one of three things, in this order of
+preference: (1) re-`fstat` and refuse if the size or mtime moved since pass 1 —
+cheap, catches the realistic case, does not catch a same-size in-place rewrite;
+(2) hold an exclusive lock across passes 1–3, which is correct and which an
+operator's rotation job may not tolerate; (3) put the entry offsets in a signed
+index, which removes the stat entirely and is a format change.
+
+Until then, **the file's size is assumed stable for the duration of one read**, and
+an operator who rewrites a vault concurrently with a read should expect a refusal,
+not a wrong answer. That assumption is the residual.
 - Does a v1 reader refuse an unknown `FORMAT_VERSION`, or read what it understands?
   §4 refuses. That is a migration decision as much as a safety one.
 
@@ -390,5 +435,6 @@ format nobody has deployed yet cannot strand anybody.
 | Unknown versions and reserved bits are not ignored | §3.1, §4 |
 | Rotation readable without decoding anything | §3.2 `ROTATED_AT` |
 | Residual stated before anyone relies on it | §5 |
-| Not implemented | Status, §9 |
+| Read path exists; write path and migration do not | Status, §9 |
+| Size TOCTOU across passes recorded as an accepted defect | §8.1 |
 | Swap exposure is out of scope and named | §5(2) |
