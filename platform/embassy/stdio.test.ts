@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { serve, readConfig, type EmbassyConfig } from "./server.ts";
-import { TOOLS, callTool } from "./tools.ts";
+import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs } from "./tools.ts";
 import { RPC } from "./jsonrpc.ts";
 
 /**
@@ -213,17 +213,51 @@ test("the embassy reaches NO ingestion or streaming module", async () => {
   // truths would acquire a third source and the statelessness argument collapses.
   //
   // A comment is not a control, so this is an assertion over the import graph.
+  //
+  // THE EXCEPTION IS `server.ts`, AND IT IS THE POINT.
+  //
+  // When the embassy had no credential tool, NOTHING here could reach the vault,
+  // because there was nothing to reach. ADR-009 §3.2 anticipated the change: the
+  // dispatcher receives a reader FACTORY, and the port is implemented outside this
+  // package, so the composition root is the one place that legitimately names it.
+  //
+  // So the boundary narrows rather than disappearing. `tools.ts`, `jsonrpc.ts`,
+  // `elicitation.ts` and `core.ts` still may not reach the vault, which is what
+  // keeps a protocol-layer module from ever holding a credential -- and that is the
+  // property worth keeping, because those are the files an agent's arguments reach
+  // first.
   const here = fileURLToPath(new URL(".", import.meta.url));
   const forbidden = ["ingestion", "conductor", "live-anomaly", "omniroute-gateway", "store.ts"];
+  const COMPOSITION_ROOT = "server.ts";
   const offenders: string[] = [];
   for (const file of readdirSync(here)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
     const code = readFileSync(new URL(file, import.meta.url), "utf8");
     for (const needle of forbidden) {
+      // `store.ts` is the one the composition root is entitled to name; everything
+      // else stays forbidden for everyone.
+      if (needle === "store.ts" && file === COMPOSITION_ROOT) continue;
       if (code.includes(`/${needle}`) || code.includes(`/${needle}.ts`)) offenders.push(`${file} -> ${needle}`);
     }
   }
   assert.deepEqual(offenders, []);
+});
+
+test("THE PROTOCOL LAYER CANNOT REACH THE VAULT, which is narrower than nobody and stronger than everything", () => {
+  // Stated separately from the scan above, because "the composition root may" is
+  // only meaningful if the other half is pinned: the modules that parse an agent's
+  // arguments and the frames around them must never hold a credential.
+  //
+  // If this ever fails, the credential has moved somewhere it can be reached without
+  // an approval -- which is the one property the whole port arrangement exists to
+  // make structural.
+  const PROTOCOL_LAYER = ["tools.ts", "jsonrpc.ts", "elicitation.ts", "core.ts"];
+  const offenders: string[] = [];
+  for (const file of PROTOCOL_LAYER) {
+    const code = readFileSync(new URL(file, import.meta.url), "utf8");
+    if (/\.\.\/vault\//.test(code)) offenders.push(file);
+  }
+  assert.deepEqual(offenders, [], "a protocol-layer module must not import the vault");
 });
 
 test("config rejects a missing origin even when a token is present", () => {
@@ -282,7 +316,7 @@ test("DISCOVERY AFTER THE HANDSHAKE ANSWERS, with a schema for every tool", asyn
 
   assert.deepEqual(
     tools.map((tool) => tool["name"]),
-    ["get_verdict", "install_schema", "ingest_events"],
+    ["get_verdict", "install_schema", "ingest_events", "read_credential"],
     "every published tool is discoverable",
   );
 
@@ -336,18 +370,23 @@ test("EVERY PUBLISHED TOOL REACHES ITS OWN CORE ROUTE, so the listing cannot dri
     ingest_events: { events: [{ fields: { a: "1" } }] },
   };
 
+  // The fourth published tool has no core route and is not in this file's remit:
+  // `read_credential` is routed through the approval path and never reaches the
+  // core, which is exactly why it must appear here. A published tool with neither
+  // a route nor an approval path would be advertised to every client and refused at
+  // the call, and this assertion is the one that says so.
   assert.deepEqual(
     TOOLS.map((tool) => tool.name).sort(),
-    Object.keys(ROUTES).sort(),
-    "every published tool declares the core route it must reach",
+    [...Object.keys(ROUTES), READ_CREDENTIAL_TOOL].sort(),
+    "every published tool either reaches a core route or goes through the approval path",
   );
   assert.deepEqual(
-    TOOLS.map((tool) => tool.name).sort(),
+    Object.keys(ROUTES).sort(),
     Object.keys(ARGS).sort(),
-    "every published tool declares the arguments this test calls it with",
+    "every core-routed tool declares the arguments this test calls it with",
   );
 
-  for (const tool of TOOLS.map((entry) => entry.name)) {
+  for (const tool of Object.keys(ROUTES)) {
     seen.length = 0;
     const source = Readable.from([
       Buffer.from(
@@ -377,4 +416,54 @@ test("A PUBLISHED TOOL WITH NO HANDLER IS REFUSED, not run as somebody else's fu
   const outcome = await callTool("not_implemented", { endpoint: CONFIG.endpoint, credential: "tok" }, {});
   assert.equal(outcome.ok, false);
   assert.equal(outcome.code, RPC.METHOD_NOT_FOUND, "an unknown name is refused before dispatch");
+});
+
+test("A LINE IS ANSWERED WITHOUT A FOLLOWING ONE, because a real client waits for it", async () => {
+  // FOUND BY THE TRIAGE CLIENT, AND IT IS NOT A CLIENT BUG.
+  //
+  // The loop dispatched a line only when the NEXT one arrived, on the reasoning
+  // that a line is known-complete when something follows it. That reasoning is
+  // sound for the final line at EOF -- but stdio does not reach EOF between
+  // messages. A client that sends `initialize` and waits therefore waited forever,
+  // and no amount of correct framing would have helped it.
+  //
+  // Every MCP client behaves this way, so this embassy could not have been talked
+  // to by one. Nothing else caught it because every other test either feeds several
+  // lines or ends the stream, and both release the held line.
+  const source = new PassThrough();
+  const sink = new PassThrough();
+  const chunks: string[] = [];
+  sink.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+
+  const done = serve(source, sink, CONFIG);
+  source.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.ok(
+    chunks.join("").includes('"id":1'),
+    "the reply must be written when the line is terminated, not when another line happens to follow",
+  );
+
+  source.end();
+  await done;
+});
+
+test("A TRUNCATED FINAL LINE IS STILL DISCARDED, because fixing the above must not weaken this", async () => {
+  // The guard the hold-back existed for. Dispatching on a terminator must not become
+  // dispatching on "whatever is buffered", or a host that dies mid-frame gets a
+  // refusal for a message it never finished writing.
+  const source = new PassThrough();
+  const sink = new PassThrough();
+  const chunks: string[] = [];
+  sink.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+
+  const done = serve(source, sink, CONFIG);
+  source.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  source.end('{"jsonrpc":"2.0","id":2,"method":"too');
+
+  await done;
+  const out = chunks.join("");
+  assert.ok(out.includes('"id":1'), "the complete line was answered");
+  assert.equal(out.includes('"id":2'), false, "the truncated one was discarded, not refused");
 });

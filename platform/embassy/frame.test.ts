@@ -9,7 +9,7 @@ import {
   serialise,
   success,
 } from "./jsonrpc.ts";
-import { TOOLS, callTool, isTool } from "./tools.ts";
+import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, isTool } from "./tools.ts";
 import { CORE_PATHS, type CoreFetch } from "./core.ts";
 import { readConfig } from "./server.ts";
 
@@ -184,14 +184,28 @@ test("an internal fault never carries its cause outward", () => {
   assert.equal(envelope.error.message.includes("/"), false);
 });
 
-test("THE PUBLISHED SURFACE IS EXACTLY THREE TOOLS", () => {
+test("THE PUBLISHED SURFACE IS EXACTLY FOUR TOOLS, AND THREE OF THEM PROXY A ROUTE", () => {
   // The array IS the capability surface, so its length is the assertion that
-  // matters most. A fourth tool added here is a fourth capability added.
-  assert.equal(TOOLS.length, 3);
-  assert.deepEqual(
-    TOOLS.map((tool) => tool.name).sort(),
-    ["get_verdict", "ingest_events", "install_schema"],
-  );
+  // matters most. The fourth is `read_credential`, and it is the tool that makes
+  // this assertion a tripwire rather than a number: adding a fifth tool here is a
+  // fifth capability, and the second assertion below is what makes it fail unless
+  // the new tool has somewhere to go.
+  assert.equal(TOOLS.length, 4);
+  assert.deepEqual(TOOLS.map((tool) => tool.name).sort(), [
+    "get_verdict",
+    "ingest_events",
+    "install_schema",
+    "read_credential",
+  ]);
+
+  // Every published tool must be either proxied to a core route or routed through
+  // the approval path. A tool that is neither is advertised to every connecting
+  // client and then refuses at the call -- which is the one failure a published
+  // list can have that no amount of correct handler code prevents.
+  const routed = new Set([...PROXIED_TOOLS, READ_CREDENTIAL_TOOL]);
+  for (const tool of TOOLS) {
+    assert.ok(routed.has(tool.name), `${tool.name} is published but routed nowhere`);
+  }
 });
 
 test("EVERY TOOL REFUSES ADDITIONAL PROPERTIES", () => {
@@ -211,12 +225,37 @@ test("no tool's ARGUMENT SCHEMA accepts a tenant, a token, or a credential", () 
   // prose that legitimately say which tenant a tool answers for -- "this session's
   // tenant" is the whole point of the sentence -- and a bare substring search over
   // the serialised tool would flag the documentation for being accurate.
+  // Asserted on the PROPERTY NAMES, not on the serialised schema.
+  //
+  // A description is prose that legitimately says which tenant a tool answers for
+  // -- "this session's tenant" is the whole point of the sentence -- and searching
+  // the serialised text flagged the documentation for being accurate. What must be
+  // absent is a PROPERTY, because a property is something a caller can pass.
+  //
+  // `read_credential` is the deliberate exception and the reason this test needed
+  // rewriting rather than deleting. It NAMES a credential -- that is its entire
+  // purpose, and a schema that hid the parameter would only move the argument out
+  // of the published surface and into a place an agent cannot see it. What it must
+  // not accept is the pair that would defeat the approval: a TENANT, or a bearer
+  // value. Those stay absent, so the tenant still comes from the session and the
+  // capability still comes from the operator.
   for (const tool of TOOLS) {
-    const schema = JSON.stringify(tool.inputSchema);
-    for (const forbidden of ["tenant", "token", "credential", "provider"]) {
-      assert.equal(schema.includes(forbidden), false, `${tool.name} accepts "${forbidden}"`);
+    const properties = Object.keys((tool.inputSchema as { properties?: object }).properties ?? {});
+    const forbidden = tool.name === READ_CREDENTIAL_TOOL ? ["tenant", "token", "provider"] : ["tenant", "token", "credential", "provider"];
+    for (const word of forbidden) {
+      assert.equal(properties.includes(word), false, `${tool.name} accepts a "${word}" property`);
     }
   }
+  assert.deepEqual(
+    Object.keys((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: object }).properties ?? {}).sort(),
+    ["credentialName", "exposure"],
+    "and it names exactly two things: the entry, and whether the value or a reference is wanted. Never a tenant, never a bearer.",
+  );
+  assert.deepEqual(
+    ((TOOLS.find((tool) => tool.name === READ_CREDENTIAL_TOOL)?.inputSchema as { properties?: { exposure?: { enum?: unknown } } }).properties?.exposure?.enum) ?? [],
+    ["metadata", "reference", "raw"],
+    "and exposure is a closed enum, so no fourth mode can be invented at the call site",
+  );
 });
 
 test("an unknown tool is refused and the surface is NOT echoed", async () => {
@@ -437,3 +476,74 @@ async function assertRejected(outcome: Promise<{ ok: boolean; code?: number }>, 
   assert.equal(settled.ok, false);
   assert.equal(settled.code, code);
 }
+
+// RESPONSES, WHICH THE PRECHECK DEPENDS ON.
+
+test("A RESPONSE IS A RESPONSE, not a methodless frame", () => {
+  // The precheck sends an `elicitation/create` REQUEST to the client, so the
+  // client's answer arrives here as a RESPONSE: an id, a result, and NO method.
+  // The parser used to require a method string, so every approval would have been
+  // refused as an invalid request and every pending read would have timed out --
+  // a gate that looks correctly fail-closed while being entirely non-functional.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 3, result: { action: "accept" } }));
+
+  assert.equal(frame.kind, "response");
+  if (frame.kind === "response") {
+    assert.equal(frame.id, 3);
+    assert.deepEqual(frame.result, { action: "accept" });
+    assert.equal(frame.error, undefined);
+  }
+});
+
+test("AN ERROR RESPONSE IS A RESPONSE, and its code survives", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: "e1", error: { code: RPC.METHOD_NOT_FOUND, message: "no such method" } }));
+
+  assert.equal(frame.kind, "response");
+  if (frame.kind === "response") {
+    assert.equal(frame.id, "e1");
+    assert.equal(frame.error?.code, RPC.METHOD_NOT_FOUND);
+    assert.equal(frame.error?.message, "no such method");
+  }
+});
+
+test("A RESPONSE WITH NO id IS REFUSED, because there is nothing to answer", () => {
+  assert.equal(rejectCode(line({ jsonrpc: "2.0", result: { action: "accept" } })), RPC.INVALID_REQUEST);
+});
+
+test("A RESPONSE WITH AN UNUSABLE id IS REFUSED, and carries no id to answer on", () => {
+  // `id: true` is the classic way to make a dispatcher key a map on a boolean and
+  // collide every later lookup. A response must be refused the same way a request
+  // with the same id is, rather than being special-cased into acceptance.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: true, result: {} }));
+
+  assert.equal(frame.kind, "rejected");
+  if (frame.kind === "rejected") assert.equal(frame.id, null);
+});
+
+test("AN ERROR RESPONSE WITH A NON-NUMERIC code IS REFUSED, rather than believed", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 4, error: { code: "boom", message: "no" } }));
+
+  assert.equal(frame.kind, "rejected");
+});
+
+test("A FRAME WITH AN id BUT NEITHER METHOD, RESULT NOR ERROR IS STILL REJECTED", () => {
+  // The classification must not become a loophole: adding result recognition
+  // cannot turn every methodless frame into a response.
+  assert.equal(rejectCode(line({ jsonrpc: "2.0", id: 3 })), RPC.INVALID_REQUEST);
+});
+
+test("A FRAME CARRYING BOTH A METHOD AND A RESULT IS STILL A REQUEST", () => {
+  // The method is what makes it a request. A stray result member is not a
+  // response wearing a request's clothes, and answering it as one would let a
+  // caller smuggle an answer past the correlation check.
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 5, method: "tools/list", result: { action: "accept" } }));
+
+  assert.equal(frame.kind, "request");
+  assert.equal(frame.kind === "request" ? frame.method : null, "tools/list");
+});
+
+test("A RESPONSE IS NOT A NOTIFICATION, because it expects an answer and carries an id", () => {
+  const frame = parseFrame(line({ jsonrpc: "2.0", id: 6, result: {} }));
+
+  assert.notEqual(frame.kind, "notification");
+});

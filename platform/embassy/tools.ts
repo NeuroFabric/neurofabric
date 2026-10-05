@@ -83,7 +83,53 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "read_credential",
+    description:
+      "Read one named credential for this session's tenant, after an operator approves it. Requires a client that can ask the operator.",
+    inputSchema: {
+      type: "object",
+      required: ["credentialName"],
+      properties: {
+        credentialName: {
+          type: "string",
+          description: "The specific entry to read. No tenant: that comes from the session.",
+          minLength: 1,
+        },
+        exposure: {
+          type: "string",
+          description:
+            "Omit, or use reference, to get a stable non-reversible label and never the bytes. raw returns the plaintext and requires a separate acknowledgement from the operator.",
+          enum: ["metadata", "reference", "raw"],
+          default: "reference",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ] as const;
+
+/**
+ * THE TOOLS THAT PROXY A CORE ROUTE.
+ *
+ * Deliberately a SUBSET of `TOOLS`, and the difference is load-bearing.
+ *
+ * `TOOLS` is what a client discovers: the whole capability surface.
+ * `read_credential` is in it, so a client can find it and bind to it. But it is
+ * NOT proxied here, because reaching it means an operator decides first, and that
+ * decision lives in the dispatcher where the pending row is.
+ *
+ * Listing it without routing it would be exactly the drift MR !113's tripwire
+ * exists to catch: a tool advertised to every connecting client that then refuses
+ * at the call. So the split is declared rather than implied, `callTool`'s last arm
+ * refuses anything not proxied, and the tripwire test asserts every published tool
+ * declares a route of one kind or the other.
+ */
+export const PROXIED_TOOLS: ReadonlySet<string> = new Set(["get_verdict", "install_schema", "ingest_events"]);
+
+/** The one published tool that is NOT proxied. Named so the dispatcher and the
+ *  tripwire test agree on it without either repeating the string. */
+export const READ_CREDENTIAL_TOOL = "read_credential";
 
 export type ToolName = (typeof TOOLS)[number]["name"];
 
@@ -301,8 +347,7 @@ export async function ingestEvents(ctx: HandlerContext, args: Readonly<Record<st
 
 /** Dispatch one tool call. Returns rather than throws, for obligation 4. */
 export async function callTool(name: string, ctx: HandlerContext, args: Readonly<Record<string, unknown>>): Promise<ToolOutcome> {
-  if (!isTool(name)) {
-    // The published list is not echoed back. Naming what exists to an agent that
+  if (!isTool(name)) {    // The published list is not echoed back. Naming what exists to an agent that
     // asked for something else is reconnaissance, and the portal edge makes the
     // same choice at its 404 for the same reason.
     return { ok: false, code: RPC.METHOD_NOT_FOUND, message: "no such tool" };
@@ -330,10 +375,45 @@ export async function callTool(name: string, ctx: HandlerContext, args: Readonly
     if (name === "get_verdict") return await getVerdict(safe, args);
     if (name === "install_schema") return await installSchema(safe, args);
     if (name === "ingest_events") return await ingestEvents(safe, args);
-    return { ok: false, code: RPC.INTERNAL_ERROR, message: "this tool is published but has no handler" };
+    if (PROXIED_TOOLS.has(name)) {
+      return { ok: false, code: RPC.INTERNAL_ERROR, message: "this tool is published but has no handler" };
+    }
+    // Published, but NOT proxied. `read_credential` reaches its handler through
+    // the precheck in the dispatcher, and arriving here means the dispatcher did
+    // not route it -- which is a bug rather than a refusal a caller should meet.
+    return { ok: false, code: RPC.INTERNAL_ERROR, message: "this tool is dispatched through the approval path" };
   } catch {
     // The belt to `core.ts`'s braces. A handler that threw would end the
     // dispatcher, and the dispatcher ending is the host agent's session ending.
     return { ok: false, code: RPC.INTERNAL_ERROR, message: "the tool did not complete" };
   }
+}
+
+// Validate `read_credential`'s arguments.
+//
+// Named, exported, and SEPARATE from any handler, because this tool has no
+// handler here -- the dispatcher owns it, since reaching it means an operator
+// decides first.
+//
+// Returned rather than thrown so a refusal travels the same path as every other
+// tool outcome, and so a malformed call cannot become a modal dialog for an
+// operator who was never asked about anything.
+export function readCredentialArgs(args: Readonly<Record<string, unknown>>): ToolOutcome | null {
+  const unknown = rejectUnknown(args, ["credentialName", "exposure"]);
+  if (unknown !== null) return unknown;
+
+  const name = args["credentialName"];
+  if (typeof name !== "string" || name.trim() === "") {
+    return invalid("the credentialName argument must be a non-empty string");
+  }
+
+  // The exposure enum is enforced HERE as well as published, because the published
+  // schema is documentation to a client while this is the enforcement point. A
+  // caller that invents a third mode gets a refusal rather than silently landing on
+  // whichever branch happens to be the default.
+  const exposure = args["exposure"];
+  if (exposure !== undefined && exposure !== "metadata" && exposure !== "reference" && exposure !== "raw") {
+    return invalid('the exposure argument must be "metadata", "reference" or "raw"');
+  }
+  return null;
 }

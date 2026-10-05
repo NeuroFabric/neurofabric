@@ -104,7 +104,37 @@ export interface RpcRejection {
   readonly message: string;
 }
 
-export type ParsedFrame = RpcRequest | RpcNotification | RpcRejection;
+/** A Response: an answer from the peer to a request WE sent. Carries an id and no method. */export interface RpcResponse {
+  readonly kind: "response";
+  /** The id of the request being answered, echoed exactly. */
+  readonly id: RpcId;
+  readonly result?: unknown;
+  readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
+}
+
+/** A Request WE send. Added for elicitation, the one place this server speaks first. */
+export interface RpcOutboundRequest {
+  readonly jsonrpc: "2.0";
+  readonly id: RpcId;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
+/**
+ * An outbound Request envelope.
+ *
+ * Separate from `success` on purpose. Elicitation makes this server the SENDER of
+ * a request, and a request envelope is not a response envelope with different
+ * contents -- it has `method` and `params` where a response has `result`. Building
+ * one through the other's helper would have produced a well-formed frame carrying
+ * the wrong shape, which is worse than a malformed one because nothing would
+ * object.
+ */
+export function request(id: RpcId, method: string, params?: unknown): RpcOutboundRequest {
+  return { jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) };
+}
+
+export type ParsedFrame = RpcRequest | RpcNotification | RpcRejection | RpcResponse;
 
 /**
  * Parse one line into a frame.
@@ -137,6 +167,75 @@ export function parseFrame(line: string): ParsedFrame {
 
   const frame = value as Record<string, unknown>;
 
+  /**
+   * === RESPONSES, AND WHY THEY ARE CLASSIFIED HERE AND NOT LATER ===
+   *
+   * Until the precheck, this parser had never needed to read one: an embassy only
+   * ever receives requests, and a frame with no `method` was refused outright.
+   * The precheck changed that. It SENDS an `elicitation/create` request to the
+   * client, so the client's answer comes back as a response -- an id, a result,
+   * and no method -- and would have been rejected as an invalid request on every
+   * single approval.
+   *
+   * The failure would have looked correct. Every pending read would have timed
+   * out into a refusal, and a gate that refuses everything is indistinguishable
+   * from a working gate that simply said no. So the classification is here, and
+   * the tests around it are mostly about what must NOT become a response.
+   */
+  const hasId = Object.prototype.hasOwnProperty.call(frame, "id");
+  const method = frame["method"];
+  const isResponse =
+    method === undefined &&
+    (Object.prototype.hasOwnProperty.call(frame, "result") ||
+      Object.prototype.hasOwnProperty.call(frame, "error"));
+
+  if (isResponse) {
+    // A response with no id has nothing to answer, so there is nowhere to put the
+    // reply and no way for the caller to correlate it. Refused rather than
+    // treated as a notification, which would be a request with no method.
+    if (!hasId) {
+      return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "a response must carry the id it answers" };
+    }
+    const responseId = readId(frame);
+    if (responseId === undefined) {
+      // Same rule as a request with an unusable id: `id: true` would key a map on
+      // a boolean, and a response must not be special-cased into acceptance.
+      return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "the id is not a string, a number, or null" };
+    }
+
+    // An error object is validated rather than believed. A `code` that is not a
+    // number is not a refusal we can record or compare, and forwarding it would
+    // put a string into a field every consumer reads as a number.
+    if (frame["error"] !== undefined) {
+      const raw = frame["error"];
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "the response error is not an object" };
+      }
+      const error = raw as Record<string, unknown>;
+      if (typeof error["code"] !== "number" || !Number.isFinite(error["code"])) {
+        return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "the response error carries no numeric code" };
+      }
+      if (typeof error["message"] !== "string") {
+        return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "the response error carries no message" };
+      }
+      return {
+        kind: "response",
+        id: responseId,
+        error: {
+          code: error["code"],
+          message: error["message"],
+          ...(error["data"] === undefined ? {} : { data: error["data"] }),
+        },
+      };
+    }
+
+    return { kind: "response", id: responseId, result: frame["result"] };
+  }
+
+  // A frame carrying BOTH a method and a result is a request. The method is what
+  // makes it one, and answering it as a response would let a caller smuggle an
+  // answer past the correlation check.
+
   // The version is checked BEFORE anything else, and it is checked for equality.
   // A missing jsonrpc member and a wrong one are the same defect: this is not a
   // JSON-RPC 2.0 peer. Accepting an absent member is how a 1.0 client silently
@@ -145,22 +244,18 @@ export function parseFrame(line: string): ParsedFrame {
     return { kind: "rejected", id: null, code: RPC.INVALID_REQUEST, message: "the frame does not declare JSON-RPC 2.0" };
   }
 
-  if (typeof frame["method"] !== "string" || frame["method"].length === 0) {
+  if (typeof method !== "string" || method.length === 0) {
     return { kind: "rejected", id: readId(frame) ?? null, code: RPC.INVALID_REQUEST, message: "the frame carries no method name" };
   }
 
   const params = frame["params"];
-  if (params !== undefined && params !== null) {
-    // Structured only: object or array. A scalar `params` is invalid in 2.0, and
+  if (params !== undefined && params !== null) {    // Structured only: object or array. A scalar `params` is invalid in 2.0, and
     // accepting one would mean every tool had to defend against a number or a
     // string where it expected a bag of named arguments.
     if (typeof params !== "object") {
       return { kind: "rejected", id: readId(frame) ?? null, code: RPC.INVALID_PARAMS, message: "params must be an object or an array" };
     }
   }
-
-  const method = frame["method"];
-  const hasId = Object.prototype.hasOwnProperty.call(frame, "id");
 
   if (!hasId) return { kind: "notification", method, params: params as RpcRequest["params"] };
 
@@ -219,7 +314,7 @@ export interface RpcFailure {
  * in our own code rather than caller input, and it surfaces as an internal error
  * at the dispatcher's outermost layer rather than as a corrupt frame.
  */
-export function serialise(envelope: RpcSuccess | RpcFailure): string {
+export function serialise(envelope: RpcSuccess | RpcFailure | RpcOutboundRequest): string {
   const line = JSON.stringify(envelope);
   // A literal newline here would split one frame into two and desynchronise the
   // reader. Nothing in a JSON.stringify result can contain one today; if this
