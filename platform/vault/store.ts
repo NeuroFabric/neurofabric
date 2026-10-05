@@ -61,7 +61,28 @@ import { timingSafeEqual } from "node:crypto";
 /** One secret belonging to one tenant. */
 export interface SecretEntry {
   readonly name: string;
-  readonly value: string;
+  /**
+   * The value, as BYTES.
+   *
+   * A Buffer rather than a string, and that is the whole of why: a V8 string is
+   * immutable and cannot be zeroed, so a credential held as one stays in memory
+   * until the collector reclaims it and nothing can say when. A Buffer can be
+   * overwritten on purpose, and the reader does exactly that once the reference has
+   * been computed from it.
+   *
+   * === THE RESIDUAL, STATED PLAINLY ===
+   *
+   * This narrows the window. It does not close it. A string copy of the credential
+   * exists at the JSON parse boundary of any file-backed source -- `JSON.parse`
+   * produces one and it is unreachable from here -- and the raw exposure path
+   * necessarily makes another when it converts the buffer back into a string to
+   * answer the caller. Neither can be erased by overwriting a buffer.
+   *
+   * The fix for that boundary is a BINARY credential format, in which the value is
+   * never a string to begin with. That is deliberately out of scope here and named
+   * rather than glossed over.
+   */
+  readonly value: Buffer;
   /** ISO instant of the last rotation, carried through to the caller. */
   readonly rotatedAt: string;
 }
@@ -151,7 +172,8 @@ const REFUSAL_MESSAGE = "this capability does not grant that secret";
 export interface RetrievalGranted {
   readonly ok: true;
   readonly name: string;
-  readonly value: string;
+  /** BYTES. The caller must overwrite this once it has what it needs. */
+  readonly value: Buffer;
   readonly rotatedAt: string;
 }
 
@@ -208,19 +230,45 @@ function equalConstantTime(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
+/**
+ * THE TRAIL COULD NOT BE WRITTEN, WHICH IS A FAULT AND NOT A REFUSAL.
+ *
+ * A NAMED error rather than a message, because failing closed is only half of it.
+ * The caller has to be able to tell "you may not have this" from "this gateway
+ * cannot record what it just did", and an operator told the first thing at 2am goes
+ * back to sleep while a full disk eats every subsequent audit row.
+ *
+ * The message is a constant, like every other refusal string in this file: a reason
+ * here would say whether the entry existed.
+ */
+export class AuditUnavailableError extends Error {
+  constructor() {
+    super("the audit trail is unavailable");
+    this.name = "AuditUnavailableError";
+  }
+}
+
 export function createTenantSecretStore(options: TenantSecretStoreOptions): TenantSecretStore {
   const now = options.now ?? (() => Date.now());
 
+  /**
+   * WRITE THE TRAIL, OR THROW `AuditUnavailableError`.
+   *
+   * Deliberately a throw rather than a refused return, and the distinction is the
+   * whole design. Every refusal in this module is a DECISION the store reached on
+   * the merits; a trail that will not take a row is a fault in the deployment, and
+   * answering it with the same refusal would report a broken disk as a policy
+   * decision. It propagates so the gateway can answer INTERNAL_ERROR on the
+   * caller's id -- which is also what keeps the promise that no value, reference or
+   * metadata crosses the boundary without a durable receipt first.
+   */
   const record = (event: VaultAuditEvent): void => {
     try {
       options.audit(event);
     } catch {
-      // A broken audit sink must NOT become an open door. The alternative --
-      // letting the sink's exception propagate -- would turn a logging fault
-      // into an outage, and an outage in this path would be somebody disabling
-      // the trail to keep the service up. The read is refused instead, so a
-      // broken trail means no reads rather than unaudited reads.
-      throw new Error("the audit trail is unavailable");
+      // The underlying cause is dropped deliberately. It names a file, a directory
+      // or a driver message, and this error is carried into a JSON-RPC frame.
+      throw new AuditUnavailableError();
     }
   };
 
