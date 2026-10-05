@@ -407,8 +407,35 @@ async function main(): Promise<void> {
   check("pending row present", actions.includes("vault.approval.async.pending"), `actions were ${JSON.stringify(actions)}`);
   check("granted row present", actions.includes("vault.approval.async.granted"), `actions were ${JSON.stringify(actions)}`);
 
-  const grantedDoc = JSON.parse(String((rows.find((r) => (r as { action: string }).action.endsWith("granted")) as { document: string }).document));
-  check("granted row names the operator", grantedDoc.decidedBy === undefined ? true : true, "");
+  const grantedRow = rows.find((r) => (r as { action: string }).action.endsWith("granted")) as
+    | { seq: number; actor: string; document: string }
+    | undefined;
+  check("granted row is present", grantedRow !== undefined, `no row ended in "granted" among ${JSON.stringify(actions)}`);
+
+  const grantedDoc = JSON.parse(String(grantedRow?.document));
+
+  /**
+   * THE OPERATOR, AND WHERE IT ACTUALLY LIVES.
+   *
+   * This line was `grantedDoc.decidedBy === undefined ? true : true` -- a check
+   * that could not fail, in a harness whose entire argument is that a step which
+   * passes by asserting on something it computed itself proves nothing.
+   *
+   * It was not a harmless placeholder. `approvedBy` is OPTIONAL on the audit event
+   * and the harness sink above passes it as the `actor` COLUMN; the `document` it
+   * writes carries no `decidedBy` and no `approvedBy` at all. So the original
+   * expression was reading a field that is never written by anyone, anywhere --
+   * asking "was it recorded?" about a column that is structurally incapable of
+   * holding the answer. Renaming the field would not have fixed it.
+   *
+   * The identity is in the COLUMN, so the assertion is on the column. This now
+   * genuinely asserts: swap the operator in `gate.settle` and this step dies.
+   */
+  check(
+    "granted row names the operator",
+    grantedRow?.actor === "operator@example",
+    `the granted row's actor column is ${JSON.stringify(grantedRow?.actor)}; the verdict was settled by operator@example`,
+  );
   check("granted row records the exposure", grantedDoc.exposure === "reference", `exposure in the row was ${grantedDoc.exposure}`);
   check("no credential in the ledger", !JSON.stringify(rows).includes("sk-live"), "the ledger contains credential material");
 
