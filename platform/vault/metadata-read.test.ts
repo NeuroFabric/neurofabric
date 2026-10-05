@@ -55,7 +55,7 @@ function countingSource() {
   const source = {
     async load(tenant: string) {
       loads.push(tenant);
-      return { tenant, secrets: [{ name: "payments/api-key", value: VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+      return { tenant, secrets: [{ name: "payments/api-key", value: Buffer.from(VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }] };
     },
     async describe(tenant: string) {
       describes.push(tenant);
@@ -90,7 +90,7 @@ test("A SOURCE THAT CANNOT DESCRIBE REFUSES, AND NEVER FALLS BACK TO LOADING", a
     source: {
       async load(tenant: string) {
         loads += 1;
-        return { tenant, secrets: [{ name: "payments/api-key", value: VALUE, rotatedAt: "now" }] };
+        return { tenant, secrets: [{ name: "payments/api-key", value: Buffer.from(VALUE, "utf8"), rotatedAt: "now" }] };
       },
     },
     audit: () => {},

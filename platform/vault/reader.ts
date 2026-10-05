@@ -54,10 +54,10 @@
  * value outright.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomFillSync } from "node:crypto";
 
 import { READ_SCOPE, verifyCapability, type CapabilityClaims } from "./capability.ts";
-import type { TenantSecretStore } from "./store.ts";
+import { AuditUnavailableError, type TenantSecretStore } from "./store.ts";
 
 /** What every reference starts with, so one is recognisable in a transcript. */
 export const REDACTED_REF_PREFIX = "<redacted_credential_ref:";
@@ -155,26 +155,69 @@ export interface CredentialReader {
  */
 const FIELD_SEP = "\u0000";
 
-function referenceFor(claims: CapabilityClaims, credentialName: string, value: string): string {
+function referenceFor(claims: CapabilityClaims, credentialName: string, value: Buffer): string {
   const digest = createHash("sha256")
-    .update([claims.tenant, credentialName, value].join(FIELD_SEP))
+    .update(claims.tenant)
+    .update(FIELD_SEP)
+    .update(credentialName)
+    .update(FIELD_SEP)
+    // The BYTES, not a string derived from them. Hashing a Buffer means the
+    // credential never has to become a string to be referenced.
+    .update(value)
     .digest("hex")
     .slice(0, 16);
   return `${REDACTED_REF_PREFIX}${digest}>`;
 }
 
+/**
+ * ERASE A CREDENTIAL BUFFER, NOW, NOT WHENEVER THE COLLECTOR GETS ROUND TO IT.
+ *
+ * `randomFillSync` rather than `fill(0)`: a zero fill leaves the previous contents
+ * in any copy-on-write page the engine made on the way, and it leaves a recognisable
+ * pattern where a credential used to be. Random bytes over the same length mean
+ * there is nothing left to recognise, and the operation is synchronous so the bytes
+ * are gone before this function returns rather than at some later tick.
+ *
+ * === WHAT THIS DOES NOT DO, AND THE CODE SAYS SO RATHER THAN THE COMMIT ===
+ *
+ * It wipes THE BUFFER. It does not wipe:
+ *
+ *   - the string the file source parsed out of JSON, which is unreachable from here;
+ *   - the string the raw path creates when it converts the buffer to answer a caller;
+ *   - any copy V8 made internally while the buffer was alive.
+ *
+ * So this narrows a window that was measured in "until the collector runs" down to
+ * one measured in "for the duration of the parse", which is the part that is
+ * reachable. Closing the rest needs a binary credential format in which the value is
+ * never a string at any point. Recorded on `SecretEntry` and in ADR-010.
+ */
+function wipe(value: Buffer): void {
+  randomFillSync(value);
+}
+
 export function createApprovedCredentialReader(options: ApprovedCredentialReaderOptions): CredentialReader {
   const now = options.now ?? (() => Date.now());
 
+  /**
+   * WRITE THE READER'S OWN TRAIL, OR THROW.
+   *
+   * It used to swallow a failing sink, on the reasoning that a logging fault must
+   * not become an outage. That reasoning was right about the wrong thing: the fault
+   * it invited was somebody disabling the trail to keep the service up, and the
+   * alternative -- refusing the read -- is cheaper than a gateway whose whole
+   * justification is that the decisions are kept.
+   *
+   * The previous comment here claimed "the refusal is applied by the caller" and no
+   * caller applied one. Swallowing was not fail-closed, it was fail-silent: the read
+   * succeeded, the model received the reference, and no row existed. It throws the
+   * same named error the store uses, so the gateway reports one fault rather than
+   * two shapes of the same one.
+   */
   const record = (event: ReaderAuditEvent): void => {
-    // A faulting trail must NOT become an open door. Letting it escape would turn
-    // a logging problem into an outage, and the quickest way out of an outage here
-    // is to disable the trail. Refusing the read is the alternative that keeps the
-    // promise, and it is why `record` returning false refuses below.
     try {
       options.audit?.(event);
     } catch {
-      /* the refusal is applied by the caller */
+      throw new AuditUnavailableError();
     }
   };
 
@@ -295,7 +338,20 @@ export function createApprovedCredentialReader(options: ApprovedCredentialReader
           },
           credentialName,
         );
-      } catch {
+      } catch (error) {
+        /**
+         * A BROKEN TRAIL IS NOT A REFUSAL, AND SAYING OTHERWISE IS A LIE.
+         *
+         * Everything else this catch turns into a refusal -- a source that threw, a
+         * store that faulted in transit -- because "a credential that could not be
+         * read is a refusal" is the right story for a caller. `AuditUnavailableError`
+         * is a different fact: the read may well have succeeded and the RECORD of it
+         * is what is missing. Reported as a refusal, an operator is told they lacked
+         * authority for a request the gateway had already approved, and nobody goes
+         * looking at the ledger. So it propagates and the gateway answers
+         * INTERNAL_ERROR on the caller's id.
+         */
+        if (error instanceof AuditUnavailableError) throw error;
         return refuse(claims, claims.tenant, credentialName, "the store could not be read", claims.capabilityId);
       }
 
@@ -313,9 +369,20 @@ export function createApprovedCredentialReader(options: ApprovedCredentialReader
       });
 
       if (requested === "raw") {
-        return { ok: true, reference: outcome.value, exposed: true };
+        // The string the caller receives is a NEW copy; erasing the buffer afterwards
+        // does not touch it, and pretending otherwise would be the exact overclaim
+        // this function exists to avoid. See `wipe`.
+        const value = outcome.value.toString("utf8");
+        wipe(outcome.value);
+        return { ok: true, reference: value, exposed: true };
       }
-      return { ok: true, reference: referenceFor(claims, credentialName, outcome.value), exposed: false };
+
+      // REFERENCE: compute from the bytes, then wipe them before returning. The
+      // ordering is the whole point -- the hash is taken first, and the buffer is
+      // never readable by anything once this call returns.
+      const reference = referenceFor(claims, credentialName, outcome.value);
+      wipe(outcome.value);
+      return { ok: true, reference, exposed: false };
     },
   };
 }

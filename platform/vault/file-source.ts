@@ -67,7 +67,11 @@ export function createFileSecretSource(path: string): SecretSource {
         tenant,
         secrets: entries.map((entry) => ({
           name: entry.name,
-          value: entry.value as string,
+          // `Buffer.from` COPIES, so the buffer the caller overwrites is not the one
+          // this module read -- and the string it copies from is exactly the residual
+          // documented on `SecretEntry`. Naming it here so the copy is not mistaken
+          // for the erasure.
+          value: Buffer.from(entry.value as string, "utf8"),
           rotatedAt: entry.rotatedAt ?? UNKNOWN_ROTATION,
         })),
       };

@@ -59,7 +59,7 @@ function harness(over: { capability?: string; raw?: boolean; sourceThrows?: bool
         if (over.sourceThrows === true) throw new Error("the source exploded");
         return {
           tenant,
-          secrets: [{ name: "payments/api-key", value: VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }],
+          secrets: [{ name: "payments/api-key", value: Buffer.from(VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }],
         };
       },
     },
@@ -232,7 +232,7 @@ test("THE READER'S OWN TRAIL RECORDS EXPOSURE, because a reference and a value a
   const store = createTenantSecretStore({
     source: {
       async load(tenant: string) {
-        return { tenant, secrets: [{ name: "payments/api-key", value: VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+        return { tenant, secrets: [{ name: "payments/api-key", value: Buffer.from(VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }] };
       },
     },
     audit: () => {},
@@ -259,7 +259,7 @@ test("THE READER'S TRAIL GOES TO THE DURABLE LOG WHEN ONE IS GIVEN", async () =>
   const vault = createTenantSecretStore({
     source: {
       async load(tenant: string) {
-        return { tenant, secrets: [{ name: "payments/api-key", value: VALUE, rotatedAt: "2026-01-01T00:00:00.000Z" }] };
+        return { tenant, secrets: [{ name: "payments/api-key", value: Buffer.from(VALUE, "utf8"), rotatedAt: "2026-01-01T00:00:00.000Z" }] };
       },
     },
     audit: () => {},
