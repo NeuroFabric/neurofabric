@@ -41,7 +41,16 @@ import {
   type RpcId,
 } from "./jsonrpc.ts";
 import { TOOLS, PROXIED_TOOLS, READ_CREDENTIAL_TOOL, callTool, readCredentialArgs, type HandlerContext } from "./tools.ts";
-import { approvalRefusal, createApprovalGate, type ApprovalGate } from "./elicitation.ts";
+import { approvalRefusal, createApprovalGate, type ApprovalGate, type ApprovalSubject } from "./elicitation.ts";
+import {
+  createAsyncApprovalGate,
+  ELICITATION_REQUIRED,
+  ELICITATION_REQUIRED_MESSAGE,
+  VERDICT_CHANNEL,
+  VERDICT_EVENT,
+  type AsyncApprovalGate,
+  type VerdictBroadcast,
+} from "./async-approval.ts";
 import { createApprovedCredentialReader } from "../vault/reader.ts";
 import { evaluateStandingInstruction, type StandingInstruction } from "../vault/osi.ts";
 import { createTenantSecretStore } from "../vault/store.ts";
@@ -142,6 +151,17 @@ export interface DispatcherDeps {
   readonly fetchImpl?: ((...args: never[]) => Promise<unknown>) | undefined;
   /** The precheck. Absent means no credential tool can be served at all. */
   readonly gate?: ApprovalGate | undefined;
+  /**
+   * ASYNCHRONOUS HITL. When present, a restricted call is answered `-32001` with a
+   * task token instead of being left open for the length of a human's think time.
+   *
+   * Optional so the synchronous path is still the default: an operator who wants the
+   * old behaviour can leave it unwired, and a test can assert either without
+   * configuring both.
+   */
+  readonly asyncApproval?: AsyncApprovalGate | undefined;
+  /** Called for every verdict. In a wired server this is the SSE /alert stream. */
+  readonly onVerdict?: ((verdict: VerdictBroadcast) => void) | undefined;
   /** Consulted ONLY inside an approved read. Never at startup. */
   readonly credentialReader?: (() => ApprovedCredentialReader) | undefined;
   /** Standing instructions. Absent means every credential read asks a human. */
@@ -403,7 +423,16 @@ async function handleCredentialCall(
     return serialise(success(id, { content: [{ type: "text", text: JSON.stringify(malformed.data ?? { message: malformed.message }) }], isError: true }));
   }
 
-  if (!session.elicitation || deps.gate === undefined) {
+  /**
+   * THE ASYNC PATH DOES NOT REQUIRE THE CLIENT TO SUPPORT ELICITATION.
+   *
+   * The guard below refuses a session that cannot be asked, because in the
+   * synchronous design the human IS the MCP client. Under async HITL the human is in
+   * the operator portal and the verdict arrives over SSE, so a client with no
+   * elicitation support can still use the gateway — and refusing it would mean the
+   * async path was only available to the clients that did not need it.
+   */
+  if (deps.asyncApproval === undefined && (!session.elicitation || deps.gate === undefined)) {
     return serialise(failure(id, RPC.METHOD_NOT_FOUND, "this tool needs an approval path this session cannot use"));
   }
 
@@ -434,24 +463,40 @@ async function handleCredentialCall(
     }
   }
 
-  const { frame } = deps.gate.begin(
-    {
-      tool: READ_CREDENTIAL_TOOL,
-      tenant: session.tenant,
-      capability: session.capability,
-      credentialName,
-      exposure,
-      sideEffects: raw
-        ? [
-            "a LIVE credential in PLAINTEXT is placed into the model's context window",
-            "the decision is recorded permanently against your name",
-          ]
-        : exposure === "metadata"
-          ? ["the credential is never loaded; only its existence and last rotation are answered", "the decision is recorded permanently against your name"]
-          : ["a non-reversible reference is returned, and the credential is loaded here to compute it", "the decision is recorded permanently against your name"],
-    },
-    id,
-  );
+  const subject: ApprovalSubject = {
+    tool: READ_CREDENTIAL_TOOL,
+    tenant: session.tenant,
+    capability: session.capability,
+    credentialName,
+    exposure,
+    sideEffects: raw
+      ? [
+          "a LIVE credential in PLAINTEXT is placed into the model's context window",
+          "the decision is recorded permanently against your name",
+        ]
+      : exposure === "metadata"
+        ? ["the credential is never loaded; only its existence and last rotation are answered", "the decision is recorded permanently against your name"]
+        : ["a non-reversible reference is returned, and the credential is loaded here to compute it", "the decision is recorded permanently against your name"],
+  };
+
+  /**
+   * === ASYNC: CLOSE THE CYCLE NOW, ANSWER LATER OVER SSE ===
+   *
+   * `begin` writes the APPROVAL_PENDING row and mints a task token BEFORE this
+   * returns, so a caller that never receives its -32001 has still left a record that
+   * it asked. If that write fails the call throws and the whole path refuses, which
+   * is the same rule as everywhere else here: a request with no record is
+   * indistinguishable from a request that was never made.
+   *
+   * The gate is STILL consulted on the synchronous path below. This does not replace
+   * it; it replaces holding the caller's id open until a person answers.
+   */
+  if (deps.asyncApproval !== undefined) {
+    const data = deps.asyncApproval.begin(subject);
+    return serialise(failure(id, ELICITATION_REQUIRED, ELICITATION_REQUIRED_MESSAGE, data));
+  }
+
+  const { frame } = deps.gate!.begin(subject, id);
 
   // Only the request. The call is answered by a LATER line, which is what makes
   // this non-blocking: there is no suspended call, only a row the gate holds.
@@ -549,6 +594,87 @@ async function performCredentialRead(
   );
 }
 
+/**
+ * SUBMIT A VERDICT FOR A TASK TOKEN, AND BROADCAST IT.
+ *
+ * The approved read happens HERE, at the moment of approval, and not when the caller
+ * collects. That ordering is the point: the decision is made by a person who was
+ * looking at the subject, and a read performed later is a read performed against
+ * whatever the vault holds later, by nobody who was watching.
+ *
+ * A read that faults does NOT become a refusal. Reporting a broken ledger or an
+ * unreachable store as "the operator said no" is the same lie `resolveResponse`
+ * refuses to tell, and it is why the task stays pending here: the sweep will expire
+ * it and record that, which is honest.
+ */
+async function handleAsyncVerdict(
+  id: RpcId,
+  args: Readonly<Record<string, unknown>>,
+  deps: DispatcherDeps,
+): Promise<string> {
+  const gate = deps.asyncApproval;
+  if (gate === undefined) {
+    return serialise(failure(id, RPC.METHOD_NOT_FOUND, "this gateway has no asynchronous approval path"));
+  }
+
+  const taskToken = args["taskToken"];
+  if (typeof taskToken !== "string" || taskToken.length === 0) {
+    return serialise(failure(id, RPC.INVALID_PARAMS, "a verdict needs the task token it is answering"));
+  }
+
+  const approved = args["approved"] === true;
+  const approvedBy = typeof args["approvedBy"] === "string" ? args["approvedBy"] : undefined;
+  const reason = typeof args["reason"] === "string" && args["reason"].length > 0 ? args["reason"] : "recorded by the operator portal";
+
+  // The subject comes from the TOKEN, never from this request. A verdict that named
+  // its own tenant or credential would let a caller approve one read and collect
+  // another's.
+  const subject = gate.subject(taskToken);
+  if (subject === undefined) {
+    return serialise(failure(id, RPC.INVALID_PARAMS, "that task token is not awaiting a verdict"));
+  }
+
+  if (!approved) {
+    const verdict = gate.settle(taskToken, { approved: false, ...(approvedBy === undefined ? {} : { approvedBy }), reason });
+    return serialise(success(id, verdict ?? { status: "refused" }));
+  }
+
+  const factory = deps.credentialReader;
+  if (factory === undefined) {
+    return serialise(failure(id, RPC.METHOD_NOT_FOUND, "this gateway has no credential reader to serve an approved read"));
+  }
+
+  let outcome: Awaited<ReturnType<ApprovedCredentialReader["read"]>>;
+  try {
+    const reader = factory();
+    outcome = await reader.read({
+      tenant: subject.tenant,
+      credentialName: subject.credentialName,
+      exposure: subject.exposure,
+      // The operator's separate acknowledgement for a raw read was collected when
+      // the approval was REQUESTED, not here. Carrying it means this path cannot
+      // forget it by omission.
+      acknowledged: subject.exposure === "raw",
+    });
+  } catch {
+    return internalError(id);
+  }
+  if (!outcome.ok) return approvalRefusal(id);
+
+  const verdict = gate.settle(
+    taskToken,
+    { approved: true, ...(approvedBy === undefined ? {} : { approvedBy }), reason },
+    {
+      value: outcome.reference,
+      ...(outcome.metadata === undefined ? {} : { exists: outcome.metadata.present, rotatedAt: outcome.metadata.rotatedAt }),
+    },
+  );
+  // The answer to THIS call is the verdict, never the credential. The value leaves on
+  // the SSE broadcast or through a token-keyed collection, both of which the holder
+  // of the token authorises.
+  return serialise(success(id, verdict ?? { status: "approved" }));
+}
+
 async function handleNotification(method: string, session: SessionState, deps: DispatcherDeps): Promise<void> {
   // `notifications/initialized` is the one notification this protocol requires we
   // accept, and it has no response. Nothing is validated and nothing is acted on:
@@ -622,6 +748,23 @@ async function handleRequest(
       return serialise(failure(id, RPC.TENANT_REFUSED, "this session has not been initialised"));
     }
     return serialise(success(id, { tools: TOOLS }));
+  }
+
+  if (method === "elicitation/verdict") {
+    /**
+     * WHERE A PORTAL VERDICT ENTERS.
+     *
+     * Under async HITL the human is not the MCP client, so there is no `el-N`
+     * response frame to correlate. The portal submits the verdict against the task
+     * token, and this is the only place a decision can enter the async path.
+     *
+     * Established-session gated like every other method: an unestablished session
+     * answers nothing, including this.
+     */
+    if (!session.established) {
+      return serialise(failure(id, RPC.TENANT_REFUSED, "this session has not been initialised"));
+    }
+    return handleAsyncVerdict(id, args, deps);
   }
 
   if (method === "tools/call") {
