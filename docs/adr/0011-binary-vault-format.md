@@ -355,6 +355,30 @@ been to name residuals before relying on them.
    available in pure Node.** No in-process change can fix this. It is the largest
    remaining exposure and it belongs to the deployment — encrypted swap, or a
    `mlock`-capable runtime.
+
+   > **PARTIALLY ADDRESSED BY CONTAINMENT (Phase 8). READ THIS BEFORE CREDITING IT.**
+   >
+   > `docker-compose.yml` sets `memswap_limit` equal to `mem_limit` on the service.
+   > In cgroup terms the container's footprint — memory plus swap — may not exceed
+   > the limit, and since memory alone may already reach it, the swap allowance is
+   > exactly zero. The kernel therefore cannot page this process's anonymous memory
+   > out to disk.
+   >
+   > **What that closes:** swap. **What it does not:** it is not `mlock`. It removes
+   > the kernel's permission to move pages; it does not pin them. They remain ordinary
+   > reclaimable memory, so the exposure is *moved* rather than eliminated, and what
+   > is left is: a privileged process on the host, a hibernation image, or a core
+   > dump can still read them.
+   >
+   > The price is an OOM kill. Under pressure the kernel reclaims cache or kills the
+   > container; it can no longer swap. For credentials in an unswappable buffer that
+   > is the right trade — a loud, logged, restarted failure beats a quiet, permanent
+   > copy to disk — but it is a trade, and it is not free.
+   >
+   > Unchanged and still open: **the page cache of the vault FILE**, which is neither
+   > swap nor anonymous memory and is not constrained by `memswap_limit` at all, and
+   > **core dumps** (item 3 below), which still capture resident memory in full.
+   > Neither is closable from inside the container.
 3. **Core dumps and crash reports** capture resident memory.
 4. **Copies V8 made internally** while the buffer was alive.
 5. **The digest pass reads every byte.** §1.1 bounds how much is *held*; it cannot
@@ -480,3 +504,4 @@ not a wrong answer. That assumption is the residual.
 | A writer never produces a file its own reader rejects | `writer.test.ts` |
 | Size TOCTOU across passes recorded as an accepted defect | §8.1 |
 | Swap exposure is out of scope and named | §5(2) |
+| Swap is bounded by `memswap_limit`; page cache and core dumps are not | §5(2), `docker-compose.yml` |
