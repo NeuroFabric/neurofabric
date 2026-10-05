@@ -55,6 +55,8 @@ import { staticVault, CREDENTIAL_HEADER } from "../platform/omniroute/edge-secur
 import { makeTempWorkspace } from "../platform/test-support/temp-workspace.ts";
 import { mintCapability, READ_SCOPE } from "../platform/vault/capability.ts";
 import { createFileSecretSource } from "../platform/vault/file-source.ts";
+import { SseAccumulator, readAlert, type AlertReading } from "./sse-frames.ts";
+import { classifyToolFailure, classifyToolOutcome, JsonRpcCallError } from "./triage-routing.ts";
 
 const TENANT = "acme";
 const CREDENTIAL = "payments/api-key";
@@ -114,8 +116,24 @@ class McpClient {
       if (entry !== undefined) {
         this.#pending.delete(id);
         if (frame["error"] !== undefined) {
-          const error = frame["error"] as { code?: number; message?: string };
-          entry.reject(new Error(`${String(error.code ?? "?")}: ${error.message ?? "refused"}`));
+          /**
+           * THE CODE IS A FIELD, NOT A SENTENCE.
+           *
+           * This used to be `new Error(\`${code}: ${message}\`)`, and the consequence
+           * was not cosmetic: the one machine-readable fact in the exchange was
+           * buried in prose, so every caller had to guess at it. The caller here
+           * guessed badly -- it reported an operator's refusal as an unknown fault,
+           * and the escalation it produced named a broken gateway where a decision
+           * had in fact been made and recorded. The field is what makes the next
+           * `classifyToolFailure` a lookup rather than a regular expression.
+           */
+          const error = frame["error"] as { code?: unknown; message?: unknown };
+          entry.reject(
+            new JsonRpcCallError(
+              typeof error.code === "number" ? error.code : undefined,
+              typeof error.message === "string" ? error.message : "refused",
+            ),
+          );
         } else {
           entry.resolve(frame["result"]);
         }
@@ -193,24 +211,29 @@ class McpClient {
 // === DETECTION: THE ALERT STREAM =========================================
 
 /**
- * SUBSCRIBE TO THE ALERT STREAM, AND RESOLVE ON THE FIRST BREACH.
+ * SUBSCRIBE TO THE ALERT STREAM, AND REPORT THE FIRST BREACH -- OR WHY THERE WAS NONE.
  *
  * The one-way half of the platform an agent consumes at 2am. The hub deliberately
  * does not replay, so this is opened BEFORE any data is injected -- a subscription
  * opened afterwards could not have missed anything and would prove nothing.
  *
- * The frames are parsed by hand because this is a demo of the WORKFLOW, not of the
- * hub: the point is that an external agent can consume the event at all, and a
- * client that grew a reconnect strategy and a backoff and a cursor would bury that
- * under machinery this script is not about.
+ * The framing lives in `sse-frames.ts` rather than here, because framing is where
+ * this goes wrong: the socket chooses the chunk boundaries, a proxy can rewrite line
+ * endings, and a reader that is only ever exercised on a stream arriving perfectly
+ * has not been tested at all. What this function owns is the part that is a
+ * JUDGEMENT rather than a parser -- an unreadable frame is reported as unreadable,
+ * never as the absence of a breach.
  */
 async function openAlertStream(
   origin: string,
   credential: string,
-): Promise<{ first: (ms: number) => Promise<{ opened: boolean; alert: Record<string, unknown> | null }> }> {
-  const frames: Record<string, unknown>[] = [];
+): Promise<{ first: (ms: number) => Promise<{ opened: boolean; reading: AlertReading }> }> {
+  const readings: AlertReading[] = [];
+  /** Frames we could not read. Kept so a quiet stream can explain itself. */
+  const unreadable: string[] = [];
   const controller = new AbortController();
   let opened = false;
+  let closed = false;
 
   void fetch(`${origin}/api/memory/alerts`, {
     headers: { [CREDENTIAL_HEADER]: credential },
@@ -221,34 +244,32 @@ async function openAlertStream(
       if (!opened) return;
       const reader = response.body?.getReader();
       if (reader === undefined) return;
-      const decoder = new TextDecoder();
-      let buffer = "";
+      const frames = new SseAccumulator();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let split = buffer.indexOf("\n\n");
-        while (split !== -1) {
-          const frame = buffer.slice(0, split);
-          buffer = buffer.slice(split + 2);
-          // Only the `alert` event matters here; `slow-consumer` is the hub telling
-          // us it dropped us, which a triage agent must know about rather than ignore.
-          if (frame.includes("event: alert")) {
-            const data = frame.split("\n").find((line) => line.startsWith("data:"));
-            if (data !== undefined) {
-              try {
-                frames.push(JSON.parse(data.slice(5).trim()) as Record<string, unknown>);
-              } catch {
-                /* a frame we cannot read is not a frame we will act on */
-              }
-            }
-          }
-          split = buffer.indexOf("\n\n");
+        // Every frame, including the ones we do not act on. A dropped frame is a
+        // fact about the stream that an operator may need, and it is cheaper to keep
+        // it than to lose it.
+        for (const item of frames.push(value)) {
+          const reading = readAlert(item);
+          if (reading.kind === "unreadable") unreadable.push(reading.because);
+          else readings.push(reading);
         }
       }
+      closed = true;
+      // The end of the stream is itself an event. Whatever was buffered when the
+      // socket closed is accounted for here rather than dropped.
+      for (const item of frames.end()) {
+        const reading = readAlert(item);
+        if (reading.kind === "unreadable") unreadable.push(reading.because);
+        else readings.push(reading);
+      }
     })
-    .catch(() => {
-      /* the stream closing is reported by the caller waiting on it */
+    .catch((error: unknown) => {
+      // An aborted subscription is the normal way this function ends. Anything else
+      // is a stream that died, and a stream that died is not a quiet system.
+      if (!controller.signal.aborted) unreadable.push(`the alert stream ended early: ${error instanceof Error ? error.message : "unknown"}`);
     });
 
   return {
@@ -261,13 +282,28 @@ async function openAlertStream(
      * a subscription that had demonstrably worked -- the alert arrived on the next
      * line. Asking once, after the wait, removes the race rather than documenting it.
      */
-    async first(ms: number): Promise<{ opened: boolean; alert: Record<string, unknown> | null }> {
+    async first(ms: number): Promise<{ opened: boolean; reading: AlertReading }> {
       const deadline = Date.now() + ms;
-      while (Date.now() < deadline && frames.length === 0) {
+      while (Date.now() < deadline && !closed && readings.length === 0) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       controller.abort();
-      return { opened, alert: frames[0] ?? null };
+      const alert = readings.find((reading) => reading.kind === "alert");
+      if (alert !== undefined) return { opened, reading: alert };
+
+      /**
+       * NOTHING ARRIVED, AND THIS MUST NOT READ AS "ALL QUIET".
+       *
+       * The three states are kept apart because they call for three different
+       * responses. No alert on a healthy stream is a clean night. No alert on a
+       * stream we never got into is a monitoring gap, and an agent that files it as
+       * a clean night has reported a healthy system while blind to it. Frames we
+       * could not read are the third: the hub spoke and we could not understand it.
+       */
+      if (!opened) return { opened, reading: { kind: "unreadable", because: "the alert stream never opened", preview: "" } };
+      if (unreadable.length > 0) return { opened, reading: { kind: "unreadable", because: unreadable.join("; "), preview: "" } };
+      if (closed) return { opened, reading: { kind: "ignored", event: "no alert before the stream closed" } };
+      return { opened, reading: { kind: "ignored", event: "no alert within the window" } };
     },
   };
 }
@@ -417,14 +453,15 @@ async function main(): Promise<boolean> {
     notes.push("injected a breaching batch and waited for the engine to fence it");
 
     const detected = await alerts.first(30_000);
-    const alert = detected.alert;
+    const reading = detected.reading;
+    const alert = reading.kind === "alert" ? reading.alert : null;
+    // WHY THERE IS NO ALERT, in one place, because every branch below has to be
+    // able to say it. A check that fails without saying why is a check that gets
+    // ignored the next time it fails.
+    const why = reading.kind === "alert" ? undefined : reading.kind === "unreadable" ? reading.because : `the stream produced no alert (${reading.event})`;
     record("the alert stream subscribed", detected.opened);
-    record("the autonomous engine pushed a breach over SSE", alert !== null);
-    notes.push(
-      alert === null
-        ? "no alert arrived"
-        : `SSE alert: ${JSON.stringify(alert).slice(0, 100)}`,
-    );
+    record("the autonomous engine pushed a breach over SSE", alert !== null, why);
+    notes.push(alert === null ? `no alert arrived: ${why}` : `SSE alert: ${JSON.stringify(alert).slice(0, 100)}`);
 
     // 4. THE VERDICT IS STILL READ. A push tells you something happened; the tool
     //    tells you what the window actually holds, and an agent that acts on the
@@ -462,19 +499,29 @@ async function main(): Promise<boolean> {
     //    agent that will not take no for an answer. So the branch below is explicit
     //    and terminal: the refusal is recorded as a decision, remediation is handed
     //    to whoever is awake, and the agent carries on with what it can still do.
+    //
+    //    What the branch is NOT allowed to be is "anything that went wrong". The
+    //    classification is a named test (`triage-routing.test.ts`) because the old
+    //    one-liner -- an error, or an isError flag -- reported a broken ledger as a
+    //    person having said no, and sent an engineer to look for a prompt that was
+    //    never shown.
     const rawCall = client.ask("tools/call", {
       name: "read_credential",
       arguments: { credentialName: CREDENTIAL, exposure: "raw" },
     });
-    const rawResult = (await rawCall.catch((error: Error) => ({ error }))) as
-      | { content?: { text?: string }[]; isError?: boolean; error?: Error };
+    const rawOutcome = await rawCall.then(classifyToolOutcome, classifyToolFailure);
+    notes.push(`the raw call came back as ${rawOutcome.kind}${rawOutcome.kind === "fault" ? `: ${rawOutcome.because}` : ""}`);
 
-    const declined = rawResult.error !== undefined || rawResult.isError === true;
-    record("a declined raw read is refused, not retried", declined);
+    record("a declined raw read is refused, not retried", rawOutcome.kind === "refused");
 
-    if (declined) {
-      // THE ROUTING BRANCH. Named so it reads as a decision rather than as something
-      // that happened to us.
+    if (rawOutcome.kind === "refused") {
+      /**
+       * THE ROUTING BRANCH. Named so it reads as a decision rather than as something
+       * that happened to us.
+       *
+       * And the sentence is allowed to say "a person declined", because a refusal is
+       * the one outcome that means exactly that.
+       */
       routed.push({
         credentialName: CREDENTIAL,
         outcome: "deferred",
@@ -497,9 +544,9 @@ async function main(): Promise<boolean> {
       record("the agent carries on after a refusal", stillWorks);
     } else {
       routed.length = 0;
-      record("the agent carries on after a refusal", false, "no refusal happened, so nothing was proven");
+      record("the agent carries on after a refusal", false, `the call came back as ${rawOutcome.kind}, so nothing was proven about a refusal`);
     }
-    record("no raw value reached the client", !JSON.stringify(rawResult).includes("sk-live"));
+    record("no raw value reached the client", !JSON.stringify(rawOutcome).includes("sk-live"));
 
     // 7. The inbound-request machinery actually ran.
     record("the client received and answered a server-initiated request", seen.length >= 2);
@@ -520,17 +567,21 @@ async function main(): Promise<boolean> {
      * The embassy has already exited by the time this runs, so the row cannot be
      * anything the embassy is still holding.
      */
-    const rows = store.auditFor(TENANT).filter((row) => row.action.startsWith("vault.approval."));
-    const approvalRows = rows.filter((row) => row.action === "vault.approval.granted");
-    const refusalRows = rows.filter((row) => row.action === "vault.approval.refused");
+    const allRows = store.auditFor(TENANT);
+    const rows = allRows.filter((row) => row.action.startsWith("vault."));
+    const approvalRows = rows.filter((row) => row.action.startsWith("vault.approval."));
+    const readRows = rows.filter((row) => row.action.startsWith("vault.read."));
+    const exposureRows = rows.filter((row) => row.action.startsWith("vault.exposure."));
+    const approvalRows1 = approvalRows.filter((row) => row.action === "vault.approval.granted");
+    const refusalRows = approvalRows.filter((row) => row.action === "vault.approval.refused");
 
-    record("the approval is queryable from SQLite", approvalRows.length === 1);
+    record("the approval is queryable from SQLite", approvalRows1.length === 1);
     record("the refusal is queryable from SQLite", refusalRows.length === 1);
 
     const document = (raw: unknown): Record<string, unknown> =>
       typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : (raw as Record<string, unknown>);
 
-    const granted = approvalRows[0];
+    const granted = approvalRows1[0];
     record("the row names the operator", granted?.actor === "on-call");
     record("the row records what was approved, not merely that it was", document(granted?.document)["exposure"] === "metadata");
 
@@ -547,9 +598,37 @@ async function main(): Promise<boolean> {
     record("the refusal carries a reason", String(refusedDocument["reason"]).length > 0);
     record("no ledger row carries a credential", !JSON.stringify(rows).includes("sk-live"));
 
-    notes.push(
-      `ledger holds ${approvalRows.length} approval and ${refusalRows.length} refusal, written by the embassy process`,
+    /**
+     * 8. THE READ AND EXPOSURE TRAILS, CORRELATED TO THE APPROVAL BY THE CAPABILITY.
+     *
+     * Three questions, three different row classes, one shared field. Someone at 2am
+     * asking "was this credential read?" must be able to answer it from the ledger
+     * without also learning that someone approved it, and someone asking "was a live
+     * value put in a model's context?" must not have to read an approval row to find
+     * out. Sharing the `capability` field is what joins the three tables into one
+     * answer.
+     */
+    record("the granted read is in the ledger", readRows.some((row) => row.action === "vault.read.success"));
+    record(
+      "a declined approval leaves NO read row, because no read was attempted",
+      readRows.every((row) => document(row.document)["exposure"] !== "raw"),
+      "otherwise a refusal would look like a read that happened",
     );
+    record("the metadata exposure is recorded as its own class", exposureRows.some((row) => row.action === "vault.exposure.metadata"));
+    record("no raw exposure was recorded, because none was approved", exposureRows.every((row) => row.action !== "vault.exposure.raw"));
+
+    const correlated = [granted, readRows.find((row) => row.action === "vault.read.success"), exposureRows.find((row) => row.action === "vault.exposure.metadata")].filter(
+      (row): row is (typeof allRows)[number] => row !== undefined,
+    );
+    record(
+      "the approval, the read and the exposure join on the capability",
+      correlated.length === 3 && correlated.every((row) => document(row.document)["capability"] === "cap-triage"),
+    );
+
+    notes.push(
+      `ledger holds ${approvalRows1.length} approval, ${refusalRows.length} refusal, ${readRows.length} read and ${exposureRows.length} exposure row, written by the embassy process`,
+    );
+    notes.push(`vault actions present: ${[...new Set(rows.map((row) => row.action))].join(", ")}`);
   } finally {
     client.end();
     await wedge.close();

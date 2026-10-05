@@ -47,7 +47,7 @@ import { evaluateStandingInstruction, type StandingInstruction } from "../vault/
 import { createTenantSecretStore } from "../vault/store.ts";
 import { MemoryStore } from "../memory/store.ts";
 import { createFileSecretSource } from "../vault/file-source.ts";
-import { createDurableApprovalSink } from "../vault/audit-sink.ts";
+import { createDurableApprovalSink, createDurableExposureSink, createDurableReadSink } from "../vault/audit-sink.ts";
 import type { CoreEndpoint } from "./core.ts";
 
 /** The protocol version this embassy speaks. */
@@ -225,20 +225,48 @@ export async function dispatch(
     return [serialise(failure(frame.id, frame.code, frame.message))];
   }
 
-  if (frame.kind === "response") {
-    return resolveResponse(frame.id, frame.result, frame.error !== undefined, session, deps);
-  }
-
-  const id = frame.id;
+  /**
+   * ONE CONTAINMENT FOR BOTH DIRECTIONS, AND THE ORDER IS THE REASON.
+   *
+   * A RESPONSE frame is not an edge case here. It is the frame an approval arrives
+   * in, and it is the frame that therefore carries the approved READ -- so it is the
+   * branch where a faulting ledger arrives. This try used to wrap only the request
+   * branch, which meant a durable-trail failure on the approved path escaped
+   * `dispatch` entirely, out of the readline loop, as an unhandled rejection: the
+   * host agent saw the connection die rather than an error frame, and the one thing
+   * the gateway promises -- nothing escapes and end the caller's session -- was
+   * false on exactly the path that matters most.
+   *
+   * The response branch still answers on the CALLER's id from inside
+   * `resolveResponse`, because only the gate knows which `tools/call` id a pending
+   * approval belongs to. The id on a response frame is OURS; echoing that would be
+   * the gateway talking to itself in front of the client.
+   */
   try {
+    if (frame.kind === "response") {
+      return await resolveResponse(frame.id, frame.result, frame.error !== undefined, session, deps);
+    }
+
+    const id = frame.id;
     const handled = await handleRequest(id, frame.method, frame.params, session, deps);
     return handled === null ? [] : [handled];
   } catch {
     // Obligation 4, outermost layer. Nothing escapes: a fault here would end the
     // process and end the host agent's session with it. The cause is not
     // forwarded -- an internal message can name files, paths and values.
-    return [serialise(failure(id, RPC.INTERNAL_ERROR, "the request did not complete"))];
+    return [internalError(frame.kind === "response" ? null : frame.id)];
   }
+}
+
+/**
+ * THE FRAME FOR A FAULT IN OUR OWN CODE.
+ *
+ * Named rather than inlined twice, because the two call sites must not drift into
+ * different codes -- and because a reader who sees a durable-trail failure as
+ * -32001 believes they were refused, when the ledger is what is broken.
+ */
+function internalError(id: RpcId): string {
+  return serialise(failure(id, RPC.INTERNAL_ERROR, "the request did not complete"));
 }
 
 /**
@@ -291,18 +319,37 @@ async function resolveResponse(
    * reaching here. Constructing the reader is therefore the proof that an approval
    * happened -- which is why the tripwire tests count factory invocations rather
    * than checking that a value came back.
+   *
+   * The construction AND the read are both inside the try. A reader factory that
+   * throws -- and one does, when the durable ledger will not take the read row --
+   * must not be able to answer the caller's id with anything but an error.
    */
-  const reader = factory();
-  const outcome = await reader.read({
-    tenant: settled.pending.subject.tenant,
-    credentialName: settled.pending.subject.credentialName,
-    exposure: settled.pending.subject.exposure,
-    // The gate has ALREADY required the operator's separate acknowledgement for a
-    // raw read -- it would never have approved without it. Carrying the fact across
-    // means the reader does not have to trust this dispatcher to have checked, and
-    // a second caller wiring the port cannot skip the rule by omitting a field.
-    acknowledged: settled.pending.subject.exposure === "raw",
-  });
+  let outcome: Awaited<ReturnType<ApprovedCredentialReader["read"]>>;
+  try {
+    const reader = factory();
+    outcome = await reader.read({
+      tenant: settled.pending.subject.tenant,
+      credentialName: settled.pending.subject.credentialName,
+      exposure: settled.pending.subject.exposure,
+      // The gate has ALREADY required the operator's separate acknowledgement for a
+      // raw read -- it would never have approved without it. Carrying the fact across
+      // means the reader does not have to trust this dispatcher to have checked, and
+      // a second caller wiring the port cannot skip the rule by omitting a field.
+      acknowledged: settled.pending.subject.exposure === "raw",
+    });
+  } catch {
+    /**
+     * A FAULT, NOT A DENIAL.
+     *
+     * `AuditUnavailableError` arrives here when the ledger refused the row, and it
+     * means the approved read has no durable receipt. Returning `approvalRefusal`
+     * here would be the worse of the two answers twice over: the caller is told they
+     * were refused when the gateway had in fact approved them and approvedBy is
+     * sitting in the ledger, and no one goes looking for the broken disk. The frame
+     * is INTERNAL_ERROR, it is on the CALLER's id, and it carries nothing else.
+     */
+    return [internalError(callId)];
+  }
   if (!outcome.ok) return [approvalRefusal(callId)];
 
   return [
@@ -464,14 +511,24 @@ async function performCredentialRead(
    * Everything above is refusal-shaped and every one of those paths returns without
    * reaching here. Constructing the reader is therefore the proof that something
    * authorised the read.
+   *
+   * Contained, for the same reason and with the same distinction as the approval
+   * path above: a ledger that will not take the read row is a fault in this gateway,
+   * so it answers INTERNAL_ERROR rather than a refusal the caller would read as a
+   * policy decision.
    */
-  const reader = factory();
-  const outcome = await reader.read({
-    tenant: subject.tenant,
-    credentialName: subject.credentialName,
-    exposure: subject.exposure,
-    acknowledged: subject.acknowledged,
-  });
+  let outcome: Awaited<ReturnType<ApprovedCredentialReader["read"]>>;
+  try {
+    const reader = factory();
+    outcome = await reader.read({
+      tenant: subject.tenant,
+      credentialName: subject.credentialName,
+      exposure: subject.exposure,
+      acknowledged: subject.acknowledged,
+    });
+  } catch {
+    return internalError(id);
+  }
   if (!outcome.ok) return approvalRefusal(id);
 
   return serialise(
@@ -841,11 +898,52 @@ function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
     throw new Error("the vault key is not valid hex");
   }
 
+  /**
+   * THE LEDGER IS OPENED FIRST, BECAUSE BOTH TRAILS NOW NEED IT.
+   *
+   * The order in this function used to be credentials-then-approvals, and it existed
+   * because only the approvals needed durable storage. Now the store's own read
+   * trail does too -- see `createDurableReadSink` for why the reasoning that let it
+   * live on stderr was sound for the credentials and wrong for the trail.
+   *
+   * `NEUROFEBRIC_AUDIT_DIR` is REQUIRED here rather than optional, which is a
+   * deliberate difference from the credential store. Credentials can be absent and
+   * the embassy still refuses every read safely; a trail that is absent means
+   * decisions and reads are not being kept, so the whole approval path refuses
+   * instead of degrading to a log line.
+   *
+   * stderr is still used here, and still for exactly one thing: saying the ledger
+   * could not be opened. Never INSTEAD of a row -- that is the failure mode
+   * ADR-010 A5 recorded, and the reason this path refuses rather than falls back.
+   */
+  const auditDir = env["NEUROFEBRIC_AUDIT_DIR"];
+  if (auditDir === undefined || auditDir.trim() === "") {
+    process.stderr.write(
+      "neurofebric-embassy: NEUROFEBRIC_AUDIT_DIR is required with the approval path; approvals and reads are not logged to stderr\n",
+    );
+    process.exitCode = 2;
+    return undefined;
+  }
+
+  const ledger = MemoryStore.open({ directory: auditDir });
+  const approvalSink = createDurableApprovalSink(ledger, { directory: auditDir });
+
   const store = createTenantSecretStore({
     source: createFileSecretSource(vaultFile),
-    // The store's own trail goes to stderr. stdout is the protocol channel and a
-    // credential event on it would be parsed by the host as a frame.
-    audit: (event) => process.stderr.write(`neurofebric-embassy: vault ${event.outcome} ${event.tenant} ${event.name}\n`),
+    /**
+     * THE READ TRAIL IS DURABLE, AND THE STORE ENFORCES IT.
+     *
+     * `createTenantSecretStore` wraps whatever this is and turns a throwing sink
+     * into `AuditUnavailableError`, which `performCredentialRead` and
+     * `resolveResponse` both answer as INTERNAL_ERROR. So this line is the whole
+     * fail-closed guarantee for a credential read: the row is committed before the
+     * value, the reference or the metadata crosses the boundary, and if it cannot
+     * be, the caller gets a fault rather than an answer.
+     *
+     * stdout is NOT an option here. stdout is the protocol channel, and a
+     * credential event written to it would be parsed by the host agent as a frame.
+     */
+    audit: createDurableReadSink(ledger, { directory: auditDir }),
   });
 
   /**
@@ -858,18 +956,6 @@ function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
    * all. Failing to open it refuses the precheck entirely rather than falling back
    * to a log line, because falling back is precisely the gap this closes.
    */
-  const auditDir = env["NEUROFEBRIC_AUDIT_DIR"];
-  if (auditDir === undefined || auditDir.trim() === "") {
-    process.stderr.write(
-      "neurofebric-embassy: NEUROFEBRIC_AUDIT_DIR is required with the approval path; approvals are not logged to stderr\n",
-    );
-    process.exitCode = 2;
-    return undefined;
-  }
-
-  const ledger = MemoryStore.open({ directory: auditDir });
-  const approvalSink = createDurableApprovalSink(ledger, { directory: auditDir });
-
   const gate = createApprovalGate({
     /**
      * DURABLE, AND THE FAILURE IS NOT SWALLOWED.
@@ -892,7 +978,21 @@ function buildPrecheck(env: Readonly<Record<string, string | undefined>>): {
     },
   });
 
-  const reader = createApprovedCredentialReader({ store, capability, verificationKey });
+  const reader = createApprovedCredentialReader({
+    store,
+    capability,
+    verificationKey,
+    /**
+     * THE EXPOSURE TRAIL, DURABLE, IN THE SAME LEDGER.
+     *
+     * This hook was optional and unwired, so the row answering "was a live
+     * credential put into a model's context" did not exist at all -- and that is the
+     * question ADR-009 §4 exists to police. It now writes `vault.exposure.*` beside
+     * the other two classes, and it fails closed the same way, because a row that is
+     * only written when the disk happens to be healthy is not a record.
+     */
+    audit: createDurableExposureSink(ledger, { directory: auditDir }),
+  });
 
   return { gate, credentialReader: () => reader };
 }
