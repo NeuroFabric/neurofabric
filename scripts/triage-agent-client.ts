@@ -190,6 +190,106 @@ class McpClient {
   }
 }
 
+// === DETECTION: THE ALERT STREAM =========================================
+
+/**
+ * SUBSCRIBE TO THE ALERT STREAM, AND RESOLVE ON THE FIRST BREACH.
+ *
+ * The one-way half of the platform an agent consumes at 2am. The hub deliberately
+ * does not replay, so this is opened BEFORE any data is injected -- a subscription
+ * opened afterwards could not have missed anything and would prove nothing.
+ *
+ * The frames are parsed by hand because this is a demo of the WORKFLOW, not of the
+ * hub: the point is that an external agent can consume the event at all, and a
+ * client that grew a reconnect strategy and a backoff and a cursor would bury that
+ * under machinery this script is not about.
+ */
+async function openAlertStream(
+  origin: string,
+  credential: string,
+): Promise<{ first: (ms: number) => Promise<{ opened: boolean; alert: Record<string, unknown> | null }> }> {
+  const frames: Record<string, unknown>[] = [];
+  const controller = new AbortController();
+  let opened = false;
+
+  void fetch(`${origin}/api/memory/alerts`, {
+    headers: { [CREDENTIAL_HEADER]: credential },
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      opened = response.ok;
+      if (!opened) return;
+      const reader = response.body?.getReader();
+      if (reader === undefined) return;
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let split = buffer.indexOf("\n\n");
+        while (split !== -1) {
+          const frame = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          // Only the `alert` event matters here; `slow-consumer` is the hub telling
+          // us it dropped us, which a triage agent must know about rather than ignore.
+          if (frame.includes("event: alert")) {
+            const data = frame.split("\n").find((line) => line.startsWith("data:"));
+            if (data !== undefined) {
+              try {
+                frames.push(JSON.parse(data.slice(5).trim()) as Record<string, unknown>);
+              } catch {
+                /* a frame we cannot read is not a frame we will act on */
+              }
+            }
+          }
+          split = buffer.indexOf("\n\n");
+        }
+      }
+    })
+    .catch(() => {
+      /* the stream closing is reported by the caller waiting on it */
+    });
+
+  return {
+    /**
+     * Waits for the first breach, and REPORTS whether the subscription worked.
+     *
+     * Both together, because the two used to be separate and separate was wrong:
+     * `opened` is only true once the response headers have come back, and asking
+     * for it straight after calling this raced the fetch. The symptom was a FAIL on
+     * a subscription that had demonstrably worked -- the alert arrived on the next
+     * line. Asking once, after the wait, removes the race rather than documenting it.
+     */
+    async first(ms: number): Promise<{ opened: boolean; alert: Record<string, unknown> | null }> {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline && frames.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      controller.abort();
+      return { opened, alert: frames[0] ?? null };
+    },
+  };
+}
+
+/** Real variance and one genuine outlier, so the engine has a fence to trip. */
+async function injectBreach(origin: string, credential: string): Promise<void> {
+  const events = (base: number, spikes: number) =>
+    Array.from({ length: 400 }, (_, i) => {
+      const elapsed = i % 20 === 0 && spikes > 0 ? spikes-- : base + (i % 20) * 4;
+      return {
+        fields: { service: "order-fulfilment", alert_code: "PEGA0001", elapsed_time: String(elapsed), threshold: "1000" },
+        at: 1_760_000_000_000 + i * 500,
+      };
+    });
+
+  await fetch(`${origin}/api/portal/ingest`, {
+    method: "POST",
+    headers: { [CREDENTIAL_HEADER]: credential, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "pega", events: [...events(1000, 40_000), ...events(1200, 0)] }),
+  });
+}
+
 // === THE WORKFLOW =======================================================
 
 interface Ctx {
@@ -201,8 +301,16 @@ interface Ctx {
 
 async function main(): Promise<boolean> {
   const notes: string[] = [];
-  const checks: { name: string; ok: boolean }[] = [];
-  const record = (name: string, ok: boolean) => checks.push({ name, ok });
+  const checks: { name: string; ok: boolean; note?: string }[] = [];
+  /**
+   * WHAT THE AGENT DID WITH A REFUSAL.
+   *
+   * A list rather than a log line, because the point of the routing branch is that
+   * it produces a HANDOFF: something a person has to pick up. An agent that simply
+   * moved on has silently dropped the reason it could not act.
+   */
+  const routed: { credentialName: string; outcome: string; to: string; because: string }[] = [];
+  const record = (name: string, ok: boolean, note?: string) => checks.push({ name, ok, ...(note === undefined ? {} : { note }) });
 
   // A real core, so `get_verdict` is a real measurement and not a stub.
   const cwd = await makeTempWorkspace("nf-triage-");
@@ -218,18 +326,6 @@ async function main(): Promise<boolean> {
     portalVault: staticVault([token], "triage"),
     memory: { store, tenant: TENANT },
     evaluationIntervalMs: 150,
-  });
-
-  // Inject a breaching batch, so triage has something real to find.
-  const breach = (base: number, spikes: number) =>
-    Array.from({ length: 400 }, (_, i) => {
-      const elapsed = i % 20 === 0 && spikes > 0 ? spikes-- : base + (i % 20) * 4;
-      return { fields: { service: "order-fulfilment", alert_code: "PEGA0001", elapsed_time: String(elapsed), threshold: "1000" }, at: 1_760_000_000_000 + i * 500 };
-    });
-  await fetch(`${wedge.url}/api/portal/ingest`, {
-    method: "POST",
-    headers: { [CREDENTIAL_HEADER]: token.credential, "content-type": "application/json" },
-    body: JSON.stringify({ provider: "pega", events: [...breach(1000, 40_000), ...breach(1200, 0)] }),
   });
 
   // A real vault file and a real, signed capability.
@@ -310,7 +406,29 @@ async function main(): Promise<boolean> {
     record("the tool surface is discovered, not assumed", names.includes("read_credential") && names.includes("get_verdict"));
     notes.push(`discovered ${names.length} tools: ${names.join(", ")}`);
 
-    // 3. TRIAGE FIRST. Nothing is reached for until the verdict says there is a problem.
+    // 3. DETECTION IS A PUSH, NOT A POLL. The stream is opened BEFORE the breach is
+    //    injected, because the hub deliberately does not replay -- a subscription
+    //    opened afterwards is one that could not have missed anything and would
+    //    prove nothing.
+    const alerts = await openAlertStream(wedge.url, token.credential);
+    await client.settle();
+
+    await injectBreach(wedge.url, token.credential);
+    notes.push("injected a breaching batch and waited for the engine to fence it");
+
+    const detected = await alerts.first(30_000);
+    const alert = detected.alert;
+    record("the alert stream subscribed", detected.opened);
+    record("the autonomous engine pushed a breach over SSE", alert !== null);
+    notes.push(
+      alert === null
+        ? "no alert arrived"
+        : `SSE alert: ${JSON.stringify(alert).slice(0, 100)}`,
+    );
+
+    // 4. THE VERDICT IS STILL READ. A push tells you something happened; the tool
+    //    tells you what the window actually holds, and an agent that acts on the
+    //    push alone never learns whether the breach is still breaching.
     let verdict: { records?: number } | null = null;
     for (let attempt = 0; attempt < 30 && verdict === null; attempt += 1) {
       const body = (await client.ask("tools/call", { name: "get_verdict", arguments: {} })) as {
@@ -323,7 +441,7 @@ async function main(): Promise<boolean> {
     record("triage read a real measured verdict", (verdict?.records ?? 0) > 0);
     notes.push(`verdict reports ${String(verdict?.records ?? 0)} records in the window`);
 
-    // 4. METADATA FIRST. Rotation is often the whole explanation, and this never
+    // 5. METADATA FIRST. Rotation is often the whole explanation, and it never
     //    loads the credential.
     const metaCall = client.ask("tools/call", {
       name: "read_credential",
@@ -335,18 +453,55 @@ async function main(): Promise<boolean> {
     record("metadata reports the rotation instant", metaBody.rotatedAt === ROTATED_AT);
     record("metadata carries no value anywhere in its answer", !JSON.stringify(metaResult).includes("sk-live"));
 
-    // 5. THEN raw, which the operator declines. The client treats that as an answer.
+    // 6. THEN raw, which the operator DECLINES -- and this is the part the demo is
+    //    really about.
+    //
+    //    A declined approval is a ROUTING CONDITION, not an error. An agent that
+    //    treats it as a failure will retry, then rephrase the request, then ask for
+    //    a narrower one, and every step of that is a human being worn down by an
+    //    agent that will not take no for an answer. So the branch below is explicit
+    //    and terminal: the refusal is recorded as a decision, remediation is handed
+    //    to whoever is awake, and the agent carries on with what it can still do.
     const rawCall = client.ask("tools/call", {
       name: "read_credential",
       arguments: { credentialName: CREDENTIAL, exposure: "raw" },
     });
     const rawResult = (await rawCall.catch((error: Error) => ({ error }))) as
       | { content?: { text?: string }[]; isError?: boolean; error?: Error };
+
     const declined = rawResult.error !== undefined || rawResult.isError === true;
     record("a declined raw read is refused, not retried", declined);
+
+    if (declined) {
+      // THE ROUTING BRANCH. Named so it reads as a decision rather than as something
+      // that happened to us.
+      routed.push({
+        credentialName: CREDENTIAL,
+        outcome: "deferred",
+        to: "the on-call engineer",
+        because: "a person declined to put a live credential into a model's context",
+      });
+      notes.push("raw exposure declined: remediation deferred to the on-call engineer, and the agent did NOT retry");
+
+      // And the agent keeps working. Proving that it can do something useful after
+      // being told no is the difference between a gate and an obstacle.
+      let stillWorks = false;
+      try {
+        const answer = (await client.ask("tools/call", { name: "get_verdict", arguments: {} })) as {
+          content?: { text?: string }[];
+        };
+        stillWorks = Array.isArray(answer.content) && answer.content.length > 0;
+      } catch {
+        stillWorks = false;
+      }
+      record("the agent carries on after a refusal", stillWorks);
+    } else {
+      routed.length = 0;
+      record("the agent carries on after a refusal", false, "no refusal happened, so nothing was proven");
+    }
     record("no raw value reached the client", !JSON.stringify(rawResult).includes("sk-live"));
 
-    // 6. The inbound-request machinery actually ran.
+    // 7. The inbound-request machinery actually ran.
     record("the client received and answered a server-initiated request", seen.length >= 2);
     record("the raw prompt carried the high-severity warning", seen.some((s) => s.exposure === "raw" && s.warning.includes("RAW CREDENTIAL EXPOSURE REQUESTED")));
     record("the raw prompt required its own acknowledgement box", seen.some((s) => s.exposure === "raw" && s.required.includes("acknowledgeRawExposure")));
@@ -403,8 +558,14 @@ async function main(): Promise<boolean> {
 
   console.log("\n=== 2 AM TRIAGE, THROUGH A REAL EMBASSY PROCESS =================");
   for (const note of notes) console.log(`  . ${note}`);
+  if (routed.length > 0) {
+    console.log("\nhanded off");
+    for (const item of routed) console.log(`  > ${item.credentialName}: ${item.outcome} to ${item.to} -- ${item.because}`);
+  }
   console.log("\nchecks");
-  for (const check of checks) console.log(`  ${check.ok ? "PASS" : "FAIL"}  ${check.name}`);
+  for (const check of checks) {
+    console.log(`  ${check.ok ? "PASS" : "FAIL"}  ${check.name}${check.note === undefined ? "" : ` (${check.note})`}`);
+  }
 
   const passed = checks.every((check) => check.ok);
   console.log(`\n${passed ? "TRIAGE PATH PASSED" : "TRIAGE PATH FAILED"}`);
