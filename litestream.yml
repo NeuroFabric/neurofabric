@@ -1,0 +1,92 @@
+# LITESTREAM — CONTINUOUS SQLITE REPLICATION TO S3-COMPATIBLE STORAGE.
+#
+# === WHAT THIS PROTECTS, AND WHAT IT DOES NOT ===
+#
+# Litestream ships the WAL to object storage on a short interval, so a lost host is
+# a restore rather than an incident. It protects against the disk dying, the host
+# being replaced, and someone running `rm` on the wrong directory.
+#
+# It does NOT protect against a corrupted or malicious WRITE. Replicating every
+# write faithfully means faithfully replicating the wrong ones. A ledger that has
+# been tampered with is replicated as tampered, and restoring it restores the
+# tampering. Object storage versioning is the only mitigation, and it is configured
+# below for exactly that reason.
+#
+# === NO CREDENTIALS IN THIS FILE ===
+#
+# Every secret and every endpoint is interpolated from the environment. A credential
+# committed here is a credential in git history forever, and `.gitignore` does not
+# apply to a file that is already in a commit. Litestream expands `${VAR}` in config
+# values, so nothing needs substituting before the file is read.
+#
+# === TWO DATABASES, NOT ONE, AND THAT IS EASY TO MISS ===
+#
+# The wedge keeps a durable record at <workspace>/workspace/memory/neurofebric.sqlite
+# and the embassy keeps an APPROVAL LEDGER at $NEUROFEBRIC_AUDIT_DIR/neurofebric.sqlite.
+# They are different files with the same name, written by different processes, and the
+# approval ledger is the one this repository refuses to operate without when the
+# approval path is wired -- so replicating only the memory record would leave the
+# record of who approved which credential read unprotected.
+#
+# === FORMAT ===
+#
+# Top-level `replicas` with a name, referenced from each database. This is the v0.3
+# layout; a v0.5 upgrade moves replicas under each db and this file must follow.
+#
+# BEFORE FIRST USE:
+#
+#   1. Set LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY, REPLICA_URL,
+#      REPLICA_BUCKET and REPLICA_REGION in the environment.
+#   2. The bucket MUST have versioning enabled. It is the only thing standing
+#      between a ransomware write and a faithful replica of it.
+#   3. The IAM principal needs s3:PutObject, s3:GetObject, s3:ListBucket,
+#      s3:DeleteObject (for retention expiry) and s3:GetBucketVersioning.
+#   4. Run `litestream replicate` under a supervisor. Replicating by hand works
+#      exactly until the process is restarted.
+#
+# TO RESTORE:
+#
+#   litestream restore -o ./restored.sqlite "$REPLICA_URL/$REPLICA_BUCKET/<db-name>"
+#
+#   Restoring OVER a live database is not a restore, it is a second writer. Stop the
+#   service first.
+
+access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+
+replicas:
+  - name: primary
+    type: s3
+    endpoint: ${REPLICA_URL}
+    bucket: ${REPLICA_BUCKET}
+    region: ${REPLICA_REGION}
+
+    # Aggressive on purpose, because the ledger is the thing that has to survive.
+    # A WAL of every approval ever granted is small compared with the cost of
+    # discovering that the only copy of it was on a disk that has gone.
+    sync-interval: 1s
+
+    # Thirty days of snapshots before Litestream prunes them. A month is long enough
+    # to notice a slow corruption and short enough that the bucket is not unbounded.
+    retention: 720h
+    retention-check-interval: 1h
+
+    # The thing this file cannot do for you. Litestream replicates writes faithfully,
+    # so a tampered ledger is faithfully replicated as tampered. Versioning is the
+    # only defence, and without it a restore can land on a corrupted snapshot.
+    # There is no field for this in the config: it is a bucket setting, and it is
+    # listed here so nobody discovers it is missing during an incident.
+    #
+    #   aws s3api put-bucket-versioning --bucket $REPLICA_BUCKET \
+    #     --versioning-configuration Status=Enabled
+
+dbs:
+  # THE WEDGE'S DURABLE RECORD. Memory, diff and reconciliation state.
+  - path: ${WEDGE_WORKSPACE}/workspace/memory/neurofebric.sqlite
+    replica: primary
+
+  # THE EMBASSY'S APPROVAL LEDGER. Who approved which credential read, when, and at
+  # what exposure. Required by the approval path; see server.ts, which refuses to
+  # start without it rather than degrading to an unrecorded approval.
+  - path: ${NEUROFEBRIC_AUDIT_DIR}/neurofebric.sqlite
+    replica: primary

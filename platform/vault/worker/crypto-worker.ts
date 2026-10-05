@@ -187,6 +187,8 @@ export type CryptoWorkResponse =
 /** What the main thread sends down. `init` once, then `work` per request. */
 export type CryptoWorkerInbound =
   | { readonly type: "init"; readonly hmacKey: Buffer; readonly maxVaultBytes?: number }
+  /** The rotation form: primary first, every key tried on read. */
+  | { readonly type: "init"; readonly hmacKeys: readonly Buffer[]; readonly maxVaultBytes?: number }
   | ({ readonly type: "work" } & CryptoWorkRequest);
 
 /** One constant message, exactly as in `store.ts` and `reader.ts`. */
@@ -257,6 +259,22 @@ function wipe(value: Buffer | undefined): void {
   if (value !== undefined && value.length > 0) randomFillSync(value);
 }
 
+/**
+ * BYTES, however they arrived.
+ *
+ * Deliberately not `Buffer.isBuffer`: see the init handler. This accepts anything
+ * with a length and a `fill`, which is exactly the surface a key actually needs, and
+ * it does not care whether the structured clone preserved the Buffer wrapper.
+ */
+function isByteArray(value: unknown): value is Uint8Array {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Uint8Array).length === "number" &&
+    typeof (value as Uint8Array).fill === "function"
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* THE READ — ADR-011 §4, PASSES 1 TO 3                                        */
 /* -------------------------------------------------------------------------- */
@@ -272,7 +290,7 @@ async function readReference(
   vaultPath: string,
   tenant: string,
   keyName: string,
-  hmacKey: Buffer,
+  hmacKeys: readonly Buffer[],
   maxVaultBytes: number,
 ): Promise<{ reference: string; rotatedAt: string }> {
   const tenantBytes = Buffer.from(tenant, "utf8");
@@ -313,22 +331,44 @@ async function readReference(
 
     /* --- PASS 2: the digest, streamed over every byte below the trailer. ------ */
 
-    const mac = createHmac("sha256", hmacKey);
-    chunk = Buffer.allocUnsafe(CHUNK_BYTES);
     const digestLimit = size - DIGEST_BYTES;
-    for (let position = 0; position < digestLimit; ) {
-      const wanted = Math.min(CHUNK_BYTES, digestLimit - position);
-      const { bytesRead } = await handle.read(chunk, 0, wanted, position);
-      if (bytesRead === 0) refuse("file ended before the digest region did");
-      mac.update(chunk.subarray(0, bytesRead));
-      position += bytesRead;
+    chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+
+    /**
+     * THE DIGEST IS TRIED AGAINST EVERY ACTIVE KEY.
+     *
+     * This is what lets a vault written before a rotation keep being read. The file
+     * does NOT record which key signed it -- there is no key index in the NFV1
+     * trailer, and adding one would be a format change this commit does not make --
+     * so a reader with N keys must simply try all N.
+     *
+     * N is operator-controlled and bounded here, so the loop is not attacker
+     * controlled: a caller cannot lengthen it by supplying a different file.
+     */
+    let verified = false;
+    for (const key of hmacKeys) {
+      const candidate = createHmac("sha256", key);
+      for (let position = 0; position < digestLimit && !verified; ) {
+        const wanted = Math.min(CHUNK_BYTES, digestLimit - position);
+        const { bytesRead } = await handle.read(chunk, 0, wanted, position);
+        if (bytesRead === 0) {
+          // A short file is a refusal, not a key that did not match.
+          wipe(chunk);
+          chunk = undefined;
+          refuse("file ended before the digest region did");
+        }
+        candidate.update(chunk.subarray(0, bytesRead));
+        position += bytesRead;
+        if (position >= digestLimit && bytesEqual(candidate.digest(), trailer)) verified = true;
+      }
+      if (verified) break;
     }
-    // The chunk is reused across iterations and holds the last credential bytes
-    // read. Wipe it before anything else can observe it — ADR-011 §4.3.
+    // The chunk is reused across keys and iterations and holds the last credential
+    // bytes read. Wipe it before anything else can observe it — ADR-011 §4.3.
     wipe(chunk);
     chunk = undefined;
 
-    if (!bytesEqual(mac.digest(), trailer)) refuse("digest mismatch");
+    if (!verified) refuse("digest mismatch");
 
     /* --- PASS 3: walk entries, reading only the regions this call needs. ----- */
 
@@ -420,7 +460,7 @@ async function readReference(
 /* -------------------------------------------------------------------------- */
 
 function startWorker(port: NonNullable<typeof parentPort>): void {
-  let hmacKey: Buffer | undefined;
+  let hmacKeys: Buffer[] | undefined;
   let maxVaultBytes = DEFAULT_MAX_VAULT_BYTES;
 
   /**
@@ -438,12 +478,38 @@ function startWorker(port: NonNullable<typeof parentPort>): void {
 
   port.on("message", (inbound: CryptoWorkerInbound) => {
     if (inbound.type === "init") {
-      if (hmacKey !== undefined) {
-        // A second init would replace a live key without wiping the old one.
-        wipe(hmacKey);
+      if (hmacKeys !== undefined) {
+        // A second init would replace a live key set without wiping the old one.
+        for (const key of hmacKeys) wipe(key);
       }
-      hmacKey = Buffer.from(inbound.hmacKey);
-      inbound.hmacKey.fill(0);
+      /**
+       * BOTH SHAPES ACCEPTED, and normalised to one.
+       *
+       * `hmacKey` is the pre-rotation field and is still honoured so a deployment
+       * mid-migration keeps working; it simply becomes a ring of one.
+       *
+       * The incoming bytes are checked by SHAPE, not by `Buffer.isBuffer`, and that
+       * is not a stylistic choice. Structured clone does not deliver a `Buffer` on
+       * the far side of `postMessage` -- it delivers a `Uint8Array` -- so a
+       * `Buffer.isBuffer` guard rejects every key and the worker goes silently
+       * unusable. The previous code got this right by accident, because
+       * `Buffer.from(uint8array)` copies and does not care what it was handed.
+       *
+       * `Buffer.from(...)` below is what turns it back into a real Buffer for the
+       * HMAC, and it copies, so the worker's key set does not alias the clone the
+       * message carried.
+       */
+      const supplied: readonly Uint8Array[] =
+        "hmacKeys" in inbound ? inbound.hmacKeys : [inbound.hmacKey];
+      if (supplied.length === 0 || !supplied.every((key) => isByteArray(key))) {
+        // Named rather than silent: this branch leaves the worker holding no key, and
+        // every subsequent request then answers WORKER_FAULT for a reason that has
+        // nothing to do with the caller's request.
+        diagnose("*", `init was refused: ${supplied.length} key(s) supplied, none usable`);
+        return;
+      }
+      hmacKeys = supplied.map((key) => Buffer.from(key));
+      for (const key of supplied) key.fill(0);
       if (typeof inbound.maxVaultBytes === "number" && inbound.maxVaultBytes > 0) {
         maxVaultBytes = inbound.maxVaultBytes;
       }
@@ -451,7 +517,7 @@ function startWorker(port: NonNullable<typeof parentPort>): void {
     }
 
     const { correlationId } = inbound;
-    if (hmacKey === undefined) {
+    if (hmacKeys === undefined) {
       port.postMessage({
         ok: false,
         correlationId,
@@ -471,7 +537,7 @@ function startWorker(port: NonNullable<typeof parentPort>): void {
      * runs off-thread, and a synchronous read here would have defeated it without
      * anyone noticing until a latency investigation.
      */
-    void readReference(inbound.vaultPath, inbound.tenant, inbound.keyName, hmacKey, maxVaultBytes)
+    void readReference(inbound.vaultPath, inbound.tenant, inbound.keyName, hmacKeys, maxVaultBytes)
       .then(({ reference, rotatedAt }) => {
         port.postMessage({
           ok: true,
