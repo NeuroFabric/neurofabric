@@ -148,6 +148,22 @@ export interface AsyncApprovalOptions {
   readonly resultTtlMs?: number;
   /** SSE. Omit to run headless; verdicts are then countable but not broadcast. */
   readonly broadcast?: (verdict: VerdictBroadcast) => void;
+  /** SQLite database adapter for persistence. */
+  readonly db: SqliteAdapter;
+}
+
+/** Minimal SQLite adapter interface used by the gate. */
+interface SqliteAdapter {
+  exec(sql: string): void;
+  prepare(sql: string): Statement;
+  transaction(fn: () => void): () => void;
+  immediate?(fn: () => void): void;
+}
+
+interface Statement {
+  run(...args: any[]): any;
+  get(...args: any[]): any;
+  all(...args: any[]): any;
 }
 
 interface Task {
@@ -246,6 +262,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
   const now = options.now ?? (() => Date.now());
   const taskTtlMs = options.taskTtlMs ?? DEFAULT_TASK_TTL_MS;
   const resultTtlMs = options.resultTtlMs ?? DEFAULT_RESULT_TTL_MS;
+  const db = options.db;
 
   /** Keyed by the token's SHA-256. A dump of this map is not a list of live tokens. */
   const tasks = new Map<string, Task>();
@@ -263,6 +280,23 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
   let expired = 0;
 
   let timer: ReturnType<typeof setInterval> | undefined;
+
+    // Initialize SQLite table for approval tasks
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_tasks (
+      task_token TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'refused', 'expired', 'consumed')),
+      subject_json TEXT NOT NULL,
+      result_json TEXT,
+      decided_at INTEGER,
+      approved_by TEXT,
+      reason TEXT,
+      result_expires_at INTEGER,
+      collected_at INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_approval_tasks_status ON approval_tasks(status);
+  `);
 
   const write = (event: PendingAuditEvent): void => {
     // No try/catch. A trail that will not take the row must propagate, and every
@@ -286,7 +320,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
           decidedAt: new Date(at).toISOString(),
           reason: task.reason,
         });
-        tasks.delete(key);
+        db.prepare("UPDATE approval_tasks SET status = 'expired' WHERE task_token = ?").run(task.token);
         terminal.set(key, { status: "expired", decidedAt: at });
         continue;
       }
@@ -294,8 +328,8 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
         // The result outlived its window. Dropping it is the whole point of a TTL,
         // and the terminal record says `consumed` rather than `approved`, because
         // what the caller needs to know is that there is nothing left to fetch.
+        db.prepare("UPDATE approval_tasks SET status = 'consumed' WHERE task_token = ?").run(task.token);
         terminal.set(key, { status: "consumed", decidedAt: at });
-        tasks.delete(key);
       }
     }
     // Terminal records are swept on the same clock. An unbounded map of "things that
@@ -474,6 +508,7 @@ export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApp
       const at = now();
       if (task.resultExpiresAt !== undefined && at >= task.resultExpiresAt) {
         terminal.set(key, { status: "consumed", decidedAt: at });
+        db.prepare("UPDATE approval_tasks SET status = 'consumed' WHERE task_token = ?").run(task.token);
         tasks.delete(key);
         return undefined;
       }

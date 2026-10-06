@@ -471,7 +471,8 @@ export class Conductor {
     const named = framed?.[1].trim();
     const raw = named !== undefined && named !== ""
       ? named
-      : /[\w./\\-]+\.csv\b/i.exec(text)?.[0];
+      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log)\b/i.exec(text)?.[0];
+    console.log("locateInput raw:", raw);
     if (raw === undefined) return undefined;
     // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
     // speaking, not a security control: `<`, `>` and a NUL cannot appear in a

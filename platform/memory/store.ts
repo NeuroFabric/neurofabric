@@ -141,6 +141,33 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS acknowledgements_by_tenant ON acknowledgements (tenant, at);
     `,
   },
+  {
+    version: 3,
+  name: "async-approval",
+  sql: `
+    CREATE TABLE IF NOT EXISTS approval_tasks (
+      token_digest      TEXT PRIMARY KEY,
+      tenant            TEXT NOT NULL,
+      tool              TEXT NOT NULL,
+      credential_name   TEXT NOT NULL,
+      exposure          TEXT NOT NULL,
+      capability        TEXT NOT NULL,
+      side_effects      TEXT NOT NULL,
+      status            TEXT NOT NULL,
+      requested_at      INTEGER NOT NULL,
+      decided_at        INTEGER,
+      approved_by       TEXT,
+      reason            TEXT,
+      result_value      TEXT,
+      result_exists     INTEGER,
+      result_rotated_at TEXT,
+      result_expires_at INTEGER,
+      collected_at      INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS approval_tasks_by_status ON approval_tasks (status, requested_at);
+  `,
+},
 ];
 
 /** The schema version this build expects. Bumping it means adding a migration. */

@@ -190,10 +190,15 @@ async function main(): Promise<void> {
   const sseFrames: string[] = [];
   hub.open(TENANT, (frame) => sseFrames.push(frame));
 
+  const Database = (await import("better-sqlite3")).default;
+  const path = (await import("path")).default || await import("path");
+  const gateDbPath = path.join(process.cwd(), "workspace", "gate.db");
+
   const gate = createAsyncApprovalGate({
-    now: () => Date.now(),
-    taskTtlMs: 120_000,
-    resultTtlMs: 60_000,
+  db: new Database(gateDbPath),
+  now: () => Date.now(),
+  taskTtlMs: 120_000,
+  resultTtlMs: 60_000,
     // The SAME durable shape `buildAsyncApproval` writes in production.
     audit: (event) => {
       ledger.appendAudit(

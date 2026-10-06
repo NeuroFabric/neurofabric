@@ -1506,6 +1506,113 @@ export function createWedgeServer(options: WedgeOptions): Server {
           return;
         }
 
+        // --- GOVERNANCE ENDPOINTS ---
+
+        // POST /api/v1/governance/verdict
+        if (request.method === "POST" && url.pathname === "/api/v1/governance/verdict") {
+          const raw = await readBody(request);
+          let parsed: any;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, { error: "the request body is not valid JSON" });
+            return;
+          }
+
+          const { task_token, status, approved_by, reason, result_json, ttl_seconds = 3600 } = parsed;
+          if (!task_token || !status) {
+            sendJson(response, 400, { error: "task_token and status are required." });
+            return;
+          }
+
+          try {
+            // Connect to the temporary SQLite adapter created by the proof-of-life script.
+            // Note: If your script named it something other than "gate.db" (e.g., "embassy.db"), update it here.
+            const Database = (await import("better-sqlite3")).default;
+            const db = new Database(path.join(cwd, "workspace", "gate.db"));
+
+            const existing = db.prepare("SELECT status FROM approval_tasks WHERE task_token = ?").get(task_token) as any;
+            
+            if (!existing) {
+              sendJson(response, 404, { error: "Task not found." });
+              return;
+            }
+            if (existing.status !== "pending") {
+              sendJson(response, 400, { error: `Cannot update task. Current status is '${existing.status}'.` });
+              return;
+            }
+
+            const decided_at = new Date().toISOString();
+            const result_expires_at = new Date(Date.now() + (ttl_seconds * 1000)).toISOString();
+            const result_string = result_json ? JSON.stringify(result_json) : null;
+
+            db.prepare(`
+              UPDATE approval_tasks 
+              SET status = ?, result_json = ?, decided_at = ?, approved_by = ?, reason = ?, result_expires_at = ?
+              WHERE task_token = ?
+            `).run(status, result_string, decided_at, approved_by || "system", reason || null, result_expires_at, task_token);
+
+            sendJson(response, 200, { success: true, task_token, status, decided_at });
+            return;
+          } catch (error) {
+            sendJson(response, 500, { error: "Internal server error processing verdict.", detail: String(error) });
+            return;
+          }
+        }
+
+        // GET /api/v1/governance/result/:token
+        const resultMatch = url.pathname.match(/^\/api\/v1\/governance\/result\/(.+)$/);
+        if (request.method === "GET" && resultMatch) {
+          const token = resultMatch[1];
+          try {
+            const Database = (await import("better-sqlite3")).default;
+            const db = new Database(path.join(cwd, "workspace", "gate.db"));
+
+            const task = db.prepare("SELECT * FROM approval_tasks WHERE task_token = ?").get(token) as any;
+
+            if (!task) {
+              sendJson(response, 404, { error: "Task not found." });
+              return;
+            }
+
+            if (task.status === "pending") {
+              sendJson(response, 202, { status: "pending", message: "Task is awaiting governance decision." });
+              return;
+            }
+
+            if (task.status === "approved" || task.status === "rejected") {
+              const collected_at = new Date().toISOString();
+              
+              // Mark as consumed to prevent replay reads, satisfying the UPDATE-only rule
+              db.prepare(`
+                UPDATE approval_tasks 
+                SET status = 'consumed', collected_at = ? 
+                WHERE task_token = ?
+              `).run(collected_at, token);
+
+              sendJson(response, 200, {
+                status: task.status,
+                result: task.result_json ? JSON.parse(task.result_json) : null,
+                decided_at: task.decided_at,
+                approved_by: task.approved_by,
+                reason: task.reason,
+                collected_at: collected_at
+              });
+              return;
+            }
+
+            sendJson(response, 200, {
+              status: task.status,
+              result: task.result_json ? JSON.parse(task.result_json) : null,
+              message: `Task is no longer active (Status: ${task.status})`
+            });
+            return;
+          } catch (error) {
+            sendJson(response, 500, { error: "Internal server error retrieving result.", detail: String(error) });
+            return;
+          }
+        }
+
         sendJson(response, 404, { status: "FAILED", failure: { code: "NOT_FOUND", reason: `no route for ${request.method} ${url.pathname}` } });
       } catch (error) {
         // An unexpected throw is a 500 with the message, never a stack trace and
