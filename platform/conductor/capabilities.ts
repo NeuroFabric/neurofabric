@@ -703,3 +703,223 @@ export async function sqliteRead(
     db.close();
   }
 }
+
+export interface ChartPoint {
+  label: string;
+  value: number;
+}
+
+export interface ChartRenderResult {
+  path: string;
+  bytes: number;
+  points: number;
+}
+
+export interface TableQueryResult {
+  path: string;
+  columns: string[];
+  rows: Record<string, string>[];
+  matchedRows: number;
+  truncated: boolean;
+}
+
+export interface ArtifactWriteResult {
+  path: string;
+  bytes: number;
+}
+
+function checkOutputBoundary(target: string, boundary: { boundary?: { check(p: string): { allowed: boolean } } } | undefined, tool: string): void {
+  if (boundary?.boundary) {
+    const verdict = boundary.boundary.check(target);
+    if (!verdict.allowed) throw new Error(`${tool}: the output path is outside the workspace boundary (refused)`);
+  }
+}
+
+function markdownCell(value: unknown): string {
+  return String(value ?? "").replace(/[|\r\n]/g, " ").trim();
+}
+
+export const CHART_RENDER: ToolDescriptor = {
+  name: "chart_render",
+  version: "stage3",
+  description: "Render a bounded, self-contained SVG chart artifact",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string" }, title: { type: "string" }, points: { type: "array" },
+    },
+    required: ["path", "points"],
+  },
+  outputSchema: { type: "object", properties: { path: { type: "string" }, bytes: { type: "number" }, points: { type: "number" } } },
+  capabilities: ["artifact.chart"],
+  permissions: ["tool:chart_render"],
+  riskLevel: "WRITE",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "SIDE_EFFECTING",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function chartRender(
+  input: { path: string; title?: string; points: ChartPoint[] },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<ChartRenderResult> {
+  const target = String(input.path ?? "");
+  checkOutputBoundary(target, boundary, "chart_render");
+  const points = Array.isArray(input.points) ? input.points.slice(0, 100) : [];
+  if (points.length === 0) throw new Error("chart_render: at least one point is required");
+  if (points.some((point) => !Number.isFinite(Number(point.value)))) throw new Error("chart_render: every point value must be finite");
+  const title = escapeHtml(String(input.title ?? "Chart"));
+  const max = Math.max(1, ...points.map((point) => Math.abs(Number(point.value))));
+  const width = Math.max(320, points.length * 48 + 80);
+  const bars = points.map((point, index) => {
+    const value = Number(point.value);
+    const height = Math.max(1, Math.round((Math.abs(value) / max) * 180));
+    const x = 40 + index * 48;
+    return `<rect x="${x}" y="${220 - height}" width="28" height="${height}" fill="#172033"><title>${escapeHtml(String(point.label))}: ${value}</title></rect><text x="${x + 14}" y="238" text-anchor="middle">${escapeHtml(String(point.label).slice(0, 12))}</text>`;
+  }).join("\n");
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 260" role="img" aria-labelledby="title"><title id="title">${title}</title><style>text{font:11px system-ui,sans-serif;fill:#172033}</style><line x1="30" y1="220" x2="${width - 20}" y2="220" stroke="#172033"/>${bars}</svg>\n`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, svg, "utf8");
+  return { path: target, bytes: Buffer.byteLength(svg, "utf8"), points: points.length };
+}
+
+export const TABLE_QUERY: ToolDescriptor = {
+  name: "table_query",
+  version: "stage3",
+  description: "Run a bounded read-only comparison against CSV table rows",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string" }, column: { type: "string" }, operator: { type: "string" }, value: {}, limit: { type: "number" },
+    },
+    required: ["path", "column", "operator", "value"],
+  },
+  outputSchema: { type: "object" },
+  capabilities: ["table.query"],
+  permissions: ["tool:table_query"],
+  riskLevel: "READ_ONLY",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "PURE",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function tableQuery(
+  input: { path: string; column: string; operator: string; value: string | number; limit?: number },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<TableQueryResult> {
+  const source = await csvRead({ path: String(input.path ?? "") }, boundary);
+  const column = String(input.column ?? "");
+  if (!source.headers.includes(column)) throw new Error(`table_query: column '${column}' does not exist`);
+  const operator = String(input.operator ?? "");
+  if (!["=", "!=", ">", ">=", "<", "<=", "contains"].includes(operator)) throw new Error(`table_query: unsupported operator '${operator}'`);
+  const expected = String(input.value ?? "");
+  const matches = source.rows.filter((row) => {
+    const actual = String(row[column] ?? "");
+    if (operator === "contains") return actual.toLowerCase().includes(expected.toLowerCase());
+    const leftNumber = Number(actual);
+    const rightNumber = Number(expected);
+    const numeric = actual.trim() !== "" && expected.trim() !== "" && Number.isFinite(leftNumber) && Number.isFinite(rightNumber);
+    const left = numeric ? leftNumber : actual;
+    const right = numeric ? rightNumber : expected;
+    switch (operator) {
+      case "=": return left === right;
+      case "!=": return left !== right;
+      case ">": return left > right;
+      case ">=": return left >= right;
+      case "<": return left < right;
+      case "<=": return left <= right;
+      default: return false;
+    }
+  });
+  const limit = Math.max(1, Math.min(10_000, Math.floor(input.limit ?? 1_000)));
+  return { path: source.path, columns: source.headers, rows: matches.slice(0, limit), matchedRows: matches.length, truncated: matches.length > limit };
+}
+
+export const LANDING_PAGE: ToolDescriptor = {
+  name: "landing_page",
+  version: "stage3",
+  description: "Write a self-contained accessible landing page",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, title: { type: "string" }, headline: { type: "string" }, body: { type: "string" } }, required: ["path", "title", "headline", "body"] },
+  outputSchema: { type: "object", properties: { path: { type: "string" }, bytes: { type: "number" } } },
+  capabilities: ["artifact.landing_page"],
+  permissions: ["tool:landing_page"],
+  riskLevel: "WRITE",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "SIDE_EFFECTING",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function landingPage(
+  input: { path: string; title: string; headline: string; body: string },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<ArtifactWriteResult> {
+  const target = String(input.path ?? "");
+  checkOutputBoundary(target, boundary, "landing_page");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.title)}</title><style>body{font:16px/1.6 system-ui,sans-serif;max-width:60rem;margin:0 auto;padding:4rem 2rem;color:#172033}main{max-width:42rem}h1{font-size:clamp(2rem,7vw,5rem);line-height:1.05}p{color:#536070}</style></head><body><main><h1>${escapeHtml(input.headline)}</h1><p>${escapeHtml(input.body)}</p></main></body></html>\n`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, html, "utf8");
+  return { path: target, bytes: Buffer.byteLength(html, "utf8") };
+}
+
+export const REPORT_WRITE: ToolDescriptor = {
+  name: "report_write",
+  version: "stage3",
+  description: "Write a concise Markdown report from governed table data",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, columns: { type: "array" }, rows: { type: "array" } }, required: ["path", "title", "summary"] },
+  outputSchema: { type: "object", properties: { path: { type: "string" }, bytes: { type: "number" } } },
+  capabilities: ["artifact.report"],
+  permissions: ["tool:report_write"],
+  riskLevel: "WRITE",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "SIDE_EFFECTING",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function reportWrite(
+  input: { path: string; title: string; summary: string; columns?: string[]; rows?: Record<string, string>[] },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<ArtifactWriteResult> {
+  const target = String(input.path ?? "");
+  checkOutputBoundary(target, boundary, "report_write");
+  const columns = (input.columns ?? []).map(String);
+  const rows = (input.rows ?? []).slice(0, 100);
+  const table = columns.length === 0 ? "" : `\n| ${columns.map(markdownCell).join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n${rows.map((row) => `| ${columns.map((column) => markdownCell(row[column])).join(" | ")} |`).join("\n")}\n`;
+  const markdown = `# ${markdownCell(input.title)}\n\n${String(input.summary).trim()}\n${table}`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, markdown, "utf8");
+  return { path: target, bytes: Buffer.byteLength(markdown, "utf8") };
+}
+
+export const APP_SCAFFOLD: ToolDescriptor = {
+  name: "app_scaffold",
+  version: "stage3",
+  description: "Write a minimal self-contained application scaffold",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, name: { type: "string" } }, required: ["path", "name"] },
+  outputSchema: { type: "object", properties: { path: { type: "string" }, bytes: { type: "number" } } },
+  capabilities: ["artifact.app_scaffold"],
+  permissions: ["tool:app_scaffold"],
+  riskLevel: "WRITE",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "SIDE_EFFECTING",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function appScaffold(
+  input: { path: string; name: string },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<ArtifactWriteResult> {
+  const target = String(input.path ?? "");
+  checkOutputBoundary(target, boundary, "app_scaffold");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(input.name)}</title></head><body><main id="app"><h1>${escapeHtml(input.name)}</h1><p>Application scaffold ready.</p></main><script>document.querySelector('#app').dataset.ready='true';</script></body></html>\n`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, html, "utf8");
+  return { path: target, bytes: Buffer.byteLength(html, "utf8") };
+}
+
+export const STAGE3_CAPABILITIES: ToolDescriptor[] = [CHART_RENDER, TABLE_QUERY, LANDING_PAGE, REPORT_WRITE, APP_SCAFFOLD];
+export const CHART = CHART_RENDER;
