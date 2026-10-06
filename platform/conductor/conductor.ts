@@ -3,14 +3,15 @@ import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
 import {
-  appScaffold, chartRender, csvRead, landingPage, pdfRead, renderPage, reportWrite, sqliteRead, tableQuery,
-  STAGE1_CAPABILITIES, STAGE3_CAPABILITIES as CAPABILITY_STAGE3, type ChartPoint, type CsvReadResult,
+  appScaffold, chartRender, csvRead, landingPage, pdfRead, pilotRecord, renderPage, reportWrite, sqliteRead, tableQuery,
+  STAGE1_CAPABILITIES, STAGE3_CAPABILITIES as CAPABILITY_STAGE3, STAGE4_CAPABILITIES as CAPABILITY_STAGE4, type ChartPoint, type CsvReadResult,
   type PdfReadResult,
 } from "./capabilities.ts";
 import { PDF_READ, SQLITE_READ } from "./capabilities.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ, PDF_READ];
 export const STAGE3_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE3;
+export const STAGE4_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE4;
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
 import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
@@ -121,7 +122,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, ...STAGE4_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
@@ -150,7 +151,7 @@ export class Conductor {
        * report: the same governed read, then the analysis, then a governed
        * WRITE of the report itself.
        */
-      mode?: "dashboard" | "bottleneck" | "chart" | "table-query" | "landing-page" | "report" | "app-scaffold";
+      mode?: "dashboard" | "bottleneck" | "chart" | "table-query" | "landing-page" | "report" | "app-scaffold" | "omni";
       /** Report title, and the rendering the caller wants back. */
       title?: string;
       format?: "html" | "markdown";
@@ -188,13 +189,15 @@ export class Conductor {
       this.emit("CLARIFY");
       const questions: ClarifyQuestion[] = [];
       let rounds = 0;
-      const requestedStage3Mode = options.mode ?? (
-        /table[ -]?query|query[ -]?table/.test(request.toLowerCase()) ? "table-query" :
-        /landing[ -]?page|website/.test(request.toLowerCase()) ? "landing-page" :
-        /app[ -]?scaffold|scaffold/.test(request.toLowerCase()) ? "app-scaffold" :
-        /\bchart\b/.test(request.toLowerCase()) ? "chart" :
-        /\breport\b/.test(request.toLowerCase()) ? "report" : undefined
-      );
+      const requestLower = request.toLowerCase();
+      const requestedStage4Mode = options.mode === "omni" || /\bomni\b|\bpilot\b|signed loi|\bloi\b|wedge pilot/.test(requestLower) ? "omni" : undefined;
+      const requestedStage3Mode = requestedStage4Mode === undefined ? (options.mode ?? (
+        /table[ -]?query|query[ -]?table/.test(requestLower) ? "table-query" :
+        /landing[ -]?page|website/.test(requestLower) ? "landing-page" :
+        /app[ -]?scaffold|scaffold/.test(requestLower) ? "app-scaffold" :
+        /\bchart\b/.test(requestLower) ? "chart" :
+        /\breport\b/.test(requestLower) ? "report" : undefined
+      )) : undefined;
       let input = requestedStage3Mode === "landing-page" || requestedStage3Mode === "app-scaffold"
         ? path.join(this.cwd, "workspace", "stage3-request")
         : this.locateInput(request);
@@ -238,6 +241,10 @@ export class Conductor {
       // --- EXECUTE: Branch based on file extension ---
       const ext = path.extname(input).toLowerCase();
       const stage3Mode = requestedStage3Mode;
+
+      if (requestedStage4Mode === "omni") {
+        return this.omniPilot(input, request, options, questions, rounds, taskEvents);
+      }
 
       if (stage3Mode === "landing-page") {
         this.emit("EXECUTE", "landing_page");
@@ -403,6 +410,81 @@ export class Conductor {
       // there is no subscription to take down, and no handle for a slow sink to
       // outlive the run.
     }
+  }
+
+  private async omniPilot(
+    input: string, request: string,
+    options: { output?: string; title?: string },
+    questions: ClarifyQuestion[], rounds: number,
+    taskEvents: () => { type: string; payload: Record<string, unknown> }[],
+  ): Promise<ConductorResult> {
+    this.emit("EXECUTE", "csv_read");
+    const source = await this.callTool("omni-csv-read-1", "csv_read", { path: input });
+    if (!source.ok) return this.failed(source.failure, questions, rounds, taskEvents());
+    const csv = source.value as CsvReadResult;
+
+    const outputRoot = path.resolve(this.cwd, options.output ?? path.join("workspace", "pilot"));
+    const title = options.title ?? `Pilot package: ${path.basename(input)}`;
+    const category = csv.columns.find((column) => column.kind === "text")?.name ?? csv.headers[0] ?? "row";
+    const measure = [...csv.columns].reverse().find((column) => column.kind === "number" && column.name !== category)?.name;
+    const points: ChartPoint[] = measure === undefined
+      ? csv.sample.slice(0, 10).map((row, index) => ({ label: String(row[category] ?? index + 1), value: index + 1 }))
+      : csv.sample.map((row) => ({ label: String(row[category] ?? ""), value: Number(row[measure]) })).filter((point) => Number.isFinite(point.value));
+
+    this.emit("EXECUTE", "chart_render");
+    const chart = await this.callTool("omni-chart-1", "chart_render", {
+      path: path.join(outputRoot, "pilot-chart.svg"), title, points,
+    });
+    if (!chart.ok) return this.failed(chart.failure, questions, rounds, taskEvents());
+
+    this.emit("EXECUTE", "table_query");
+    const table = await this.callTool("omni-table-1", "table_query", {
+      path: input,
+      column: measure ?? category,
+      operator: measure === undefined ? "contains" : ">",
+      value: measure === undefined ? String(csv.sample[0]?.[category] ?? "") : 0,
+      limit: 25,
+    });
+    if (!table.ok) return this.failed(table.failure, questions, rounds, taskEvents());
+
+    const queryRows = (table.value as { rows?: Record<string, string>[] }).rows ?? [];
+    this.emit("EXECUTE", "report_write");
+    const report = await this.callTool("omni-report-1", "report_write", {
+      path: path.join(outputRoot, "pilot-report.md"),
+      title,
+      summary: `Stage 4 omni run read ${csv.rowCount} row(s), generated a chart, queried the table, and prepared pilot evidence.`,
+      columns: csv.headers,
+      rows: queryRows.length > 0 ? queryRows : csv.sample,
+    });
+    if (!report.ok) return this.failed(report.failure, questions, rounds, taskEvents());
+
+    this.emit("EXECUTE", "landing_page");
+    const landing = await this.callTool("omni-landing-1", "landing_page", {
+      path: path.join(outputRoot, "pilot-landing.html"),
+      title,
+      headline: "Pilot-ready governed analytics",
+      body: `The pilot package for ${path.basename(input)} includes governed ingestion, a queryable table result, and checked artifacts for buyer review.`,
+    });
+    if (!landing.ok) return this.failed(landing.failure, questions, rounds, taskEvents());
+
+    const produced = [chart.value, report.value, landing.value]
+      .map((value) => (value as { path?: string }).path)
+      .filter((value): value is string => typeof value === "string");
+
+    this.emit("EXECUTE", "pilot_record");
+    const record = await this.callTool("omni-pilot-record-1", "pilot_record", {
+      path: path.join(outputRoot, "pilot-record.json"),
+      request,
+      source: input,
+      artifacts: produced,
+      rowCount: csv.rowCount,
+      userCount: Math.min(5, Math.max(1, csv.rowCount)),
+      status: "loi-ready",
+    });
+    if (!record.ok) return this.failed(record.failure, questions, rounds, taskEvents());
+
+    return this.deliverStage3(record.value, questions, rounds, taskEvents,
+      `Stage 4 omni pilot package delivered with ${produced.length + 1} persisted artifact(s).`);
   }
 
   /**
@@ -608,6 +690,9 @@ export class Conductor {
           break;
         case "app_scaffold":
           value = await appScaffold(input as { path: string; name: string }, { boundary: this.boundary });
+          break;
+        case "pilot_record":
+          value = await pilotRecord(input as unknown as Parameters<typeof pilotRecord>[0], { boundary: this.boundary });
           break;
         default:
           await this.kernel.recordToolResult(callId, tool, undefined, true);

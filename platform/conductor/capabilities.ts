@@ -921,5 +921,69 @@ export async function appScaffold(
   return { path: target, bytes: Buffer.byteLength(html, "utf8") };
 }
 
+export interface PilotRecordInput {
+  path: string;
+  request: string;
+  source: string;
+  artifacts: string[];
+  rowCount: number;
+  userCount: number;
+  status?: "pilot-ready" | "loi-ready";
+}
+
+export interface PilotRecordResult {
+  path: string;
+  bytes: number;
+  userCount: number;
+  artifactCount: number;
+  status: "pilot-ready" | "loi-ready";
+}
+
+export const PILOT_RECORD: ToolDescriptor = {
+  name: "pilot_record",
+  version: "stage4",
+  description: "Persist wedge-pilot evidence for a real user or signed LOI run",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string" }, request: { type: "string" }, source: { type: "string" },
+      artifacts: { type: "array" }, rowCount: { type: "number" }, userCount: { type: "number" }, status: { type: "string" },
+    },
+    required: ["path", "request", "source", "artifacts", "rowCount", "userCount"],
+  },
+  outputSchema: { type: "object", properties: { path: { type: "string" }, bytes: { type: "number" }, userCount: { type: "number" }, artifactCount: { type: "number" } } },
+  capabilities: ["pilot.persist"],
+  permissions: ["tool:pilot_record"],
+  riskLevel: "WRITE",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "SIDE_EFFECTING",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export async function pilotRecord(
+  input: PilotRecordInput,
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<PilotRecordResult> {
+  const target = String(input.path ?? "");
+  checkOutputBoundary(target, boundary, "pilot_record");
+  const status = input.status ?? "pilot-ready";
+  const record = {
+    stage: 4,
+    status,
+    request: String(input.request ?? ""),
+    source: String(input.source ?? ""),
+    rowCount: Number(input.rowCount ?? 0),
+    userCount: Number(input.userCount ?? 0),
+    artifacts: (input.artifacts ?? []).map(String),
+    recordedAt: new Date().toISOString(),
+  };
+  const text = `${JSON.stringify(record, null, 2)}\n`;
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, text, "utf8");
+  return { path: target, bytes: Buffer.byteLength(text, "utf8"), userCount: record.userCount, artifactCount: record.artifacts.length, status };
+}
+
 export const STAGE3_CAPABILITIES: ToolDescriptor[] = [CHART_RENDER, TABLE_QUERY, LANDING_PAGE, REPORT_WRITE, APP_SCAFFOLD];
+export const STAGE4_CAPABILITIES: ToolDescriptor[] = [PILOT_RECORD];
 export const CHART = CHART_RENDER;
