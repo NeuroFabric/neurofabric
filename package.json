@@ -15,12 +15,17 @@
     "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
     "demo": "node --experimental-strip-types scripts/demo.ts",
     "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
-	"archify": "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
+    "archify": "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.entries.json"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "22.7.5",
     "dependency-cruiser": "^18.5.0",
     "typescript": "5.6.3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "pdf-parse": "^2.4.5"
   }
 }

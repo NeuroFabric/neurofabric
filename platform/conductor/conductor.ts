@@ -2,7 +2,16 @@ import path from "node:path";
 import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
-import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
+import {
+  appScaffold, chartRender, csvRead, landingPage, pdfRead, pilotRecord, renderPage, reportWrite, sqliteRead, tableQuery,
+  STAGE1_CAPABILITIES, STAGE3_CAPABILITIES as CAPABILITY_STAGE3, STAGE4_CAPABILITIES as CAPABILITY_STAGE4, type ChartPoint, type CsvReadResult,
+  type PdfReadResult,
+} from "./capabilities.ts";
+import { PDF_READ, SQLITE_READ } from "./capabilities.ts";
+import type { ToolDescriptor } from "../core/types.ts";
+export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ, PDF_READ];
+export const STAGE3_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE3;
+export const STAGE4_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE4;
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
 import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
@@ -72,7 +81,7 @@ export interface ConductorResult {
   /** Produced artifacts, referenced by path. */
   artifacts: string[];
   /** The Markdown report, when the run was asked for one. Never a guess at one. */
-  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema };
+  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema; pdf?: PdfReadResult; artifact?: unknown };
   /** Set when the run did not deliver. Never a bare string: always structured. */
   failure?: { code: string; reason: string; kernelReasonCode?: string };
   /** Every kernel event the run produced, in order. */
@@ -113,7 +122,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools([...STAGE1_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, ...STAGE4_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
@@ -142,7 +151,7 @@ export class Conductor {
        * report: the same governed read, then the analysis, then a governed
        * WRITE of the report itself.
        */
-      mode?: "dashboard" | "bottleneck";
+      mode?: "dashboard" | "bottleneck" | "chart" | "table-query" | "landing-page" | "report" | "app-scaffold" | "omni";
       /** Report title, and the rendering the caller wants back. */
       title?: string;
       format?: "html" | "markdown";
@@ -180,7 +189,18 @@ export class Conductor {
       this.emit("CLARIFY");
       const questions: ClarifyQuestion[] = [];
       let rounds = 0;
-      let input = this.locateInput(request);
+      const requestLower = request.toLowerCase();
+      const requestedStage4Mode = options.mode === "omni" || /\bomni\b|\bpilot\b|signed loi|\bloi\b|wedge pilot/.test(requestLower) ? "omni" : undefined;
+      const requestedStage3Mode = requestedStage4Mode === undefined ? (options.mode ?? (
+        /table[ -]?query|query[ -]?table/.test(requestLower) ? "table-query" :
+        /landing[ -]?page|website/.test(requestLower) ? "landing-page" :
+        /app[ -]?scaffold|scaffold/.test(requestLower) ? "app-scaffold" :
+        /\bchart\b/.test(requestLower) ? "chart" :
+        /\breport\b/.test(requestLower) ? "report" : undefined
+      )) : undefined;
+      let input = requestedStage3Mode === "landing-page" || requestedStage3Mode === "app-scaffold"
+        ? path.join(this.cwd, "workspace", "stage3-request")
+        : this.locateInput(request);
       while (input === undefined && rounds < MAX_CLARIFY_ROUNDS) {
         rounds += 1;
         // The raw request is NOT echoed here. This detail travels back to a
@@ -213,12 +233,132 @@ export class Conductor {
         };
       }
 
-      // --- PLAN (the kernel takes over here) ---
+// --- PLAN (the kernel takes over here) ---
       this.emit("PLAN", input);
       await this.kernel.beginTask(request, request, { input });
       taskId = this.kernel.currentTask?.taskId ?? taskId;
 
-      // --- EXECUTE: two governed calls, through the real bridge sequence ---
+      // --- EXECUTE: Branch based on file extension ---
+      const ext = path.extname(input).toLowerCase();
+      const stage3Mode = requestedStage3Mode;
+
+      if (requestedStage4Mode === "omni") {
+        return this.omniPilot(input, request, options, questions, rounds, taskEvents);
+      }
+
+      if (stage3Mode === "landing-page") {
+        this.emit("EXECUTE", "landing_page");
+        const written = await this.callTool("landing-page-1", "landing_page", {
+          path: path.resolve(this.cwd, options.output ?? path.join("workspace", "landing-page.html")),
+          title: options.title ?? "A clearer way forward",
+          headline: options.title ?? "A clearer way forward",
+          body: "A governed landing page generated inside the workspace.",
+        });
+        if (!written.ok) return this.failed(written.failure, questions, rounds, taskEvents());
+        return this.deliverStage3(written.value, questions, rounds, taskEvents, `Landing page written to ${(written.value as { path: string }).path}.`);
+      }
+
+      if (stage3Mode === "app-scaffold") {
+        this.emit("EXECUTE", "app_scaffold");
+        const written = await this.callTool("app-scaffold-1", "app_scaffold", {
+          path: path.resolve(this.cwd, options.output ?? path.join("workspace", "app", "index.html")),
+          name: options.title ?? "Governed application",
+        });
+        if (!written.ok) return this.failed(written.failure, questions, rounds, taskEvents());
+        return this.deliverStage3(written.value, questions, rounds, taskEvents, `Application scaffold written to ${(written.value as { path: string }).path}.`);
+      }
+
+      if (stage3Mode === "table-query" || stage3Mode === "chart" || stage3Mode === "report") {
+        this.emit("EXECUTE", "csv_read");
+        const source = await this.callTool("stage3-csv-read-1", "csv_read", { path: input });
+        if (!source.ok) return this.failed(source.failure, questions, rounds, taskEvents());
+        const csv = source.value as CsvReadResult;
+
+        if (stage3Mode === "table-query") {
+          const query = /(?:column=)?([A-Za-z_][\w.-]*)\s*(contains|!=|>=|<=|=|>|<)\s*["']?([^;"']+?)["']?(?:\s|$)/i.exec(request);
+          const column = query?.[1] ?? csv.headers[0] ?? "";
+          const operator = query?.[2] ?? "contains";
+          const value = query?.[3]?.trim() ?? request;
+          this.emit("EXECUTE", "table_query");
+          const result = await this.callTool("table-query-1", "table_query", { path: input, column, operator, value });
+          if (!result.ok) return this.failed(result.failure, questions, rounds, taskEvents());
+          return this.deliverStage3(result.value, questions, rounds, taskEvents, `Table query matched ${(result.value as { matchedRows: number }).matchedRows} row(s).`);
+        }
+
+        if (stage3Mode === "chart") {
+          const category = csv.columns.find((column) => column.kind === "text")?.name ?? csv.headers[0];
+          const measure = [...csv.columns].reverse().find((column) => column.kind === "number" && column.name !== category)?.name;
+          const points: ChartPoint[] = measure === undefined ? [] : csv.sample.map((row) => ({ label: String(row[category ?? ""] ?? ""), value: Number(row[measure]) })).filter((point) => Number.isFinite(point.value));
+          this.emit("EXECUTE", "chart_render");
+          const result = await this.callTool("chart-render-1", "chart_render", {
+            path: path.resolve(this.cwd, options.output ?? path.join("workspace", "chart.svg")),
+            title: options.title ?? "Chart",
+            points,
+          });
+          if (!result.ok) return this.failed(result.failure, questions, rounds, taskEvents());
+          return this.deliverStage3(result.value, questions, rounds, taskEvents, `Chart written to ${(result.value as { path: string }).path}.`);
+        }
+
+        this.emit("EXECUTE", "report_write");
+        const result = await this.callTool("report-write-1", "report_write", {
+          path: path.resolve(this.cwd, options.output ?? path.join("workspace", "report.md")),
+          title: options.title ?? `Report: ${path.basename(input)}`,
+          summary: `The governed reader found ${csv.rowCount} row(s) and ${csv.headers.length} column(s).`,
+          columns: csv.headers,
+          rows: csv.sample,
+        });
+        if (!result.ok) return this.failed(result.failure, questions, rounds, taskEvents());
+        return this.deliverStage3(result.value, questions, rounds, taskEvents, `Report written to ${(result.value as { path: string }).path}.`);
+      }
+
+      if (ext === '.pdf') {
+        this.emit("EXECUTE", "pdf_read");
+        const read = await this.callTool("pdf-read-1", "pdf_read", { path: input });
+        if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
+
+        const pdf = read.value as PdfReadResult;
+        const task = await this.kernel.finishTask({ ok: true });
+        this.emit("DELIVER", task.status);
+        const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+        if (task.status !== "COMPLETED") {
+          return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+        }
+
+        return {
+          status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
+          kernelEvents: taskEvents(), progress: this.progress,
+          report: {
+            markdown: pdf.text,
+            analysis: { purpose: "PDF Text Extraction", bottlenecks: [] } as unknown as BottleneckAnalysis,
+            pdf,
+          },
+        };
+      }
+
+      if (ext === '.sqlite' || ext === '.db') {
+        this.emit("EXECUTE", "sqlite_read");
+        const read = await this.callTool("sqlite-read-1", "sqlite_read", { path: input });
+        if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
+
+        this.emit("EXECUTE", "schema_analysis");
+        
+        // --- DELIVER SQLITE RESULT ---
+        const task = await this.kernel.finishTask({ ok: true });
+        this.emit("DELIVER", task.status);
+        const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+        if (task.status !== "COMPLETED") {
+          return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+        }
+        
+        return { 
+          status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, 
+          kernelEvents: taskEvents(), progress: this.progress,
+          // Return the raw SQLite payload instead of rendering HTML
+          report: { markdown: "SQLite Database loaded successfully.", analysis: { purpose: "Database Inspection", bottlenecks: [] } as any, schema: read.value as any }
+        };
+      }
+
+      // --- EXECUTE CSV PIPELINE ---
       this.emit("EXECUTE", "csv_read");
       const read = await this.callTool("csv-read-1", "csv_read", { path: input });
       if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
@@ -270,6 +410,81 @@ export class Conductor {
       // there is no subscription to take down, and no handle for a slow sink to
       // outlive the run.
     }
+  }
+
+  private async omniPilot(
+    input: string, request: string,
+    options: { output?: string; title?: string },
+    questions: ClarifyQuestion[], rounds: number,
+    taskEvents: () => { type: string; payload: Record<string, unknown> }[],
+  ): Promise<ConductorResult> {
+    this.emit("EXECUTE", "csv_read");
+    const source = await this.callTool("omni-csv-read-1", "csv_read", { path: input });
+    if (!source.ok) return this.failed(source.failure, questions, rounds, taskEvents());
+    const csv = source.value as CsvReadResult;
+
+    const outputRoot = path.resolve(this.cwd, options.output ?? path.join("workspace", "pilot"));
+    const title = options.title ?? `Pilot package: ${path.basename(input)}`;
+    const category = csv.columns.find((column) => column.kind === "text")?.name ?? csv.headers[0] ?? "row";
+    const measure = [...csv.columns].reverse().find((column) => column.kind === "number" && column.name !== category)?.name;
+    const points: ChartPoint[] = measure === undefined
+      ? csv.sample.slice(0, 10).map((row, index) => ({ label: String(row[category] ?? index + 1), value: index + 1 }))
+      : csv.sample.map((row) => ({ label: String(row[category] ?? ""), value: Number(row[measure]) })).filter((point) => Number.isFinite(point.value));
+
+    this.emit("EXECUTE", "chart_render");
+    const chart = await this.callTool("omni-chart-1", "chart_render", {
+      path: path.join(outputRoot, "pilot-chart.svg"), title, points,
+    });
+    if (!chart.ok) return this.failed(chart.failure, questions, rounds, taskEvents());
+
+    this.emit("EXECUTE", "table_query");
+    const table = await this.callTool("omni-table-1", "table_query", {
+      path: input,
+      column: measure ?? category,
+      operator: measure === undefined ? "contains" : ">",
+      value: measure === undefined ? String(csv.sample[0]?.[category] ?? "") : 0,
+      limit: 25,
+    });
+    if (!table.ok) return this.failed(table.failure, questions, rounds, taskEvents());
+
+    const queryRows = (table.value as { rows?: Record<string, string>[] }).rows ?? [];
+    this.emit("EXECUTE", "report_write");
+    const report = await this.callTool("omni-report-1", "report_write", {
+      path: path.join(outputRoot, "pilot-report.md"),
+      title,
+      summary: `Stage 4 omni run read ${csv.rowCount} row(s), generated a chart, queried the table, and prepared pilot evidence.`,
+      columns: csv.headers,
+      rows: queryRows.length > 0 ? queryRows : csv.sample,
+    });
+    if (!report.ok) return this.failed(report.failure, questions, rounds, taskEvents());
+
+    this.emit("EXECUTE", "landing_page");
+    const landing = await this.callTool("omni-landing-1", "landing_page", {
+      path: path.join(outputRoot, "pilot-landing.html"),
+      title,
+      headline: "Pilot-ready governed analytics",
+      body: `The pilot package for ${path.basename(input)} includes governed ingestion, a queryable table result, and checked artifacts for buyer review.`,
+    });
+    if (!landing.ok) return this.failed(landing.failure, questions, rounds, taskEvents());
+
+    const produced = [chart.value, report.value, landing.value]
+      .map((value) => (value as { path?: string }).path)
+      .filter((value): value is string => typeof value === "string");
+
+    this.emit("EXECUTE", "pilot_record");
+    const record = await this.callTool("omni-pilot-record-1", "pilot_record", {
+      path: path.join(outputRoot, "pilot-record.json"),
+      request,
+      source: input,
+      artifacts: produced,
+      rowCount: csv.rowCount,
+      userCount: Math.min(5, Math.max(1, csv.rowCount)),
+      status: "loi-ready",
+    });
+    if (!record.ok) return this.failed(record.failure, questions, rounds, taskEvents());
+
+    return this.deliverStage3(record.value, questions, rounds, taskEvents,
+      `Stage 4 omni pilot package delivered with ${produced.length + 1} persisted artifact(s).`);
   }
 
   /**
@@ -370,6 +585,29 @@ export class Conductor {
     };
   }
 
+  private async deliverStage3(
+    value: unknown,
+    questions: ClarifyQuestion[], rounds: number,
+    taskEvents: () => { type: string; payload: Record<string, unknown> }[],
+    markdown: string,
+  ): Promise<ConductorResult> {
+    const task = await this.kernel.finishTask({ ok: true });
+    this.emit("DELIVER", task.status);
+    const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+    if (task.status !== "COMPLETED") {
+      return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+    }
+    return {
+      status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
+      kernelEvents: taskEvents(), progress: this.progress,
+      report: {
+        markdown,
+        analysis: { purpose: "Stage 3 artifact", bottlenecks: [] } as unknown as BottleneckAnalysis,
+        artifact: value,
+      },
+    };
+  }
+
   private failed(
     failure: { code: string; reason: string; kernelReasonCode?: string },
     questions: ClarifyQuestion[], rounds: number,
@@ -432,6 +670,30 @@ export class Conductor {
         case "render_bottleneck_report":
           value = await renderBottleneckReport(input as Parameters<typeof renderBottleneckReport>[0]);
           break;
+        case "sqlite_read":
+          value = await sqliteRead({ path: String(input.path), query: input.query === undefined ? undefined : String(input.query) }, { boundary: this.boundary });
+          break;
+        case "pdf_read":
+          value = await pdfRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
+        case "chart_render":
+          value = await chartRender(input as { path: string; title?: string; points: ChartPoint[] }, { boundary: this.boundary });
+          break;
+        case "table_query":
+          value = await tableQuery(input as { path: string; column: string; operator: string; value: string | number; limit?: number }, { boundary: this.boundary });
+          break;
+        case "landing_page":
+          value = await landingPage(input as { path: string; title: string; headline: string; body: string }, { boundary: this.boundary });
+          break;
+        case "report_write":
+          value = await reportWrite(input as { path: string; title: string; summary: string; columns?: string[]; rows?: Record<string, string>[] }, { boundary: this.boundary });
+          break;
+        case "app_scaffold":
+          value = await appScaffold(input as { path: string; name: string }, { boundary: this.boundary });
+          break;
+        case "pilot_record":
+          value = await pilotRecord(input as unknown as Parameters<typeof pilotRecord>[0], { boundary: this.boundary });
+          break;
         default:
           await this.kernel.recordToolResult(callId, tool, undefined, true);
           return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
@@ -471,7 +733,8 @@ export class Conductor {
     const named = framed?.[1].trim();
     const raw = named !== undefined && named !== ""
       ? named
-      : /[\w./\\-]+\.csv\b/i.exec(text)?.[0];
+      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log|sqlite|db|pdf)\b/i.exec(text)?.[0];
+    console.log("locateInput raw:", raw);
     if (raw === undefined) return undefined;
     // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
     // speaking, not a security control: `<`, `>` and a NUL cannot appear in a

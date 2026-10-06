@@ -237,6 +237,23 @@ export class SwarmDispatcher {
   }
 
   /**
+   * IS THIS AGENT REGISTERED?
+   *
+   * Added for the handoff protocol, which must refuse to hand session context to an
+   * agent that is not in this registry. A handoff addressed by NAME to something
+   * that does not exist would otherwise be a note passed into the void, and the
+   * sender would have every reason to believe the receiver was working on it.
+   */
+  hasAgent(name: string): boolean {
+    return this.#agents.some((agent) => agent.name === name);
+  }
+
+  /** Registered agent names. For diagnostics; the order is registration order. */
+  agentNames(): readonly string[] {
+    return this.#agents.map((agent) => agent.name);
+  }
+
+  /**
    * ROUTE ONE EVENT.
    *
    * Re-validates before routing, so a caller holding an envelope it built by hand

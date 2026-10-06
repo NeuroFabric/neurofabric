@@ -242,6 +242,100 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ===================== THE EMBASSY =====================
+  #
+  # === IT WAS A GHOST, AND THAT WAS WORSE THAN NOT HAVING IT ===
+  #
+  # The approval ledger is the record of which person approved which credential read,
+  # at what exposure, and when. Litestream was configured to replicate it and the
+  # sidecar mounted the volume -- but NOTHING WROTE TO IT, because the embassy was
+  # never a service here. The glob matched no file and the sidecar replicated
+  # nothing, SILENTLY, because "no database matched" is a normal state to Litestream.
+  #
+  # That is the worst shape a backup can have: it appears in the status output, so
+  # an operator checking that replication is configured would see it configured. A
+  # vault nobody reads and a backup of nothing are the same failure wearing a
+  # passing test.
+  embassy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: neurofebric/embassy:local
+    restart: unless-stopped
+    depends_on:
+      - wedge
+
+    volumes:
+      # READ-WRITE. This is the writer for the database the sidecar backs up, and the
+      # asymmetry with the sidecar's `:ro` mount is the point: exactly one process may
+      # write the ledger, and the process whose job is to restore it may not.
+      - embassy-audit:/app/embassy-audit
+      # The vault file. The binary credential store this service reads. Named as its
+      # own volume rather than shared, so an operator can snapshot the ledger without
+      # dragging a file full of credentials into the same backup.
+      - embassy-vault:/app/embassy-vault
+
+    # THE PROTOCOL IS STDIO.
+    #
+    # There is no port and no `ports:` here on purpose. The embassy speaks JSON-RPC
+    # over stdin/stdout to whichever agent hosts it; publishing it would put the
+    # credential path on a socket. It is also why this service is not the thing a
+    # client "connects to" in the usual sense -- something has to spawn it.
+    command:
+      - node
+      - --max-old-space-size=192
+      - --experimental-strip-types
+      - platform/embassy/bin.mjs
+
+    environment:
+      # NONE OF THESE HAVE DEFAULTS, AND THAT IS DELIBERATE.
+      #
+      # `buildPrecheck` REFUSES to wire the approval path without a ledger it can
+      # open -- an approval with no record is not a decision -- and `readConfig`
+      # exits 2 when the token or origin is missing. So an operator who sets none of
+      # these gets a container that exits immediately with a message naming what is
+      # missing, rather than a "degraded" embassy serving the three core tools and
+      # quietly recording nothing.
+      #
+      # The signing key arrives from the host environment and is NEVER written into
+      # this file. A credential in a committed compose file is in git history
+      # forever.
+      NEUROFEBRIC_EMBASSY_TOKEN: ${NEUROFEBRIC_EMBASSY_TOKEN}
+      NEUROFEBRIC_CORE_ORIGIN: ${NEUROFEBRIC_CORE_ORIGIN}
+      NEUROFEBRIC_AUDIT_DIR: /app/embassy-audit
+      NEUROFEBRIC_VAULT_FILE: /app/embassy-vault/vault.bin
+      NEUROFEBRIC_VAULT_KEY: ${NEUROFEBRIC_VAULT_KEY}
+      NEUROFEBRIC_CAPABILITY: ${NEUROFEBRIC_CAPABILITY}
+      # Async HITL, so a restricted call is answered -32001 with a task token rather
+      # than holding the caller's request open until a person answers. Off by default
+      # because turning it on changes how every restricted call is answered, and that
+      # is not something an operator should discover from a log.
+      NEUROFEBRIC_ASYNC_HITL: ${NEUROFEBRIC_ASYNC_HITL:-0}
+
+    # Same posture as the wedge: unprivileged, read-only root, capped, no swap. The
+    # ledger and the vault are the two most sensitive paths in this system and the
+    # container is the only boundary they have.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+
+    # There is no healthcheck. It is a stdio protocol server: there is no socket to
+    # connect to and nothing to GET, so the only healthcheck available would be
+    # "is the process alive", which the restart policy already covers. Inventing an
+    # endpoint to probe would be a healthcheck that tests the healthcheck.
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 volumes:
   wedge-data:
     # Named explicitly rather than left to Compose's default, so `docker volume
@@ -271,3 +365,10 @@ volumes:
   # is a separate piece of work and is not this commit.
   embassy-audit:
     name: neurofebric-embassy-audit
+
+  # The binary credential vault. Separate from the ledger on purpose: backing up "who
+  # approved what" and backing up "the secrets themselves" are different compliance
+  # questions with different blast radii, and an operator who wants the first should
+  # not have to take the second to get it.
+  embassy-vault:
+    name: neurofebric-embassy-vault
