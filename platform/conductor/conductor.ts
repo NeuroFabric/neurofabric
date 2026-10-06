@@ -3,6 +3,8 @@ import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
 import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
+import { SQLITE_READ } from "./capabilities.ts";
+export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ];
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
 import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
@@ -113,7 +115,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools([...STAGE1_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
@@ -213,12 +215,37 @@ export class Conductor {
         };
       }
 
-      // --- PLAN (the kernel takes over here) ---
+// --- PLAN (the kernel takes over here) ---
       this.emit("PLAN", input);
       await this.kernel.beginTask(request, request, { input });
       taskId = this.kernel.currentTask?.taskId ?? taskId;
 
-      // --- EXECUTE: two governed calls, through the real bridge sequence ---
+      // --- EXECUTE: Branch based on file extension ---
+      const ext = path.extname(input).toLowerCase();
+      if (ext === '.sqlite' || ext === '.db') {
+        this.emit("EXECUTE", "sqlite_read");
+        const read = await this.callTool("sqlite-read-1", "sqlite_read", { path: input });
+        if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
+
+        this.emit("EXECUTE", "schema_analysis");
+        
+        // --- DELIVER SQLITE RESULT ---
+        const task = await this.kernel.finishTask({ ok: true });
+        this.emit("DELIVER", task.status);
+        const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+        if (task.status !== "COMPLETED") {
+          return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+        }
+        
+        return { 
+          status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts, 
+          kernelEvents: taskEvents(), progress: this.progress,
+          // Return the raw SQLite payload instead of rendering HTML
+          report: { markdown: "SQLite Database loaded successfully.", analysis: { purpose: "Database Inspection", bottlenecks: [] } as any, schema: read.value as any }
+        };
+      }
+
+      // --- EXECUTE CSV PIPELINE ---
       this.emit("EXECUTE", "csv_read");
       const read = await this.callTool("csv-read-1", "csv_read", { path: input });
       if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
@@ -432,6 +459,9 @@ export class Conductor {
         case "render_bottleneck_report":
           value = await renderBottleneckReport(input as Parameters<typeof renderBottleneckReport>[0]);
           break;
+        case "sqlite_read":
+          value = await sqliteRead({ path: String(input.path), query: input.query }, { boundary: this.boundary });
+          break;
         default:
           await this.kernel.recordToolResult(callId, tool, undefined, true);
           return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
@@ -471,7 +501,7 @@ export class Conductor {
     const named = framed?.[1].trim();
     const raw = named !== undefined && named !== ""
       ? named
-      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log)\b/i.exec(text)?.[0];
+      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log|sqlite|db)\b/i.exec(text)?.[0];
     console.log("locateInput raw:", raw);
     if (raw === undefined) return undefined;
     // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
