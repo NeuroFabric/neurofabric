@@ -6,6 +6,7 @@ import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
 import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
 import { open, readFile } from "node:fs/promises";
 import Database from "better-sqlite3";
+import { PDFParse } from "pdf-parse";
 
 /**
  * The Stage 1 capability set: exactly two, because the acceptance scenario needs
@@ -536,6 +537,57 @@ export const RENDER_PAGE: ToolDescriptor = {
 };
 
 export const STAGE1_CAPABILITIES: ToolDescriptor[] = [CSV_READ, RENDER_PAGE];
+
+export const PDF_READ: ToolDescriptor = {
+  name: "pdf_read",
+  version: "stage2",
+  description: "Extract text from a PDF file inside the workspace",
+  inputSchema: {
+    type: "object",
+    properties: { path: { type: "string" } },
+    required: ["path"],
+  },
+  outputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string" },
+      text: { type: "string" },
+      pages: { type: "number" },
+    },
+  },
+  capabilities: ["pdf.read"],
+  permissions: ["tool:pdf_read"],
+  riskLevel: "READ_ONLY",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "PURE",
+  timeoutMs: 10_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+export interface PdfReadResult {
+  path: string;
+  text: string;
+  pages: number;
+}
+
+export async function pdfRead(
+  input: { path: string },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } },
+): Promise<PdfReadResult> {
+  const target = String(input.path ?? "");
+  if (boundary?.boundary) {
+    const verdict = boundary.boundary.check(target);
+    if (!verdict.allowed) throw new Error(`pdf_read: the path is outside the workspace boundary (refused)`);
+  }
+
+  const parser = new PDFParse({ data: await readFile(target) });
+  try {
+    const result = await parser.getText();
+    return { path: target, text: result.text, pages: result.total };
+  } finally {
+    await parser.destroy();
+  }
+}
 
 export const SQLITE_READ: ToolDescriptor = {
   name: "sqlite_read",

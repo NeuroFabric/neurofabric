@@ -2,9 +2,10 @@ import path from "node:path";
 import { KernelAdapter } from "../pi/kernel-adapter.ts";
 import { WorkspaceBoundary } from "../core/workspace.ts";
 import { buildPolicy, resolveAllowedRoots, type NeurofebricProjectConfig } from "../pi/project-config.ts";
-import { csvRead, renderPage, STAGE1_CAPABILITIES, type CsvReadResult } from "./capabilities.ts";
-import { SQLITE_READ } from "./capabilities.ts";
-export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ];
+import { csvRead, pdfRead, renderPage, sqliteRead, STAGE1_CAPABILITIES, type CsvReadResult, type PdfReadResult } from "./capabilities.ts";
+import { PDF_READ, SQLITE_READ } from "./capabilities.ts";
+import type { ToolDescriptor } from "../core/types.ts";
+export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ, PDF_READ];
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
 import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
@@ -74,7 +75,7 @@ export interface ConductorResult {
   /** Produced artifacts, referenced by path. */
   artifacts: string[];
   /** The Markdown report, when the run was asked for one. Never a guess at one. */
-  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema };
+  report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema; pdf?: PdfReadResult };
   /** Set when the run did not deliver. Never a bare string: always structured. */
   failure?: { code: string; reason: string; kernelReasonCode?: string };
   /** Every kernel event the run produced, in order. */
@@ -222,6 +223,30 @@ export class Conductor {
 
       // --- EXECUTE: Branch based on file extension ---
       const ext = path.extname(input).toLowerCase();
+      if (ext === '.pdf') {
+        this.emit("EXECUTE", "pdf_read");
+        const read = await this.callTool("pdf-read-1", "pdf_read", { path: input });
+        if (!read.ok) return this.failed(read.failure, questions, rounds, taskEvents());
+
+        const pdf = read.value as PdfReadResult;
+        const task = await this.kernel.finishTask({ ok: true });
+        this.emit("DELIVER", task.status);
+        const artifacts = this.kernel.artifacts.map((artifact) => artifact.reference);
+        if (task.status !== "COMPLETED") {
+          return this.failed({ code: task.failureReason ?? "TASK_NOT_COMPLETED", reason: task.failureReason ?? "the task did not complete" }, questions, rounds, taskEvents());
+        }
+
+        return {
+          status: "DELIVERED", state: "DELIVER", questions, clarifyRounds: rounds, artifacts,
+          kernelEvents: taskEvents(), progress: this.progress,
+          report: {
+            markdown: pdf.text,
+            analysis: { purpose: "PDF Text Extraction", bottlenecks: [] } as unknown as BottleneckAnalysis,
+            pdf,
+          },
+        };
+      }
+
       if (ext === '.sqlite' || ext === '.db') {
         this.emit("EXECUTE", "sqlite_read");
         const read = await this.callTool("sqlite-read-1", "sqlite_read", { path: input });
@@ -462,6 +487,9 @@ export class Conductor {
         case "sqlite_read":
           value = await sqliteRead({ path: String(input.path), query: input.query }, { boundary: this.boundary });
           break;
+        case "pdf_read":
+          value = await pdfRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
         default:
           await this.kernel.recordToolResult(callId, tool, undefined, true);
           return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
@@ -501,7 +529,7 @@ export class Conductor {
     const named = framed?.[1].trim();
     const raw = named !== undefined && named !== ""
       ? named
-      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log|sqlite|db)\b/i.exec(text)?.[0];
+      : /[\w./\-]+?\.(csv|tsv|jsonl|jsonlines|ndjson|log|sqlite|db|pdf)\b/i.exec(text)?.[0];
     console.log("locateInput raw:", raw);
     if (raw === undefined) return undefined;
     // A NAME THAT CANNOT EXIST ON DISK IS NOT AN INPUT. This is the filesystem
