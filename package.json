@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.entries.json"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "22.7.5",
     "dependency-cruiser": "^18.5.0",
     "typescript": "5.6.3"
