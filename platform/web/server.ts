@@ -1,6 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 
+export class CircuitBreakerError extends Error {
+  constructor(message = 'Task execution halted: maximum iteration threshold exceeded.') {
+    super(message);
+    this.name = 'CircuitBreakerError';
+  }
+}
+
+const MAX_ITERATIONS = 3;
+const taskIterationMap = new Map<string, number>();
+
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
 import { titleFor, type Purpose } from "../conductor/semantics.ts";
@@ -262,6 +272,24 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(text);
 }
 
+/** Convert the ledger's epoch-second timestamps to ISO, while tolerating legacy ISO rows. */
+function ledgerTimestamp(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+
+  let milliseconds: number;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    milliseconds = value * 1000;
+  } else if (typeof value === "string" && value.trim() !== "") {
+    const numeric = Number(value);
+    milliseconds = Number.isFinite(numeric) ? numeric * 1000 : Date.parse(value);
+  } else {
+    return null;
+  }
+
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -289,6 +317,7 @@ function readBody(request: IncomingMessage): Promise<string> {
  * decoration.
  */
 function toResponse(result: ConductorResult): Record<string, unknown> {
+  const analysis = result.report?.analysis;
   return {
     status: result.status,
     state: result.state,
@@ -312,7 +341,27 @@ function toResponse(result: ConductorResult): Record<string, unknown> {
      * and its `confidence` so a client that renders it is showing the engine's
      * reasoning and its uncertainty, not a bare label it can present as fact.
      */
-    purpose: result.report?.analysis.purpose,
+    purpose: analysis?.purpose,
+    ...(analysis === undefined ? {} : {
+      // Structured, bounded findings let the UI render evidence-based remediation
+      // without re-parsing a file or inventing chart samples in the browser.
+      analysis: {
+        totalRows: analysis.totalRows,
+        errorRows: analysis.errorRows,
+        errorRate: analysis.errorRate,
+        problems: Array.isArray(analysis.problems) ? analysis.problems.slice(0, 50) : [],
+        mappings: Array.isArray(analysis.mappings) ? analysis.mappings.slice(0, 32) : [],
+        byHour: Array.isArray(analysis.byHour)
+          ? analysis.byHour.slice(0, 500).map(({ key, count, errorCount, errorRate }) => ({ key, count, errorCount, errorRate }))
+          : [],
+        latencyBands: Array.isArray(analysis.latency)
+          ? analysis.latency.slice(0, 32).map(({ label, count }) => ({ label, count }))
+          : [],
+        categories: Array.isArray(analysis.categories)
+          ? analysis.categories.slice(0, 50).map(({ key, count, p95Elapsed }) => ({ key, count, p95Elapsed }))
+          : [],
+      },
+    }),
     kernelEvents: result.kernelEvents,
     progress: result.progress,
   };
@@ -1508,6 +1557,296 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
         // --- GOVERNANCE ENDPOINTS ---
 
+        // GET /api/v1/governance/ledger
+        if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
+          try {
+            const Database = (await import("better-sqlite3")).default;
+            const db = new Database(path.join(cwd, "workspace", "gate.db"), { readonly: true });
+
+            // subject_json is a serialised object; parse it back so the caller
+            // receives a plain record rather than an escaped string inside JSON.
+            // Rows that pre-date the column or whose JSON is malformed still travel
+            // as-is so a parse failure does not drop an audit row.
+            const rows = db
+              .prepare(
+                `SELECT task_token, status, subject_json, decided_at, approved_by,
+                        reason, result_expires_at, collected_at, created_at,
+                        owasp_ref, nist_ref
+                 FROM approval_tasks
+                 ORDER BY created_at DESC`,
+              )
+              .all() as {
+                task_token: string;
+                status: string;
+                subject_json: string;
+                decided_at: number | null;
+                approved_by: string | null;
+                reason: string | null;
+                result_expires_at: number | null;
+                collected_at: number | null;
+                created_at: number;
+                owasp_ref: string | null;
+                nist_ref: string | null;
+              }[];
+
+            const ledger = rows.map((row) => {
+              let subject: unknown;
+              try {
+                subject = JSON.parse(row.subject_json);
+              } catch {
+                subject = row.subject_json;
+              }
+              return {
+                token: row.task_token,
+                status: row.status,
+                subject,
+                decidedAt: ledgerTimestamp(row.decided_at),
+                approvedBy: row.approved_by ?? null,
+                reason: row.reason ?? null,
+                resultExpiresAt: ledgerTimestamp(row.result_expires_at),
+                collectedAt: ledgerTimestamp(row.collected_at),
+                createdAt: ledgerTimestamp(row.created_at),
+                // Regulatory traceability columns — null on rows that pre-date
+                // the migration or that were not flagged as schema mutations.
+                owaspRef: row.owasp_ref ?? null,
+                nistRef: row.nist_ref ?? null,
+              };
+            });
+
+            sendJson(response, 200, ledger);
+            return;
+          } catch (error) {
+            // A missing database file is a normal startup condition — no tasks
+            // have been created yet. Return an empty ledger rather than a 500.
+            const message = error instanceof Error ? error.message : String(error);
+            const code = typeof error === "object" && error !== null && "code" in error
+              ? (error as { code?: unknown }).code
+              : undefined;
+            if (code === "SQLITE_CANTOPEN" || message.includes("no such file") || message.includes("unable to open database file")) {
+              sendJson(response, 200, []);
+              return;
+            }
+            sendJson(response, 500, { error: "Could not read the governance ledger.", detail: message });
+            return;
+          }
+        }
+
+        // POST /api/v1/workspace/ingest
+        if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
+          const contentType = (request.headers["content-type"] ?? "").toLowerCase();
+          if (!contentType.startsWith("multipart/form-data")) {
+            sendJson(response, 400, { error: "Content-Type must be multipart/form-data." });
+            return;
+          }
+
+          // Extract the boundary token from the Content-Type header.
+          // RFC 7578 §4.1: boundary parameter is required.
+          const boundaryMatch = /boundary=([^;\s]+)/i.exec(request.headers["content-type"] ?? "");
+          if (boundaryMatch === null) {
+            sendJson(response, 400, { error: "multipart/form-data boundary is missing from Content-Type." });
+            return;
+          }
+          const boundary = boundaryMatch[1]!.replace(/^"|"$/g, "");
+
+          // Read the raw body as a Buffer so binary files are not corrupted by
+          // a UTF-8 decode. `readBody` returns a string, so we read manually.
+          let rawBuffer: Buffer;
+          try {
+            rawBuffer = await new Promise<Buffer>((resolve, reject) => {
+              let size = 0;
+              const chunks: Buffer[] = [];
+              request.on("data", (chunk: Buffer) => {
+                size += chunk.length;
+                if (size > MAX_BODY_BYTES) {
+                  reject(new Error(`the request body exceeds ${MAX_BODY_BYTES} bytes`));
+                  request.destroy();
+                  return;
+                }
+                chunks.push(chunk);
+              });
+              request.on("end", () => resolve(Buffer.concat(chunks)));
+              request.on("error", reject);
+            });
+          } catch (error) {
+            sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not read the request body." });
+            return;
+          }
+
+          // Manual multipart parser. We deliberately avoid a third-party library
+          // to honour the project's no-runtime-dependencies constraint.
+          //
+          // Structure: --<boundary>\r\n<headers>\r\n\r\n<body>\r\n repeated,
+          // terminated by --<boundary>--.
+          const delimiter = Buffer.from(`--${boundary}`);
+          const crlf = Buffer.from("\r\n");
+          const crlfcrlf = Buffer.from("\r\n\r\n");
+
+          let fileName: string | undefined;
+          let fileBuffer: Buffer | undefined;
+
+          // Walk the parts by finding each boundary marker.
+          let offset = 0;
+          while (offset < rawBuffer.length) {
+            const delimPos = rawBuffer.indexOf(delimiter, offset);
+            if (delimPos === -1) break;
+
+            const afterDelim = delimPos + delimiter.length;
+            // "--" suffix marks the closing boundary; stop.
+            if (
+              rawBuffer[afterDelim] === 0x2d /* - */ &&
+              rawBuffer[afterDelim + 1] === 0x2d /* - */
+            ) {
+              break;
+            }
+            // Skip the CRLF after the boundary line.
+            const partStart = afterDelim + crlf.length;
+
+            // Find the blank line that separates part headers from part body.
+            const headerEnd = rawBuffer.indexOf(crlfcrlf, partStart);
+            if (headerEnd === -1) { offset = afterDelim; continue; }
+
+            const partHeaders = rawBuffer.slice(partStart, headerEnd).toString("utf8");
+            const bodyStart = headerEnd + crlfcrlf.length;
+
+            // Find the next boundary to know where the body ends.
+            const nextDelim = rawBuffer.indexOf(delimiter, bodyStart);
+            // Body ends just before the preceding CRLF that RFC 7578 places
+            // between the body and the next boundary.
+            const bodyEnd = nextDelim === -1 ? rawBuffer.length : nextDelim - crlf.length;
+            const partBody = rawBuffer.slice(bodyStart, bodyEnd);
+
+            // Parse Content-Disposition to find the field name and filename.
+            const dispositionMatch = /content-disposition:[^\r\n]*/i.exec(partHeaders);
+            if (dispositionMatch !== null) {
+              const nameMatch = /name="([^"]*)"/i.exec(dispositionMatch[0]);
+              const fileNameMatch = /filename="([^"]*)"/i.exec(dispositionMatch[0]);
+              if (nameMatch?.[1] === "file" && fileNameMatch !== null) {
+                fileName = path.basename(fileNameMatch[1]);
+                fileBuffer = partBody;
+              }
+            }
+
+            offset = nextDelim === -1 ? rawBuffer.length : nextDelim;
+          }
+
+          if (fileName === undefined || fileBuffer === undefined) {
+            sendJson(response, 400, { error: 'A file field named "file" is required in the multipart body.' });
+            return;
+          }
+
+          // Reject empty or suspiciously named files before the boundary check.
+          const safeName = fileName.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._]+/, "") || "upload";
+          if (fileBuffer.length === 0) {
+            sendJson(response, 400, { error: "The uploaded file is empty." });
+            return;
+          }
+
+          // All writes must stay inside the workspace. resolveWithinRoot is the
+          // single boundary function; there is no second implementation here.
+          const destRelative = path.join("workspace", safeName);
+          const destVerdict = resolveWithinRoot(cwd, destRelative);
+          if (!destVerdict.allowed) {
+            sendJson(response, 403, {
+              error: "path boundary violation: the destination is outside the workspace.",
+            });
+            return;
+          }
+          const destAbsolute = destVerdict.resolvedPath as string;
+
+          try {
+            const fs = await import("node:fs/promises");
+            await fs.mkdir(path.dirname(destAbsolute), { recursive: true });
+            await fs.writeFile(destAbsolute, fileBuffer);
+          } catch (error) {
+            sendJson(response, 500, {
+              error: "The file could not be saved.",
+              detail: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+
+          // SHA-256 over the raw file bytes, consistent with the frontend's own
+          // crypto.subtle fingerprint function.
+          const { createHash } = await import("node:crypto");
+          const sha256 = createHash("sha256").update(fileBuffer).digest("hex");
+
+          sendJson(response, 200, {
+            path: destRelative.replace(/\\/g, "/"),
+            name: safeName,
+            size: fileBuffer.length,
+            sha256,
+          });
+          return;
+        }
+
+        // POST /api/v1/agent/task
+        if (request.method === "POST" && url.pathname === "/api/v1/agent/task") {
+          const raw = await readBody(request);
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, { error: "the request body is not valid JSON" });
+            return;
+          }
+
+          const body = parsed as { workspacePath?: unknown; prompt?: unknown } | null;
+          const workspacePath = body?.workspacePath;
+          const prompt = body?.prompt;
+
+          if (typeof workspacePath !== "string" || workspacePath.trim().length === 0) {
+            sendJson(response, 400, { error: "workspacePath is required." });
+            return;
+          }
+          if (typeof prompt !== "string" || prompt.trim().length === 0) {
+            sendJson(response, 400, { error: "prompt is required." });
+            return;
+          }
+
+          const taskId = workspacePath;
+          const currentIterations = taskIterationMap.get(taskId) ?? 0;
+          if (currentIterations >= MAX_ITERATIONS) {
+            sendJson(response, 429, { error: 'CIRCUIT_BREAKER_TRIPPED', details: 'Iteration threshold exceeded.' });
+            return;
+          }
+          taskIterationMap.set(taskId, currentIterations + 1);
+
+          try {
+            // The same boundary check every other route that reads a file applies.
+            const resolvedTask = resolveWithinRoot(cwd, workspacePath);
+            if (!resolvedTask.allowed) {
+              sendJson(response, 403, {
+                status: "FAILED",
+                failure: {
+                  code: "PATH_OUTSIDE_WORKSPACE",
+                  reason: `path boundary violation: ${resolvedTask.reason ?? "the file is outside the workspace"}`,
+                  kernelReasonCode: "PATH_OUTSIDE_WORKSPACE",
+                },
+              });
+              return;
+            }
+
+            // Wire to the Conductor's omni-routing loop. The request is framed
+            // with an explicit input= marker so the Conductor receives the filename
+            // exactly as given, for the same reason /api/report does it.
+            const conductor = new Conductor({
+              cwd,
+              defaultsRoot: options.defaultsRoot ?? installRoot,
+              projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
+            });
+            const result = await conductor.run(`${prompt}; input=${workspacePath}`, {
+              mode: "omni",
+              output: path.join(cwd, "workspace", "task-output"),
+              title: titleFor({ fileName: path.basename(workspacePath), purpose: UNKNOWN_PURPOSE }),
+            });
+
+            sendJson(response, statusFor(result), toResponse(result));
+          } finally {
+            taskIterationMap.delete(taskId);
+          }
+          return;
+        }
+
         // POST /api/v1/governance/verdict
         if (request.method === "POST" && url.pathname === "/api/v1/governance/verdict") {
           const raw = await readBody(request);
@@ -1531,8 +1870,51 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const Database = (await import("better-sqlite3")).default;
             const db = new Database(path.join(cwd, "workspace", "gate.db"));
 
+            // ── SCHEMA MIGRATION: legally-defensible audit columns ──────────
+            //
+            // These two columns extend the approval ledger with regulatory
+            // traceability: owasp_ref names the OWASP LLM Top 10 category a
+            // payload triggered, and nist_ref names the NIST AI RMF control.
+            //
+            // ALTER TABLE … ADD COLUMN is idempotent in SQLite only if wrapped
+            // in a try/catch: SQLite does not support IF NOT EXISTS on ADD COLUMN
+            // (it was added in 3.37 for CREATE TABLE but never backported to ALTER).
+            // A duplicate-column error is SQLITE_ERROR with the text
+            // "duplicate column name"; catching it here keeps the server alive
+            // across restarts without a separate one-time migration script.
+            try {
+              db.prepare("ALTER TABLE approval_tasks ADD COLUMN owasp_ref TEXT").run();
+            } catch (migrationErr) {
+              const msg = migrationErr instanceof Error ? migrationErr.message : String(migrationErr);
+              if (!msg.includes("duplicate column name")) throw migrationErr;
+            }
+            try {
+              db.prepare("ALTER TABLE approval_tasks ADD COLUMN nist_ref TEXT").run();
+            } catch (migrationErr) {
+              const msg = migrationErr instanceof Error ? migrationErr.message : String(migrationErr);
+              if (!msg.includes("duplicate column name")) throw migrationErr;
+            }
+
+            // ── PAYLOAD INSPECTION: schema-mutation tagging ─────────────────
+            //
+            // Intercept the inbound payload and check whether it is attempting
+            // a schema mutation (e.g., DDL keywords, ALTER/DROP/CREATE in a
+            // result_json value). When detected, tag the row with the relevant
+            // OWASP LLM03 and NIST AI RMF GOVERN 1.2 controls so auditors can
+            // filter for these events in the ledger without re-inspecting JSON.
+            //
+            // The check is intentionally conservative: any JSON that serialises
+            // to a string containing a DDL keyword at a word boundary is flagged.
+            // False positives are acceptable in a governance ledger; false
+            // negatives are not.
+            const SCHEMA_MUTATION_RE = /\b(ALTER|DROP|CREATE|TRUNCATE|RENAME|ATTACH|DETACH)\b/i;
+            const payloadStr = result_json ? JSON.stringify(result_json) : "";
+            const isSchemaMutation = SCHEMA_MUTATION_RE.test(payloadStr);
+            const owaspTag = isSchemaMutation ? "OWASP LLM03: Excessive Agency" : null;
+            const nistTag = isSchemaMutation ? "NIST AI RMF: GOVERN 1.2" : null;
+
             const existing = db.prepare("SELECT status FROM approval_tasks WHERE task_token = ?").get(task_token) as any;
-            
+
             if (!existing) {
               sendJson(response, 404, { error: "Task not found." });
               return;
@@ -1542,17 +1924,37 @@ export function createWedgeServer(options: WedgeOptions): Server {
               return;
             }
 
-            const decided_at = new Date().toISOString();
-            const result_expires_at = new Date(Date.now() + (ttl_seconds * 1000)).toISOString();
+            // SQLite stores all lifecycle timestamps as epoch seconds, matching
+            // the INTEGER schema and created_at default. HTTP responses still
+            // expose ISO strings for browser-friendly display.
+            const decided_at = Math.floor(Date.now() / 1000);
+            const result_expires_at = decided_at + Math.floor(ttl_seconds);
             const result_string = result_json ? JSON.stringify(result_json) : null;
 
             db.prepare(`
-              UPDATE approval_tasks 
-              SET status = ?, result_json = ?, decided_at = ?, approved_by = ?, reason = ?, result_expires_at = ?
+              UPDATE approval_tasks
+              SET status = ?, result_json = ?, decided_at = ?, approved_by = ?,
+                  reason = ?, result_expires_at = ?, owasp_ref = ?, nist_ref = ?
               WHERE task_token = ?
-            `).run(status, result_string, decided_at, approved_by || "system", reason || null, result_expires_at, task_token);
+            `).run(
+              status,
+              result_string,
+              decided_at,
+              approved_by || "system",
+              reason || null,
+              result_expires_at,
+              owaspTag,
+              nistTag,
+              task_token,
+            );
 
-            sendJson(response, 200, { success: true, task_token, status, decided_at });
+            sendJson(response, 200, {
+              success: true,
+              task_token,
+              status,
+              decided_at: ledgerTimestamp(decided_at),
+              ...(isSchemaMutation ? { owasp_ref: owaspTag, nist_ref: nistTag } : {}),
+            });
             return;
           } catch (error) {
             sendJson(response, 500, { error: "Internal server error processing verdict.", detail: String(error) });
@@ -1581,8 +1983,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
             }
 
             if (task.status === "approved" || task.status === "rejected") {
-              const collected_at = new Date().toISOString();
-              
+              const collected_at = Math.floor(Date.now() / 1000);
+
               // Mark as consumed to prevent replay reads, satisfying the UPDATE-only rule
               db.prepare(`
                 UPDATE approval_tasks 
@@ -1596,7 +1998,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 decided_at: task.decided_at,
                 approved_by: task.approved_by,
                 reason: task.reason,
-                collected_at: collected_at
+                collected_at: ledgerTimestamp(collected_at)
               });
               return;
             }
