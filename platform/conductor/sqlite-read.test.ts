@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
 import { sqliteRead } from './capabilities.ts';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -13,7 +14,7 @@ describe('sqliteRead', () => {
     db.exec('CREATE TABLE t (id INT);');
     db.close();
     try {
-      await expect(sqliteRead({ path: sqlitePath, query: 'INSERT INTO t (id) VALUES (1)' })).rejects.toThrow();
+      await assert.rejects(sqliteRead({ path: sqlitePath, query: 'INSERT INTO t (id) VALUES (1)' }));
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

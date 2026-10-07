@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert";
 import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,19 +21,18 @@ import { Conductor } from "./conductor.ts";
 
 describe("Stage 3 capabilities", () => {
   it("publishes governed skills with explicit risk levels", () => {
-    expect(STAGE3_CAPABILITIES.map((tool) => tool.name)).toEqual([
+    assert.deepStrictEqual(STAGE3_CAPABILITIES.map((tool) => tool.name), [
       "chart_render", "table_query", "landing_page", "report_write", "app_scaffold",
     ]);
-    expect(TABLE_QUERY.riskLevel).toBe("READ_ONLY");
-    expect([CHART_RENDER, LANDING_PAGE, REPORT_WRITE, APP_SCAFFOLD].every((tool) => tool.riskLevel === "WRITE")).toBe(true);
+    assert.strictEqual(TABLE_QUERY.riskLevel, "READ_ONLY");
+    assert.ok([CHART_RENDER, LANDING_PAGE, REPORT_WRITE, APP_SCAFFOLD].every((tool) => tool.riskLevel === "WRITE"));
   });
 
   it("rejects an output outside the workspace before writing", async () => {
     const root = mkdtempSync(join(tmpdir(), "stage3-boundary-"));
     try {
       const boundary = new WorkspaceBoundary([root]);
-      await expect(landingPage({ path: join(root, "..", "outside.html"), title: "x", headline: "x", body: "x" }, { boundary }))
-        .rejects.toThrow(/outside the workspace boundary/);
+      await assert.rejects(landingPage({ path: join(root, "..", "outside.html"), title: "x", headline: "x", body: "x" }, { boundary }), /outside the workspace boundary/);
     } finally {
       rmdirSync(root);
     }
@@ -50,14 +50,14 @@ describe("Stage 3 capabilities", () => {
       const landing = await landingPage({ path: landingPath, title: "Launch", headline: "Ship safely", body: "Governed output." }, { boundary });
       const report = await reportWrite({ path: reportPath, title: "Sales", summary: "Two rows.", columns: ["name", "amount"], rows: [{ name: "A", amount: "10" }] }, { boundary });
       const app = await appScaffold({ path: appPath, name: "Demo app" }, { boundary });
-      expect(chart.points).toBe(2);
-      expect(landing.bytes).toBeGreaterThan(0);
-      expect(report.bytes).toBeGreaterThan(0);
-      expect(app.bytes).toBeGreaterThan(0);
-      expect(readFileSync(chartPath, "utf8")).toContain("<svg");
-      expect(readFileSync(landingPath, "utf8")).toContain("Ship safely");
-      expect(readFileSync(reportPath, "utf8")).toContain("| A | 10 |");
-      expect(readFileSync(appPath, "utf8")).toContain("Demo app");
+      assert.strictEqual(chart.points, 2);
+      assert.ok(landing.bytes > 0);
+      assert.ok(report.bytes > 0);
+      assert.ok(app.bytes > 0);
+      assert.ok(readFileSync(chartPath, "utf8").includes("<svg"));
+      assert.ok(readFileSync(landingPath, "utf8").includes("Ship safely"));
+      assert.ok(readFileSync(reportPath, "utf8").includes("| A | 10 |"));
+      assert.ok(readFileSync(appPath, "utf8").includes("Demo app"));
     } finally {
       for (const file of [chartPath, landingPath, reportPath, appPath]) unlinkSync(file);
       rmdirSync(root);
@@ -70,9 +70,9 @@ describe("Stage 3 capabilities", () => {
     try {
       const conductor = new Conductor({ cwd: root, projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: ["."] } });
       const result = await conductor.run("create a landing page", { mode: "landing-page", output });
-      expect(result.status).toBe("DELIVERED");
-      expect(result.progress.some((event) => event.detail === "landing_page")).toBe(true);
-      expect(readFileSync(output, "utf8")).toContain("landing page");
+      assert.strictEqual(result.status, "DELIVERED");
+      assert.ok(result.progress.some((event) => event.detail === "landing_page"));
+      assert.ok(readFileSync(output, "utf8").includes("landing page"));
     } finally {
       unlinkSync(output);
       rmdirSync(root);
@@ -85,9 +85,9 @@ describe("Stage 3 capabilities", () => {
     try {
       writeFileSync(csvPath, "name,amount\nA,10\nB,25\nC,40\n", "utf8");
       const result = await tableQuery({ path: csvPath, column: "amount", operator: ">", value: 20 }, { boundary: new WorkspaceBoundary([root]) });
-      expect(result.matchedRows).toBe(2);
-      expect(result.rows.map((row) => row.name)).toEqual(["B", "C"]);
-      expect(result.truncated).toBe(false);
+      assert.strictEqual(result.matchedRows, 2);
+      assert.deepStrictEqual(result.rows.map((row) => row.name), ["B", "C"]);
+      assert.strictEqual(result.truncated, false);
     } finally {
       unlinkSync(csvPath);
       rmdirSync(root);

@@ -3,6 +3,7 @@ import { open } from "node:fs/promises";
 import path from "node:path";
 import { parseLogLine, type LogFormat } from "../ingestion/log-tokenizer.ts";
 import { sanitize } from "./sanitizer.ts";
+import { parseInstant, errorSignature } from "./bottlenecks.ts";
 import { HourlyCounter, KeyedAggregator } from "./stream-profile.ts";
 
 /**

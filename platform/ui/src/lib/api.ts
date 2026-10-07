@@ -80,7 +80,7 @@ async function responseJson<T>(response: Response): Promise<T> {
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   let response: Response
   try {
-    response = await fetch(url, { cache: 'no-store', ...init })
+    response = await fetch(url, { cache: 'no-store', ...init } as any)
   } catch {
     throw new Error('The NeuroFebric API is unreachable. Data will remain empty until the service is available.')
   }

@@ -10,6 +10,13 @@ export class CircuitBreakerError extends Error {
 
 const MAX_ITERATIONS = 3;
 const taskIterationMap = new Map<string, number>();
+// ioredis ships as CJS; under node16/nodenext resolution the constructable
+// value is the module default, reached through a namespace import.
+import * as RedisNamespace from "ioredis";
+const RedisClient = (RedisNamespace as unknown as { default: new (url: string, opts?: Record<string, unknown>) => any }).default;
+const redis = new RedisClient(process.env.REDIS_URL || 'redis://localhost:6379', {
+  lazyConnect: true,
+});
 
 import { Conductor, type ConductorResult } from "../conductor/conductor.ts";
 import { applyFeedback } from "./feedback.ts";
@@ -1804,12 +1811,28 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
 
           const taskId = workspacePath;
-          const currentIterations = taskIterationMap.get(taskId) ?? 0;
-          if (currentIterations >= MAX_ITERATIONS) {
+          let currentIterations = 0;
+
+          try {
+            if (redis.status === 'ready') {
+              const key = `neurofebric:task:iterations:${taskId}`;
+              const results = await redis.pipeline().incr(key).expire(key, 300).exec();
+              if (results && results[0][1]) {
+                currentIterations = results[0][1] as number;
+              }
+            } else {
+              currentIterations = (taskIterationMap.get(taskId) ?? 0) + 1;
+              taskIterationMap.set(taskId, currentIterations);
+            }
+          } catch (e) {
+            currentIterations = (taskIterationMap.get(taskId) ?? 0) + 1;
+            taskIterationMap.set(taskId, currentIterations);
+          }
+
+          if (currentIterations > MAX_ITERATIONS) {
             sendJson(response, 429, { error: 'CIRCUIT_BREAKER_TRIPPED', details: 'Iteration threshold exceeded.' });
             return;
           }
-          taskIterationMap.set(taskId, currentIterations + 1);
 
           try {
             // The same boundary check every other route that reads a file applies.
@@ -1842,7 +1865,11 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
             sendJson(response, statusFor(result), toResponse(result));
           } finally {
-            taskIterationMap.delete(taskId);
+            if (redis.status === 'ready') {
+              await redis.del(`neurofebric:task:iterations:${taskId}`).catch(() => {});
+            } else {
+              taskIterationMap.delete(taskId);
+            }
           }
           return;
         }

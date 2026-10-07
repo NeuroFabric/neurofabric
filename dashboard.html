@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sales dashboard</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem; color: #16181d; background: #fff; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .meta { color: #5b616e; margin-bottom: 1.5rem; }
+  .chart { display: flex; align-items: flex-end; gap: 10px; border-bottom: 1px solid #16181d; padding-bottom: 2px; }
+  .bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .fill { background: #16181d; width: 26px; }
+  .label { font-size: 11px; color: #5b616e; margin-top: 4px; max-width: 70px; overflow: hidden; }
+</style>
+</head>
+<body>
+<h1>Sales dashboard</h1>
+<p class="meta">2 row(s) &middot; col2 by col1</p>
+<div class="chart">
+    <div class="bar" title="1: 2">
+      <div class="fill" style="height:90px"></div>
+      <div class="label">1</div>
+    </div>
+    <div class="bar" title="3: 4">
+      <div class="fill" style="height:180px"></div>
+      <div class="label">3</div>
+    </div>
+</div>
+</body>
+</html>

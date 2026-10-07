@@ -384,3 +384,6 @@ volumes:
   # not have to take the second to get it.
   embassy-vault:
     name: neurofebric-embassy-vault
+
+networks:
+  backend-net:

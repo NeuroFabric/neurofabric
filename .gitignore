@@ -126,3 +126,14 @@ architecture.html
 # would drag its own changelog and node_modules into every review that touches
 # a file list.
 skills/ui-ux-pro-max-skill/
+
+
+.env
+gate.db
+gate.db-journal
+hive/
+roster.json
+roster-backups/
+*.js
+*.orig.ts
+debug-*/

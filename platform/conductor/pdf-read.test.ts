@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +32,7 @@ describe("pdfRead", () => {
     const root = mkdtempSync(join(tmpdir(), "pdf-boundary-"));
     try {
       const boundary = new WorkspaceBoundary([root]);
-      await expect(pdfRead({ path: join(root, "..", "outside.pdf") }, { boundary })).rejects.toThrow(/outside the workspace boundary/);
+      await assert.rejects(pdfRead({ path: join(root, "..", "outside.pdf") }, { boundary }), /outside the workspace boundary/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -43,9 +44,9 @@ describe("pdfRead", () => {
     try {
       writeFileSync(pdfPath, makePdf("Governed PDF text"));
       const result = await pdfRead({ path: pdfPath }, { boundary: new WorkspaceBoundary([root]) });
-      expect(result.path).toBe(pdfPath);
-      expect(result.pages).toBe(1);
-      expect(result.text).toContain("Governed PDF text");
+      assert.strictEqual(result.path, pdfPath);
+      assert.strictEqual(result.pages, 1);
+      assert.ok(result.text.includes("Governed PDF text"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

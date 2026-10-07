@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
 import { Conductor } from './conductor.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -69,10 +70,10 @@ describe('Conductor class', () => {
       };
 
       const result = await conductor.run('any request', { resolve });
-      expect(result.clarifyRounds).toBe(1);
-      expect(result.state).not.toBe('CLARIFY_EXHAUSTED');
-      expect(result.questions.length).toBe(1);
-      expect(result.questions[0].code).toBe('MISSING_INPUT_FILE');
+      assert.strictEqual(result.clarifyRounds, 1);
+      assert.notStrictEqual(result.state, 'CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.questions.length, 1);
+      assert.strictEqual(result.questions[0].code, 'MISSING_INPUT_FILE');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -97,10 +98,10 @@ describe('Conductor class', () => {
       createTempCsvFile(tmpDir, 'data.csv');
 
       const result = await conductor.run('any request', { resolve });
-      expect(result.clarifyRounds).toBe(1);
-      expect(result.state).not.toBe('CLARIFY_EXHAUSTED');
-      expect(result.questions.length).toBe(1);
-      expect(result.questions[0].code).toBe('MISSING_INPUT_FILE');
+      assert.strictEqual(result.clarifyRounds, 1);
+      assert.notStrictEqual(result.state, 'CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.questions.length, 1);
+      assert.strictEqual(result.questions[0].code, 'MISSING_INPUT_FILE');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -125,8 +126,8 @@ describe('Conductor class', () => {
       createTempJsonlFile(tmpDir, 'data.jsonl');
       const result = await conductor.run('please analyze data.jsonl', { resolve });
       
-      expect(result.clarifyRounds).toBe(0);
-      expect(result.state).not.toBe('CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.clarifyRounds, 0);
+      assert.notStrictEqual(result.state, 'CLARIFY_EXHAUSTED');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -144,10 +145,10 @@ describe('Conductor class', () => {
       };
 
       const result = await conductor.run('any request', { resolve });
-      expect(result.status).toBe('CLARIFY_EXHAUSTED');
-      expect(result.state).toBe('CLARIFY_EXHAUSTED');
-      expect(result.clarifyRounds).toBe(3);
-      expect(result.questions.length).toBe(3);
+      assert.strictEqual(result.status, 'CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.state, 'CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.clarifyRounds, 3);
+      assert.strictEqual(result.questions.length, 3);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -170,8 +171,8 @@ describe('Conductor class', () => {
       createTempCsvFile(tmpDir, 'test.csv');
 
       const result = await conductor.run('any request', { resolve, output: 'dashboard.html' });
-      expect(result.clarifyRounds).toBe(1);
-      expect(result.state).not.toBe('CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.clarifyRounds, 1);
+      assert.notStrictEqual(result.state, 'CLARIFY_EXHAUSTED');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -194,8 +195,8 @@ describe('Conductor class', () => {
       createTempCsvFile(tmpDir, 'test.csv');
 
       const result = await conductor.run('any request', { resolve, mode: 'bottleneck' });
-      expect(result.clarifyRounds).toBe(1);
-      expect(result.state).not.toBe('CLARIFY_EXHAUSTED');
+      assert.strictEqual(result.clarifyRounds, 1);
+      assert.notStrictEqual(result.state, 'CLARIFY_EXHAUSTED');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -219,7 +220,7 @@ describe('Conductor class', () => {
         // The critical assertion: locateInput successfully extracted the filename, 
         // so the Conductor NEVER asked MISSING_INPUT_FILE.
         const askedMissing = result.questions.some(q => q.code === 'MISSING_INPUT_FILE');
-        expect(askedMissing).toBe(false);
+        assert.strictEqual(askedMissing, false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
