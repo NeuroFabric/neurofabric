@@ -7,7 +7,7 @@ export {
   fetchTelemetry,
   submitVerdict,
   uploadArtifact,
-} from './lib/api'
+} from './lib/api.js'
 export type {
   AgentTaskResponse,
   AnalysisSummary,
@@ -15,7 +15,7 @@ export type {
   DashboardTelemetry,
   UploadedArtifact,
   VerdictResponse,
-} from './lib/api'
+} from './lib/api.js'
 
 async function readJson<T>(response: Response): Promise<T> {
   const text = await response.text()

@@ -1323,7 +1323,9 @@ function buildAsyncApproval(
     );
   }
 
-  return createAsyncApprovalGate({
+  
+    return createAsyncApprovalGate({
+    db: undefined as any,
     audit: (event) => {
       /**
        * THE SAME FAIL-CLOSED LEDGER, AND THE SAME THROW.
