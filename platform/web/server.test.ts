@@ -1,7 +1,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 
 import { startWedgeServer, type RunningWedge } from "./server.ts";
 import { makeTempWorkspace, writeFixture, pathExists } from "../test-support/temp-workspace.ts";
@@ -87,9 +88,128 @@ async function harness() {
   return { cwd, server, post };
 }
 
+async function seedApprovalLedger(cwd: string): Promise<void> {
+  const workspace = path.join(cwd, "workspace");
+  await mkdir(workspace, { recursive: true });
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(path.join(workspace, "gate.db"));
+  db.exec(`
+    CREATE TABLE approval_tasks (
+      task_token TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'refused', 'expired', 'consumed')),
+      subject_json TEXT NOT NULL,
+      result_json TEXT,
+      decided_at INTEGER,
+      approved_by TEXT,
+      reason TEXT,
+      result_expires_at INTEGER,
+      collected_at INTEGER,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    )
+  `);
+  const insert = db.prepare(`
+    INSERT INTO approval_tasks
+      (task_token, status, subject_json, decided_at, approved_by, reason,
+       result_expires_at, collected_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  insert.run("pending-token", "pending", JSON.stringify({ action: "read" }), null, null, null, null, null, 100);
+  insert.run("consumed-token", "consumed", JSON.stringify({ action: "write" }), "2024-01-02T03:04:05.000Z", "operator", null, 1_704_200_000, 1_704_100_000, 200);
+  insert.run("expired-token", "expired", JSON.stringify({ action: "execute" }), 1_704_000_000, null, "expired", 1_704_003_600, null, 300);
+  db.close();
+}
+
 const asFailure = (body: Record<string, unknown>) => body.failure as { code?: string; reason?: string; kernelReasonCode?: string } | undefined;
 const eventTypes = (body: Record<string, unknown>) =>
   (body.kernelEvents as { type: string }[] | undefined)?.map((e) => e.type) ?? [];
+
+// === API integration: real SQLite, multipart bytes, and Conductor dispatch ===
+
+test("GET /api/v1/governance/ledger returns ordered SQLite rows as a JSON array", async () => {
+  const { cwd, server } = await harness();
+  await seedApprovalLedger(cwd);
+
+  const response = await fetch(`${server.url}/api/v1/governance/ledger`);
+  const ledger = await response.json() as {
+    token: string;
+    status: string;
+    subject: unknown;
+    decidedAt: string | null;
+    createdAt: string | null;
+  }[];
+
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(ledger), "the endpoint returns an array, not a wrapper object");
+  assert.deepEqual(ledger.map((row) => row.token), ["expired-token", "consumed-token", "pending-token"]);
+  assert.deepEqual(ledger.map((row) => row.status), ["expired", "consumed", "pending"]);
+  assert.deepEqual(ledger[0]?.subject, { action: "execute" });
+  assert.equal(ledger[0]?.decidedAt, new Date(1_704_000_000 * 1000).toISOString());
+  assert.equal(ledger[1]?.decidedAt, "2024-01-02T03:04:05.000Z", "legacy ISO timestamps remain readable");
+  assert.equal(ledger[2]?.decidedAt, null);
+  assert.equal(ledger[0]?.createdAt, new Date(300 * 1000).toISOString());
+
+  // The verdict writer uses the same epoch-second storage convention and the
+  // ledger projects it back to ISO without throwing on the row it just changed.
+  const verdictResponse = await fetch(`${server.url}/api/v1/governance/verdict`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ task_token: "pending-token", status: "approved" }),
+  });
+  const verdict = await verdictResponse.json() as { decided_at?: string };
+  assert.equal(verdictResponse.status, 200);
+  assert.ok(verdict.decided_at);
+
+  const refreshedResponse = await fetch(`${server.url}/api/v1/governance/ledger`);
+  const refreshed = await refreshedResponse.json() as typeof ledger;
+  const updated = refreshed.find((row) => row.token === "pending-token");
+  assert.equal(updated?.status, "approved");
+  assert.equal(updated?.decidedAt, verdict.decided_at);
+  await server.close();
+});
+
+test("POST /api/v1/workspace/ingest stores multipart file bytes and returns their SHA-256", async () => {
+  const { cwd, server } = await harness();
+  const contents = "event_id,value\n1,alpha\n2,beta\n";
+  const form = new FormData();
+  form.append("file", new Blob([contents], { type: "text/csv" }), "ingested-data.csv");
+
+  const response = await fetch(`${server.url}/api/v1/workspace/ingest`, {
+    method: "POST",
+    body: form,
+  });
+  const result = await response.json() as { path: string; name: string; size: number; sha256: string };
+
+  assert.equal(response.status, 200, JSON.stringify(result));
+  assert.equal(result.path, "workspace/ingested-data.csv");
+  assert.equal(result.name, "ingested-data.csv");
+  assert.equal(result.size, Buffer.byteLength(contents));
+  assert.equal(result.sha256, createHash("sha256").update(contents).digest("hex"));
+  assert.equal(await readFile(path.join(cwd, "workspace", "ingested-data.csv"), "utf8"), contents,
+    "the exact uploaded file bytes are written under the sandbox");
+  await server.close();
+});
+
+test("POST /api/v1/agent/task runs the Conductor omni workflow", async () => {
+  const { cwd, server } = await harness();
+  await writeFixture(
+    cwd,
+    "sales.csv",
+    "customer,revenue,status\nA,10,signed\nB,25,trial\nC,40,signed\nD,5,trial\nE,55,signed\n",
+  );
+
+  const response = await fetch(`${server.url}/api/v1/agent/task`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspacePath: "sales.csv", prompt: "stage4 omni pilot package" }),
+  });
+  const result = await response.json() as Record<string, unknown>;
+
+  assert.equal(response.status, 200, JSON.stringify(result).slice(0, 500));
+  assert.equal(result.status, "DELIVERED");
+  assert.ok(eventTypes(result).includes("TASK_CREATED"), "the run traversed the Conductor kernel");
+  assert.ok(await pathExists(path.join(cwd, "workspace", "task-output")), "the omni output directory was produced");
+  await server.close();
+});
 
 // === 1. The page =========================================================
 
