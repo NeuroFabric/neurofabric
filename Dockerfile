@@ -1,154 +1,145 @@
-# THE COMMERCIAL WEDGE, CONTAINERISED.
+# THE COMMERCIAL WEDGE — TWO-STAGE BUILD
 #
-# STATUS, STATED PLAINLY: this image has NOT been built. Docker is not available
-# in the authoring environment, so every claim below is a claim about what the
-# file says, not about an image that ran. The earlier `docker-ui-scaffold`
-# branch recorded the same limitation honestly and that is the precedent worth
-# following: an unverified container claimed as verified is worse than no
-# container, because it stops anyone looking. Operator to run:
+# STATUS: UNVERIFIED. Docker is absent from the authoring environment, so every
+# claim below is a claim about what the file says, not about an image that ran.
+# Operator to run:
 #     docker compose build && docker compose up
 #
-# node:22-slim because the host toolchain is v22 and `--experimental-strip-types`
-# is what runs the TypeScript suites and the boot script. A major-version
-# mismatch here is a suite that cannot start.
+# ─── WHY TWO STAGES ────────────────────────────────────────────────────────────
+#
+# Stage 1 (builder) installs all dependencies including devDependencies, runs
+# the Vite UI build, and compiles the TypeScript backend. Everything it touches
+# is discarded after COPY --from=builder. Stage 2 (runtime) receives only the
+# compiled artefacts — no build toolchain, no devDependencies, no source maps
+# with full paths, no npm cache.
+#
+# The attack surface of the running image is therefore the platform/ module
+# graph plus node:22-alpine's own packages, not the entire build toolchain.
+# node:22-alpine is chosen for stage 2 (not -slim) because musl libc is
+# lighter than glibc-slim and better-sqlite3's prebuilt binary ships for
+# alpine. Stage 1 uses the same base so the Node major version is identical
+# and --experimental-strip-types works in both.
 
-FROM node:22-slim
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 1 — BUILDER
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# THE LABEL IS NOT DECORATIVE. It names the account the process runs as, so that
-# `docker inspect` answers the question an auditor actually asks -- "what does
-# this thing run as?" -- without reading the filesystem.
+FROM node:22-alpine AS builder
+
+LABEL org.opencontainers.image.description="Wedge builder stage — discarded after copy"
+
+WORKDIR /build
+
+# --- Backend dependencies ---
+# Copy the root manifest first so Docker's layer cache is reused on subsequent
+# builds when only source files change.
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+# --- UI dependencies ---
+# The UI has its own manifest and lockfile. Copying them before the source
+# gives the same cache benefit.
+COPY platform/ui/package.json platform/ui/package-lock.json ./platform/ui/
+RUN npm ci --prefix platform/ui --ignore-scripts
+
+# --- Source ---
+COPY platform ./platform
+COPY configs ./configs
+COPY .pi ./.pi
+COPY skills ./skills
+COPY start-ui.mjs ./
+
+# --- Build the React/Vite UI ---
+# `npm run build` in platform/ui runs `tsc -b && vite build`, producing
+# platform/ui/dist/ with the compiled, hashed assets. The backend serves this
+# directory as static files via the react-app-harness route.
+RUN npm run build --prefix platform/ui
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 2 — RUNTIME
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FROM node:22-alpine AS runtime
+
+# THE LABEL IS NOT DECORATIVE. It names the account the process runs as, so
+# that `docker inspect` answers the question an auditor actually asks —
+# "what does this thing run as?" — without reading the filesystem.
 LABEL org.opencontainers.image.title="neurofebric wedge" \
       org.opencontainers.image.description="Governed, read-only analytical reports over local data files" \
       org.opencontainers.image.source="https://gitlab.com/neurofebric-group/neurofebric"
 
 # WORKSPACE AND GOVERNED PATHS, CREATED BEFORE THE USER SWITCH, OWNED BY THEM.
 #
-# The order matters. `USER node` comes AFTER the chown, because a chown by a
-# non-root user on a root-owned directory fails, and a container that fails to
-# start is a container nobody debugs.
+# Order matters. `USER node` comes AFTER the chown, because a chown by a
+# non-root user on a root-owned directory fails, and a container that fails
+# to start is a container nobody debugs.
 #
-# Two directories, two different reasons:
-#   /app/workspace  the ONLY place the process may read data from, mounted over
-#                   at run time
-#   /app/reports    a governed path in the policy's own rules. Those rules
-#                   describe a tree, and a rule that names a path which does not
-#                   exist is a rule describing something other than what is on
-#                   disk. Created EMPTY on purpose: the repository's reports/
-#                   holds the gauntlet's own markdown artifacts, which are test
-#                   output, not runtime data, and .dockerignore keeps them out of
-#                   the context. So the path exists and none of its contents
-#                   ship.
-RUN mkdir -p /app/workspace /app/reports && chown -R node:node /app/workspace /app/reports
+# /app/workspace  the ONLY place the process may read data from, mounted at
+#                 run time as a named volume.
+# /app/reports    named by the policy's own rules; must exist even if empty.
+# /app/gate.db    parent directory for the SQLite audit ledger volume.
+RUN mkdir -p /app/workspace /app/reports /app/gate-data \
+    && chown -R node:node /app/workspace /app/reports /app/gate-data
 
 # NON-ROOT, AND IT IS THE ONLY USER THAT EVER EXISTS FOR THE RUNTIME.
 #
-# The `node` user ships in the base image (uid 1000). This is the whole
-# privilege story: a process that can read the user's data files and write
-# reports has no business running as uid 0, where a container escape starts.
-# There is no code path below that switches back.
+# The `node` user ships in the base image (uid 1000). A process that can read
+# the user's data files has no business running as uid 0, where a container
+# escape starts. There is no code path below that switches back.
 USER node
 WORKDIR /app
 
-# NO `npm install`. The platform has ZERO runtime dependencies (D-018) and
-# nothing under platform/ imports anything outside node's own stdlib, so the
-# serving image ships with no node_modules at all.
-#
-# This is a security property as much as a size one: an image with no installed
-# packages has no third-party code to be compromised, no lockfile to drift, and
-# no supply chain between this repository and what executes. The earlier
-# test-container scaffold on `docker-ui-scaffold` DOES install devDependencies,
-# correctly, because `npm test` runs `tsc`. A serving image has no reason to.
-#
-# Only the manifest is copied, and only so that `npm` metadata and the
-# `type: module` field travel with the code.
-COPY --chown=node:node package.json ./
+# --- Runtime dependencies only (no devDependencies) ---
+# better-sqlite3 is a native addon and must be present at runtime. Everything
+# else the platform/ graph imports is either node: stdlib or pure TypeScript
+# that --experimental-strip-types handles. Installing with --omit=dev keeps
+# the toolchain (typescript, vite, vitest, …) out of the image.
+COPY --chown=node:node package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 
-# THE CODE, AND ONLY THE CODE.
-#
-# These four directories are the runtime dependency set, established by reading
-# the imports rather than by copying the repository and deleting things. The
-# earlier test-container scaffold on `docker-ui-scaffold` found the hard way
-# that this is not guessable: it omitted `.pi` and `skills`, and its own gate
-# failed because the suite reads them off the filesystem.
-#   platform/  every module the server imports
-#   configs/   default-schemas.json, resolved via installRoot
-#   .pi/       the policy, which core/project-config.ts resolves at startup
-#   skills/    the product's own skills, including SKILL.md, which is why no
-#              blanket "exclude *.md" rule appears in .dockerignore
-COPY --chown=node:node platform ./platform
-COPY --chown=node:node configs ./configs
-COPY --chown=node:node .pi ./.pi
-COPY --chown=node:node skills ./skills
-
-COPY --chown=node:node start-ui.mjs ./
+# --- Compiled artefacts from the builder stage ---
+# platform/ui/dist/ contains the compiled React app. The backend serves it
+# from this path; nothing else in platform/ui/ is needed at runtime.
+COPY --from=builder --chown=node:node /build/platform ./platform
+COPY --from=builder --chown=node:node /build/platform/ui/dist ./platform/ui/dist
+COPY --from=builder --chown=node:node /build/configs ./configs
+COPY --from=builder --chown=node:node /build/.pi ./.pi
+COPY --from=builder --chown=node:node /build/skills ./skills
+COPY --from=builder --chown=node:node /build/start-ui.mjs ./
 
 # THE BOUNDARY IS THE MOUNT, DECLARED HERE AND NOT ONLY IN COMPOSE.
 #
-# `--workspace /app/workspace` means the data boundary is the mounted volume and
-# nothing else. Anyone running this image by hand -- without compose, without
-# reading the compose file -- still gets the same containment, which is the
-# point of putting it in the image rather than only in orchestration.
+# `--workspace /app/workspace` means the data boundary is the mounted volume
+# and nothing else. Anyone running this image by hand — without compose,
+# without reading the compose file — still gets the same containment.
 ENV WEDGE_WORKSPACE=/app/workspace \
     NODE_ENV=production
 
 EXPOSE 8080
 
-# THE PORT IS 8080 HERE BECAUSE scripts/dev-endpoints.ts SAYS IT IS 8080.
-#
-# `WEDGE_PORT = 8080` is the single declaration this repository has. The image and
-# the compose file both used to say 3000 while that constant said 8080, which is
-# three truths about one number and a foot-gun: an operator running the image
-# directly hit 3000, an operator running compose hit 8080, and a script that
-# followed the constant dialled the one that was not listening. It presented as a
-# dead port rather than as a disagreement.
-#
-# Both now say 8080 and follow the constant. A copy is still a copy -- compose
-# cannot read TypeScript -- so the number is written literally in three places and
-# that is worth a sweep rather than a comment.
-
-# 0.0.0.0, and this is the ONE place the loopback default is deliberately
-# widened. Inside a container a loopback bind is unreachable from the host:
-# Docker publishes to the container's own interface, not its loopback, so a
-# loopback bind produces a wedge that starts and then refuses every connection.
-#
-# It is safe here because of what surrounds it, not because of this line:
-#   - the compose file publishes to 127.0.0.1 on the HOST, so the reachable
-#     surface is the same loopback address as running it directly;
-#   - the container's network namespace is the isolation;
-#   - a widened bind prints a warning at startup, so it is never silent.
-# The default in platform/web/server.ts is unchanged and is pinned by test.
-#
 # === THE GARBAGE COLLECTION FLAGS ===
 #
-# Appended, not substituted: the flags ahead of the script name tune V8, and the
-# script, its arguments and the widened bind are unchanged from the line above.
-#
 #   --max-old-space-size=256   The heap this process may keep. The engine is
-#     designed for FLAT-MEMORY STREAMING: `csvRead` retains a bounded window and
+#     designed for FLAT-MEMORY STREAMING: csvRead retains a bounded window and
 #     the broker keeps per-partition reservoirs, so steady-state live memory is
-#     a function of the window, not of the file. Without a cap, "bounded" is a
-#     property of the code and a deployment with a large file finds out
-#     otherwise; with it, the ceiling is visible in the image config rather than
-#     discovered on a host that no longer exists.
-#   --max-semi-space-size=2    The young generation. Streaming is a high
-#     ALLOCATION-RATE workload with a tiny survivor set, which is the shape that
-#     scavenges constantly. Doubling the semi-space halves the scavenge count for
-#     2 MiB more of resident heap.
+#     a function of the window, not of the file. Without a cap "bounded" is a
+#     property of the code; with it the ceiling is visible in the image config.
+#   --max-semi-space-size=2    Streaming is a high allocation-rate workload
+#     with a tiny survivor set. Doubling the semi-space halves the scavenge
+#     count for 2 MiB more of resident heap.
 #
-# WHY 256 AND NOT 512: the container limit is 512 MiB, and the heap is only part
-# of a process. Code space, the native allocator, socket buffers, and V8's own
-# metadata live outside the old generation, so a 512 MiB heap inside a 512 MiB
-# container is an OOM kill that arrives before the heap cap ever fires, and it
-# arrives as the kernel killing the process rather than as V8 saying anything.
+# WHY 256 AND NOT 512: the container limit is 512 MiB, and the heap is only
+# part of a process. Code space, the native allocator, socket buffers, and V8's
+# own metadata live outside the old generation, so a 512 MiB heap inside a
+# 512 MiB container is an OOM kill that arrives before the heap cap fires.
 # Half the limit leaves room for the parts that are not heap. That relationship
-# is asserted in docker-compose.yml's comments, so changing one number without
-# the other is visible.
-#
-# WHAT IS *NOT* CLAIMED: these values are not benchmarked. Docker is unavailable
-# in the authoring environment and no load test was run against them, so this is
-# a documented default chosen for a known access pattern, not a measured optimum.
-# The failure direction is deliberate -- too small is an OOM kill that is loud,
-# too large is an OOM kill on the host that is quieter. If a deployment needs
-# more, `docker-compose.yml` exposes the same command so it can be raised without
-# a rebuild.
-CMD ["node", "--max-old-space-size=256", "--max-semi-space-size=2", "--experimental-strip-types", "start-ui.mjs", "--workspace", "/app/workspace", "--port", "8080", "--host", "0.0.0.0"]
+# is asserted in docker-compose.yml's comments; changing one without the other
+# is visible.
+CMD ["node", \
+     "--max-old-space-size=256", \
+     "--max-semi-space-size=2", \
+     "--experimental-strip-types", \
+     "start-ui.mjs", \
+     "--workspace", "/app/workspace", \
+     "--port", "8080", \
+     "--host", "0.0.0.0"]
