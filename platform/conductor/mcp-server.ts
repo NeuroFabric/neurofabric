@@ -6,6 +6,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { classifySql } from "../core/sql-guard.ts";
 import { executeReadOnlySql, type SqlExecutor } from "./readonly-sql.ts";
+import {
+  parseTarget,
+  patchSandboxRoot,
+  proposeInfrastructurePatch,
+} from "../remediation/iac-generator.ts";
 
 /**
  * MCP GATEWAY.
@@ -133,6 +138,61 @@ server.tool(
     return {
       content: [{ type: "text", text: JSON.stringify(traces, null, 2) }],
     };
+  }
+);
+
+// Infrastructure Patch Proposal Tool (Sandboxed, HITL-Gated)
+//
+// The remediation boundary, in one tool. It writes a document
+// into the sandbox and returns the patch id. It does not -- and
+// structurally CANNOT -- apply anything: there is no kubectl and
+// no terraform anywhere in this process (see
+// platform/remediation/iac-generator.ts). Applying is an
+// operator's action, taken after an Incident Commander approves
+// the patch through the async approval gate.
+server.tool(
+  "propose_infrastructure_patch",
+  "Generate a Kubernetes YAML or Terraform HCL patch into the remediation sandbox and return its patch ID. The patch is a proposal only: this tool never applies it.",
+  {
+    target: z.string().describe("Target resource: 'kind/name' or a bare name, e.g. deployment/payments-api"),
+    format: z.enum(["kubernetes", "terraform"]).describe("The document format to generate"),
+    desiredState: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).describe("The desired state, flat scalar keys"),
+  },
+  async ({ target, format, desiredState }) => {
+    try {
+      const proposal = await proposeInfrastructurePatch(
+        { target: parseTarget(target), format, desiredState },
+        patchSandboxRoot(),
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                patchId: proposal.patchId,
+                path: proposal.path,
+                format: proposal.format,
+                state: proposal.state,
+                // The positive statement of the one thing this
+                // tool must never do. A reviewer reading the
+                // response can check it without reading source.
+                applied: false,
+                document: proposal.document,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `Patch Rejected: ${message}` }],
+        isError: true,
+      };
+    }
   }
 );
 

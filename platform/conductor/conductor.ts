@@ -18,6 +18,7 @@ import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
 import { resolveSchemaMemory, type ResolvedSchema } from "./schema-memory.ts";
 import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
 import { connectMcp } from "./mcp-server.ts";
+import type { RemediationAlert, RemediationController } from "../remediation/remediation-gate.ts";
 
 /**
  * The product spine. See `platform/conductor/DESIGN.md` for the design and the
@@ -50,7 +51,7 @@ export const REFUSAL_ESCALATION_THRESHOLD = 3;
 
 export type ConductorState =
   | "ASK" | "CLARIFY" | "PLAN" | "EXECUTE" | "DELIVER" | "ITERATE"
-  | "CLARIFY_EXHAUSTED" | "FAILED";
+  | "CLARIFY_EXHAUSTED" | "AWAITING_APPROVAL" | "FAILED";
 
 export interface ProgressEvent {
   /** What the Conductor is doing. */
@@ -74,7 +75,7 @@ export interface ClarifyQuestion {
  * conductor that ends without an outcome a caller can read.
  */
 export interface ConductorResult {
-  status: "DELIVERED" | "CLARIFY_EXHAUSTED" | "FAILED";
+  status: "DELIVERED" | "CLARIFY_EXHAUSTED" | "AWAITING_APPROVAL" | "FAILED";
   state: ConductorState;
   /** The questions that were asked, in order, including any left unanswered. */
   questions: ClarifyQuestion[];
@@ -85,6 +86,12 @@ export interface ConductorResult {
   report?: { markdown: string; analysis: BottleneckAnalysis; schema?: ResolvedSchema; pdf?: PdfReadResult; artifact?: unknown };
   /** Set when the run did not deliver. Never a bare string: always structured. */
   failure?: { code: string; reason: string; kernelReasonCode?: string };
+  /**
+   * Set ONLY when the run halted for human approval. The patch is
+   * written, the token is minted, and nothing further happens
+   * until an Incident Commander settles the gate.
+   */
+  remediation?: { readonly patchId: string; readonly taskToken: string; readonly path: string; readonly state: "AWAITING_APPROVAL" };
   /** Every kernel event the run produced, in order. */
   kernelEvents: { type: string; payload: Record<string, unknown> }[];
   progress: ProgressEvent[];
@@ -101,6 +108,12 @@ export interface ConductorOptions {
    * product layout; the web server passes the install root so a data workspace
    * does not have to carry a copy of the schemas.
    */
+  /**
+   * The remediation controller. When absent, a remediation
+   * request is REFUSED rather than silently skipped: a pipeline
+   * that cannot halt for approval must not pretend it did.
+   */
+  remediation?: RemediationController;
   defaultsRoot?: string;
 }
 
@@ -110,6 +123,7 @@ export class Conductor {
   private readonly boundary: WorkspaceBoundary;
   private progress: ProgressEvent[] = [];
   private readonly options: ConductorOptions;
+  private readonly remediation: RemediationController | undefined;
 
   // `options` is a plain field rather than a constructor parameter property:
   // `npm run test:ts` runs the whole tree through --experimental-strip-types,
@@ -124,10 +138,74 @@ export class Conductor {
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
     this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, ...STAGE4_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
+    this.remediation = options.remediation;
 
     // Connect the in-memory MCP bridge. `void` so constructor stays sync; the
     // bridge settles before any tool call runs in practice.
     void connectMcp();
+  }
+
+  /**
+   * THE REMEDIATION PATH, AND WHERE IT HALTS.
+   *
+   * An alert is ingested, a patch is PROPOSED into the sandbox,
+   * and the pipeline transitions to AWAITING_APPROVAL. That
+   * state is terminal for this run: the only thing that can
+   * follow it is an Incident Commander settling the approval
+   * gate, and the only thing THAT releases is the patch
+   * document, for an operator to run. There is no path from
+   * here to an applied change, because the engine that could
+   * apply one does not exist in this process.
+   */
+  async remediate(alert: RemediationAlert): Promise<ConductorResult> {
+    if (this.remediation === undefined) {
+      return {
+        status: "FAILED",
+        state: "FAILED",
+        questions: [],
+        clarifyRounds: 0,
+        artifacts: [],
+        kernelEvents: [],
+        progress: [],
+        failure: {
+          code: "REMEDIATION_NOT_ARMED",
+          reason: "no remediation controller is wired to this conductor, so no patch was proposed",
+        },
+      };
+    }
+
+    this.emit(
+      "AWAITING_APPROVAL",
+      "an infrastructure patch is proposed and the pipeline is halted for an Incident Commander",
+    );
+
+    let proposal;
+    try {
+      proposal = await this.remediation.request(alert);
+    } catch (error) {
+      return this.failed(
+        { code: "REMEDIATION_REFUSED", reason: error instanceof Error ? error.message : String(error) },
+        [],
+        0,
+        [],
+      );
+    }
+
+    return {
+      status: "AWAITING_APPROVAL",
+      state: "AWAITING_APPROVAL",
+      questions: [],
+      clarifyRounds: 0,
+      artifacts: [proposal.path],
+      remediation: {
+        patchId: proposal.patchId,
+        taskToken: proposal.taskToken,
+        path: proposal.path,
+        state: "AWAITING_APPROVAL",
+      },
+      kernelEvents: [],
+      progress: this.progress,
+    };
   }
 
   /** The kernel, exposed read-only for telemetry. Not a second control plane. */
