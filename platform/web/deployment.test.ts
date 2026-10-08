@@ -73,13 +73,23 @@ test("the workspace is created and chowned BEFORE the user switch", () => {
   assert.ok(chown < user, `chown must precede USER: chown at ${chown}, USER at ${user}`);
 });
 
-test("no dependencies are installed, because there are none to install", () => {
-  // The platform has zero runtime dependencies (D-018). An image with no
-  // installed packages has no third-party code to compromise and no lockfile
-  // to drift -- a security property, not just a smaller image.
-  assert.ok(!/npm (ci|install)/.test(dockerfile),
-    "a serving image with no runtime dependencies must not run npm install");
+test("dependencies are lockfile-pinned, script-disabled, and dev-free", () => {
+  // The platform carries runtime dependencies now -- the MCP SDK, zod, the
+  // SQLite native addon -- so the property is no longer "nothing to install".
+  // It is that every install is pinned to the lockfile (`npm ci`, never a
+  // floating `npm install`), executes no package scripts, and the serving
+  // stage carries production dependencies only. A lockfile-pinned,
+  // script-disabled, dev-free install is the security property that replaced
+  // the empty image, and it is the one worth pinning.
+  assert.ok(!/npm install/.test(dockerfile),
+    "a floating install is an unpinned image; only the lockfile-pinned `npm ci` is used");
+  const installs = [...dockerfile.matchAll(/npm ci[^\n]*/g)].map((m) => m[0]);
+  assert.ok(installs.length > 0, "the image installs its locked dependencies");
+  for (const install of installs) {
+    assert.match(install, /--ignore-scripts/, "no install may execute a package's scripts");
+  }
   assert.ok(!/^COPY.*node_modules/m.test(dockerfile), "and must not copy a host node_modules in");
+  assert.match(dockerfile, /npm ci --omit=dev/, "the serving stage carries production dependencies only");
 });
 
 test("the container's data boundary is the workspace, declared in the image", () => {

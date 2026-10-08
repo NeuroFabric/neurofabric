@@ -2,6 +2,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startWedgeServer } from "./server.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 import { makeTempWorkspace } from "../test-support/temp-workspace.ts";
 import { CREDENTIAL_HEADER, staticVault, type GatewayToken } from "../omniroute/edge-security.ts";
 import { MemoryStore } from "../memory/store.ts";
@@ -260,7 +261,7 @@ test("the wedge's own routes still work alongside the portal surface", async () 
   // tests alone would never see.
   const server = await harness();
   try {
-    const page = await fetch(`${server.url}/`);
+    const page = await fetch(`${server.url}/`, { headers: incidentCommanderHeaders() });
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-type") ?? "", /text\/html/);
   } finally {

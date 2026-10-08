@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { toReactDashboard, dashboardCsp, DASHBOARD_DATA_ID } from "./react-report.ts";
 import { startWedgeServer, type RunningWedge } from "./server.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 import { makeTempWorkspace, writeFixture } from "../test-support/temp-workspace.ts";
 import { parseCsv } from "../conductor/capabilities.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "../conductor/bottlenecks.ts";
@@ -109,7 +110,9 @@ test("the SERVER sends the policy as a header, not only as a meta tag", async ()
   const started = await startWedgeServer({ cwd, port: 0 });
   const server: RunningWedge = started;
   try {
-    const response = await fetch(`${server.url}/api/dashboard?path=operations.csv`);
+    const response = await fetch(`${server.url}/api/dashboard?path=operations.csv`, {
+      headers: incidentCommanderHeaders(),
+    });
     assert.equal(response.status, 200);
     const header = response.headers.get("content-security-policy");
     assert.ok(header !== null,
@@ -156,7 +159,7 @@ test("the kernel's own landing page is STILL untouched by any of this", async ()
   const started = await startWedgeServer({ cwd, port: 0 });
   const server: RunningWedge = started;
   try {
-    const response = await fetch(`${server.url}/`);
+    const response = await fetch(`${server.url}/`, { headers: incidentCommanderHeaders() });
     const policy = response.headers.get("content-security-policy") ?? "";
     assert.match(policy, /default-src 'none'/, "the landing page keeps its strict policy");
     assert.ok(!policy.includes("unpkg.com"), "and names no CDN at all");

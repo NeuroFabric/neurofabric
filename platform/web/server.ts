@@ -37,6 +37,7 @@ import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
+import { enforceIncidentCommander, isProtectedUiPath } from "./auth-middleware.ts";
 
 /**
  * THE WEDGE: a governed bottleneck report behind a dropzone.
@@ -859,6 +860,17 @@ export function createWedgeServer(options: WedgeOptions): Server {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
         /**
+         * THE DASHBOARD GATE, BEFORE ANY PROTECTED HANDLER.
+         *
+         * Exclusive to `/`, `/index.html` and `/api/dashboard`. A missing,
+         * expired, or role-less token is answered here and the handler never
+         * runs. Report, chat, feedback and portal routes keep their own gates.
+         */
+        if (isProtectedUiPath(url.pathname)) {
+          if (enforceIncidentCommander(request, response)) return;
+        }
+
+        /**
          * THE EVENT STREAM, BEFORE THE GENERAL MEMORY BRANCH.
          *
          * Order matters and the reason is narrow: the branch below matches every
@@ -1570,6 +1582,25 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const Database = (await import("better-sqlite3")).default;
             const db = new Database(path.join(cwd, "workspace", "gate.db"), { readonly: true });
 
+            /**
+             * THE TRACEABILITY COLUMNS ARE ASKED FOR, NOT ASSUMED.
+             *
+             * `owasp_ref` and `nist_ref` arrived in a ledger migration,
+             * and nothing in this process creates them on a table that
+             * pre-dates it. A SELECT that names a column the table does
+             * not have is a refusal against exactly the archive the
+             * projection below claims to tolerate -- so the table's own
+             * shape is read first, and the columns are projected only
+             * when the table carries them. An unmigrated ledger answers
+             * with nulls, which is what "pre-dates the migration" means.
+             */
+            const tableInfo = db
+              .prepare("PRAGMA table_info(approval_tasks)")
+              .all() as { name: string }[];
+            const columnNames = new Set(tableInfo.map((column) => column.name));
+            const hasTraceability =
+              columnNames.has("owasp_ref") && columnNames.has("nist_ref");
+
             // subject_json is a serialised object; parse it back so the caller
             // receives a plain record rather than an escaped string inside JSON.
             // Rows that pre-date the column or whose JSON is malformed still travel
@@ -1577,8 +1608,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const rows = db
               .prepare(
                 `SELECT task_token, status, subject_json, decided_at, approved_by,
-                        reason, result_expires_at, collected_at, created_at,
-                        owasp_ref, nist_ref
+                        reason, result_expires_at, collected_at, created_at
+                        ${hasTraceability ? ", owasp_ref, nist_ref" : ""}
                  FROM approval_tasks
                  ORDER BY created_at DESC`,
               )
@@ -1592,8 +1623,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 result_expires_at: number | null;
                 collected_at: number | null;
                 created_at: number;
-                owasp_ref: string | null;
-                nist_ref: string | null;
+                owasp_ref?: string | null;
+                nist_ref?: string | null;
               }[];
 
             const ledger = rows.map((row) => {
@@ -1615,8 +1646,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 createdAt: ledgerTimestamp(row.created_at),
                 // Regulatory traceability columns — null on rows that pre-date
                 // the migration or that were not flagged as schema mutations.
-                owaspRef: row.owasp_ref ?? null,
-                nistRef: row.nist_ref ?? null,
+                owaspRef: hasTraceability ? row.owasp_ref ?? null : null,
+                nistRef: hasTraceability ? row.nist_ref ?? null : null,
               };
             });
 

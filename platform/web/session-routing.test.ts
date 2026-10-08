@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 
 import { startWedgeServer, type RunningWedge } from "./server.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 import { makeTempWorkspace, writeFixture, pathExists } from "../test-support/temp-workspace.ts";
 import { appSourceOf } from "./react-app-harness.ts";
 import { toReactDashboard } from "./react-report.ts";
@@ -145,7 +146,9 @@ test("a question sent WITHOUT a session is still answered", async () => {
 
 test("viewing a dashboard writes NOTHING: an empty file per page view is twenty files", async () => {
   const { cwd, server } = await harness();
-  const response = await fetch(`${server.url}/api/dashboard?path=pega.csv`);
+  const response = await fetch(`${server.url}/api/dashboard?path=pega.csv`, {
+    headers: incidentCommanderHeaders(),
+  });
   assert.equal(response.status, 200);
   await response.text();
   assert.equal(await pathExists(path.join(cwd, "workspace", "sessions")), false,
@@ -157,7 +160,9 @@ test("viewing a dashboard writes NOTHING: an empty file per page view is twenty 
 
 test("the served page carries the id of the conversation it belongs to", async () => {
   const { server } = await harness();
-  const response = await fetch(`${server.url}/api/dashboard?path=pega.csv`);
+  const response = await fetch(`${server.url}/api/dashboard?path=pega.csv`, {
+    headers: incidentCommanderHeaders(),
+  });
   const html = await response.text();
   assert.match(html, /"sessionId":"[0-9a-f-]{8,64}"/,
     "the page must know which conversation is its own, or there is nothing to restore");

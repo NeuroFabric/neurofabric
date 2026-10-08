@@ -17,7 +17,7 @@ import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
 import { resolveSchemaMemory, type ResolvedSchema } from "./schema-memory.ts";
 import type { PolicyConfig, PolicyEngine } from "../core/index.ts";
-import { client, connectMcp } from "./mcp-server.js";
+import { connectMcp } from "./mcp-server.ts";
 
 /**
  * The product spine. See `platform/conductor/DESIGN.md` for the design and the
@@ -661,28 +661,60 @@ export class Conductor {
     }
     await this.kernel.declareToolOutputs(callId, tool, input);
     try {
-      // --- MCP CLIENT TOOL EXECUTION ---
-      const result = await client.callTool({ name: tool, arguments: input as any });
-      
-      // MCP returns a content array. Narrow it defensively: an untyped or
-      // non-text payload must not reach the caller as a crash.
-      const content = result.content as unknown;
-      const first = Array.isArray(content) ? (content[0] as { type?: string; text?: string } | undefined) : undefined;
-      const text = first?.type === "text" && typeof first.text === "string"
-        ? first.text
-        : JSON.stringify(content ?? null);
-      
-      // Minimal adaptation: if result contains JSON, parse it as value
+      // An explicit dispatch, not a default branch. A tool this Conductor does
+      // implement is dispatched HERE, in-process, where the workspace boundary
+      // it must be checked against is in scope. The MCP gateway server carries
+      // the platform's external tools (telemetry, database performance, log
+      // fetch); it does not carry the conductor's own capabilities, so a bridge
+      // call here would answer "tool not found" as a SUCCESS payload -- a
+      // string where a CsvReadResult was expected, which is a crash one line
+      // later, not a refusal. The gateway tools stay reachable through the
+      // `client` this module connects; the conductor's tools run locally.
       let value: unknown;
-      try {
-        value = JSON.parse(text);
-      } catch {
-        value = text;
+      switch (tool) {
+        case "csv_read":
+          value = await csvRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
+        case "render_page":
+          value = await renderPage(input as Parameters<typeof renderPage>[0]);
+          break;
+        case "render_bottleneck_report":
+          value = await renderBottleneckReport(input as Parameters<typeof renderBottleneckReport>[0]);
+          break;
+        case "sqlite_read":
+          value = await sqliteRead({ path: String(input.path), query: input.query === undefined ? undefined : String(input.query) }, { boundary: this.boundary });
+          break;
+        case "pdf_read":
+          value = await pdfRead({ path: String(input.path) }, { boundary: this.boundary });
+          break;
+        case "chart_render":
+          value = await chartRender(input as { path: string; title?: string; points: ChartPoint[] }, { boundary: this.boundary });
+          break;
+        case "table_query":
+          value = await tableQuery(input as { path: string; column: string; operator: string; value: string | number; limit?: number }, { boundary: this.boundary });
+          break;
+        case "landing_page":
+          value = await landingPage(input as { path: string; title: string; headline: string; body: string }, { boundary: this.boundary });
+          break;
+        case "report_write":
+          value = await reportWrite(input as { path: string; title: string; summary: string; columns?: string[]; rows?: Record<string, string>[] }, { boundary: this.boundary });
+          break;
+        case "app_scaffold":
+          value = await appScaffold(input as { path: string; name: string }, { boundary: this.boundary });
+          break;
+        case "pilot_record":
+          value = await pilotRecord(input as unknown as Parameters<typeof pilotRecord>[0], { boundary: this.boundary });
+          break;
+        default:
+          await this.kernel.recordToolResult(callId, tool, undefined, true);
+          return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
       }
-      
       await this.kernel.recordToolResult(callId, tool, value, false);
       return { ok: true, value };
     } catch (error) {
+      // An ordinary failure. It goes to the kernel as an ordinary failure, which
+      // is the whole of D4B: the kernel retries it before it replans, and the
+      // Conductor never invents its own recovery.
       await this.kernel.recordToolResult(callId, tool, undefined, true);
       return { ok: false, failure: { code: "TOOL_ERROR", reason: error instanceof Error ? error.message : String(error) } };
     }
