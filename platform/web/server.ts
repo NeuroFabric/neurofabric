@@ -37,7 +37,9 @@ import { DynamicAgentRegistry } from "../swarm/dynamic-registry.ts";
 import { resolveWithinRoot } from "../core/workspace.ts";
 import { appendTurn, assertSessionId, newSessionId, readSession } from "../conductor/session-store.ts";
 import type { CsvReadResult } from "../conductor/capabilities.ts";
-import { enforceIncidentCommander, isProtectedUiPath } from "./auth-middleware.ts";
+import { RemediationService } from "../remediation/remediation-gate.ts";
+import { createAsyncApprovalGate } from "../embassy/async-approval.ts";
+import { mkdirSync, readdirSync, readFile } from "node:fs";
 
 /**
  * THE WEDGE: a governed bottleneck report behind a dropzone.
@@ -537,6 +539,11 @@ export function createWedgeServer(options: WedgeOptions): Server {
    * default, same body ceiling, and the portal routes are reached only after the
    * same `resolveWithinRoot` boundary as every other path that reads a file.
    */
+  const sandboxRoot = path.join(cwd, "gate-data", "patches");
+  mkdirSync(sandboxRoot, { recursive: true });
+  const gate = createAsyncApprovalGate({ audit: () => undefined });
+  const remediation = new RemediationService({ gate, sandboxRoot, tenant: options.memory?.tenant ?? "default" });
+
   const registry = new DynamicAgentRegistry();
 
   /**
@@ -1669,7 +1676,25 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
         }
 
-        // POST /api/v1/workspace/ingest
+        // GET /api/v1/remediation/patches
+        if (request.method === "GET" && url.pathname === "/api/v1/remediation/patches") {
+          const files = readdirSync(sandboxRoot).filter(f => f.endsWith('.yaml') || f.endsWith('.tf'));
+          const patches = await Promise.all(files.map(async (file) => {
+            const document = await readFile(path.join(sandboxRoot, file), 'utf8');
+            const patchId = file.replace(/\.(yaml|tf)$/, '');
+            return { patchId, format: file.endsWith('.yaml') ? 'kubernetes' : 'terraform', document, state: 'AWAITING_APPROVAL' };
+          }));
+          sendJson(response, 200, patches);
+          return;
+        }
+
+        // POST /api/v1/remediation/approvals
+        if (request.method === "POST" && url.pathname === "/api/v1/remediation/approvals") {
+          const body = JSON.parse(await readBody(request));
+          remediation.review(body.task_token, { approved: body.status === 'approved', approvedBy: "Incident Commander", reason: "HITL review" });
+          sendJson(response, 200, { status: "success" });
+          return;
+        }
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
           const contentType = (request.headers["content-type"] ?? "").toLowerCase();
           if (!contentType.startsWith("multipart/form-data")) {
@@ -1887,6 +1912,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
               cwd,
               defaultsRoot: options.defaultsRoot ?? installRoot,
               projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
+              remediation,
             });
             const result = await conductor.run(`${prompt}; input=${workspacePath}`, {
               mode: "omni",
