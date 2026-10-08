@@ -148,8 +148,17 @@ export interface AsyncApprovalOptions {
   readonly resultTtlMs?: number;
   /** SSE. Omit to run headless; verdicts are then countable but not broadcast. */
   readonly broadcast?: (verdict: VerdictBroadcast) => void;
-  /** SQLite database adapter for persistence. */
-  readonly db: SqliteAdapter;
+  /**
+   * SQLite database adapter for persistence.
+   *
+   * OPTIONAL, and the omission is the headless contract the tests pin:
+   * a gate with no adapter keeps every state in memory, exactly as it
+   * already keeps the pending map and the terminal map in memory, and
+   * every `db` call below is a no-op. Persistence is an enhancement a
+   * deployment opts into by handing the gate an adapter -- a caller that
+   * has no SQLite handle must not be unable to ask a human at all.
+   */
+  readonly db?: SqliteAdapter;
 }
 
 /** Minimal SQLite adapter interface used by the gate. */
@@ -258,11 +267,33 @@ function digestOf(token: string): Buffer {
   return createHash("sha256").update(token, "utf8").digest();
 }
 
+/** A statement that does nothing, for the headless gate. */
+const NOOP_STATEMENT: Statement = {
+  run: () => undefined,
+  get: () => undefined,
+  all: () => [],
+};
+
 export function createAsyncApprovalGate(options: AsyncApprovalOptions): AsyncApprovalGate {
   const now = options.now ?? (() => Date.now());
   const taskTtlMs = options.taskTtlMs ?? DEFAULT_TASK_TTL_MS;
   const resultTtlMs = options.resultTtlMs ?? DEFAULT_RESULT_TTL_MS;
-  const db = options.db;
+  /**
+   * THE ADAPTER, OR THE ABSENCE OF ONE, MADE EXPLICIT.
+   *
+   * Every persistence site below talks to this one local, so "no adapter
+   * was given" is decided ONCE, here, and never re-derided at each call.
+   * The no-op adapter is the honest headless mode: the schema statement,
+   * the status updates and the sweep writes all succeed as nothing, which
+   * is what an in-memory gate means -- not a failure, and not a silent
+   * half-persistence where some writes landed and others did not.
+   */
+  const db: SqliteAdapter = options.db ?? {
+    exec: () => undefined,
+    prepare: () => NOOP_STATEMENT,
+    transaction: (fn) => fn,
+    immediate: (fn) => fn,
+  };
 
   /** Keyed by the token's SHA-256. A dump of this map is not a list of live tokens. */
   const tasks = new Map<string, Task>();

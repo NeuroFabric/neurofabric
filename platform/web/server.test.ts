@@ -5,6 +5,7 @@ import path from "node:path";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 
 import { startWedgeServer, type RunningWedge } from "./server.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 import { makeTempWorkspace, writeFixture, pathExists } from "../test-support/temp-workspace.ts";
 
 /**
@@ -215,7 +216,7 @@ test("POST /api/v1/agent/task runs the Conductor omni workflow", async () => {
 
 test("GET / serves one self-contained page with a dropzone and no outside script", async () => {
   const { server } = await harness();
-  const response = await fetch(`${server.url}/`);
+  const response = await fetch(`${server.url}/`, { headers: incidentCommanderHeaders() });
   const html = await response.text();
   assert.equal(response.status, 200);
   assert.match(html, /<input[^>]*type="file"/, "there is a file input to drop onto");
@@ -404,7 +405,7 @@ test("an unanswerable request is a 400 carrying the exact clarification prompt",
 
   // It asked and stopped. It did not retry forever and it did not fall over:
   // the server is still serving after a run that could not proceed.
-  const after = await fetch(`${server.url}/`);
+  const after = await fetch(`${server.url}/`, { headers: incidentCommanderHeaders() });
   assert.equal(after.status, 200, "the server survived a run it could not complete");
   await after.text();
   await server.close();

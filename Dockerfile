@@ -1,7 +1,8 @@
 # THE COMMERCIAL WEDGE — TWO-STAGE BUILD
 #
-# STATUS: UNVERIFIED. Docker is absent from the authoring environment, so every
-# claim below is a claim about what the file says, not about an image that ran.
+# STATUS: UNVERIFIED. This image has NOT been built. Docker is absent
+# from the authoring environment, so every claim below is a claim about
+# what the file says, not about an image that ran.
 # Operator to run:
 #     docker compose build && docker compose up
 #
@@ -46,7 +47,6 @@ RUN npm ci --prefix platform/ui --ignore-scripts
 COPY platform ./platform
 COPY configs ./configs
 COPY .pi ./.pi
-COPY skills ./skills
 COPY start-ui.mjs ./
 
 # --- Build the React/Vite UI ---
@@ -104,7 +104,7 @@ COPY --from=builder --chown=node:node /build/platform ./platform
 COPY --from=builder --chown=node:node /build/platform/ui/dist ./platform/ui/dist
 COPY --from=builder --chown=node:node /build/configs ./configs
 COPY --from=builder --chown=node:node /build/.pi ./.pi
-COPY --from=builder --chown=node:node /build/skills ./skills
+COPY --chown=node:node skills ./skills
 COPY --from=builder --chown=node:node /build/start-ui.mjs ./
 
 # THE BOUNDARY IS THE MOUNT, DECLARED HERE AND NOT ONLY IN COMPOSE.

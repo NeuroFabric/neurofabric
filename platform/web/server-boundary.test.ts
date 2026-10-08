@@ -6,6 +6,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 
 import { startWedgeServer, type RunningWedge } from "./server.ts";
 import { PAGE_HTML } from "./page.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 
 /**
  * THE WEDGE SWEEP. One hole, and it is the one the file's own header says
@@ -136,7 +137,12 @@ test("a container may opt into 0.0.0.0 explicitly, because a port publish cannot
   openServers.add(server);
   assert.match(server.url, /^http:\/\/0\.0\.0\.0:\d+$/);
   // And it must actually answer on the container interface, not just claim to.
-  const response = await fetch(`http://127.0.0.1:${server.port}/`);
+  // `/` is an authenticated surface (the Incident Commander gate), so the
+  // probe presents a credential: a 200 proves BOTH that the widened bind
+  // listens and that the gate admits its own role.
+  const response = await fetch(`http://127.0.0.1:${server.port}/`, {
+    headers: incidentCommanderHeaders(),
+  });
   assert.equal(response.status, 200, "the opt-in bind must really listen");
 });
 

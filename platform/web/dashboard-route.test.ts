@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 
 import { startWedgeServer, type RunningWedge } from "./server.ts";
+import { incidentCommanderHeaders } from "./auth-middleware.ts";
 import { makeTempWorkspace, writeFixture } from "../test-support/temp-workspace.ts";
 
 /**
@@ -60,7 +61,9 @@ async function harness() {
   const started = await startWedgeServer({ cwd, port: 0 });
   const server: RunningWedge = { ...started, ...trackClose(started.close) };
   const get = async (query: string) => {
-    const response = await fetch(`${server.url}/api/dashboard${query}`);
+    const response = await fetch(`${server.url}/api/dashboard${query}`, {
+      headers: incidentCommanderHeaders(),
+    });
     return { status: response.status, text: await response.text() };
   };
   return { cwd, server, get };

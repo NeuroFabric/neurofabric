@@ -98,6 +98,33 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 /** Anything that will pass through a metric-name lookup table unchanged. */
 const METRIC_NAME_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
+/**
+ * A CREDENTIAL IN A TELEMETRY FIELD IS REFUSED, NOT CARRIED.
+ *
+ * The envelope's contract is that an event never carries a credential,
+ * and that contract was previously asserted only in prose. A producer
+ * that puts a live key in `eventId` or a metadata value is a producer
+ * whose upstream leaked a secret into a firehose, and the only honest
+ * response is a refusal that names the FIELD: the value is a secret,
+ * and echoing it into an error body would publish it to every log, tape
+ * and ticket the refusal is written to.
+ *
+ * The patterns are the well-known live-key prefixes. A generic
+ * high-entropy heuristic would refuse legitimate values; a known
+ * prefix refuses exactly the shapes that are real credentials elsewhere.
+ */
+const CREDENTIAL_PREFIXES = [
+  "sk_live_", "sk-live-", "pk_live_", "pk-live-",
+  "rk_live_", "rk-live-",
+  "AKIA", "ASIA",
+  "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+  "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-",
+];
+
+function carriesCredential(text: string): boolean {
+  return CREDENTIAL_PREFIXES.some((prefix) => text.includes(prefix));
+}
+
 /* -------------------------------------------------------------------------- */
 /* THE ENVELOPE                                                                */
 /* -------------------------------------------------------------------------- */
@@ -168,7 +195,8 @@ export type TelemetryInvalidCode =
   | "VALUE_INVALID"
   | "METADATA_INVALID"
   | "METADATA_TOO_DEEP"
-  | "METADATA_TOO_MANY_KEYS";
+  | "METADATA_TOO_MANY_KEYS"
+  | "SECRET_REJECTED";
 
 export type TelemetryValidation =
   | { readonly ok: true; readonly event: UniversalTelemetryEvent }
@@ -252,6 +280,9 @@ function validateMetadataValue(
     const text = value as string;
     if (text.length > MAX_METADATA_STRING_BYTES) {
       return { ok: false, failure: refuse("METADATA_INVALID", `${path} exceeds the string length limit`) };
+    }
+    if (carriesCredential(text)) {
+      return { ok: false, failure: refuse("SECRET_REJECTED", `${path} carries a credential-like value, and the envelope never carries one`) };
     }
     return { ok: true, value: text };
   }
@@ -347,6 +378,9 @@ export function validateUniversalTelemetryEvent(input: unknown): TelemetryValida
   if (eventId.length > MAX_EVENT_ID_BYTES || CONTROL_CHARACTERS.test(eventId)) {
     return refuse("EVENT_ID_INVALID", "eventId exceeds the length limit or contains a control character");
   }
+  if (carriesCredential(eventId)) {
+    return refuse("SECRET_REJECTED", "eventId carries a credential-like value, and the envelope never carries one");
+  }
 
   if (!isValidInstant(timestamp)) {
     return refuse("TIMESTAMP_INVALID", "timestamp must be ISO-8601 with an explicit timezone offset");
@@ -364,6 +398,9 @@ export function validateUniversalTelemetryEvent(input: unknown): TelemetryValida
   }
   if (metricName.length > MAX_METRIC_NAME_BYTES) {
     return refuse("METRIC_NAME_INVALID", "metricName exceeds the length limit");
+  }
+  if (carriesCredential(metricName)) {
+    return refuse("SECRET_REJECTED", "metricName carries a credential-like value, and the envelope never carries one");
   }
 
   // The single check that protects every downstream average.

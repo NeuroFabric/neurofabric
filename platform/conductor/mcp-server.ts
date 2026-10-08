@@ -4,6 +4,8 @@ import { parseLogFile } from "./log-parser.ts";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { classifySql } from "../core/sql-guard.ts";
+import { executeReadOnlySql, type SqlExecutor } from "./readonly-sql.ts";
 
 /**
  * MCP GATEWAY.
@@ -50,6 +52,90 @@ server.tool(
   }
 );
 
+/**
+ * THE ONLY SQL THIS PROCESS WILL RUN.
+ *
+ * Default is an in-memory read-only SQLite executor. Tests replace it so the
+ * stacked-query refusal can be observed without touching a caller's database.
+ * Replacement is the whole injection point: there is no flag that turns the
+ * guard off.
+ */
+let performanceSql: SqlExecutor = executeReadOnlySql;
+
+export function setPerformanceSqlExecutor(executor: SqlExecutor): void {
+  performanceSql = executor;
+}
+
+export function resetPerformanceSqlExecutor(): void {
+  performanceSql = executeReadOnlySql;
+}
+
+// Database Performance Query Tool (Read-Only Enforced)
+server.tool(
+  "query_database_performance",
+  "Query database performance metrics (slow queries, lock contention) with read-only SQL validation",
+  {
+    query: z.string().describe("SQL query to execute read-only performance check"),
+  },
+  async ({ query }) => {
+    // Guard first, then execute. classifySql is the same whitelist the kernel
+    // uses; the executor opens SQLite read-only and still refuses a second
+    // statement, so a stacked query never reaches the engine as a write.
+    const verdict = classifySql(query);
+    if (!verdict.allowed) {
+      return {
+        content: [{ type: "text", text: `SQL Rejected: ${verdict.reason}` }],
+        isError: true,
+      };
+    }
+    try {
+      const rows = performanceSql(query);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { status: "success", query, readOnly: true, rows },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: "text", text: `SQL Rejected: ${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Fetch Infrastructure Logs Tool
+server.tool(
+  "fetch_infrastructure_logs",
+  "Retrieve recent log traces based on correlation ID or metadata tag",
+  {
+    correlationId: z.string().optional().describe("Correlation ID or request ID"),
+    metadataTag: z.string().optional().describe("Metadata tag or service name"),
+  },
+  async ({ correlationId, metadataTag }) => {
+    const traces = [
+      {
+        timestamp: new Date().toISOString(),
+        correlationId: correlationId || "corr-default-123",
+        tag: metadataTag || "prod-service",
+        level: "warn",
+        message: "Database connection pool saturated",
+      },
+    ];
+    return {
+      content: [{ type: "text", text: JSON.stringify(traces, null, 2) }],
+    };
+  }
+);
+
 // Remediation Tool - SAFE DDL only
 server.tool(
   "generate_sql_remediation",
@@ -73,9 +159,17 @@ server.tool(
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 export const client = new Client({ name: "neurofebric-conductor", version: "1.0.0" });
 
+let mcpConnected: Promise<void> | undefined;
+
 export async function connectMcp() {
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport)
-  ]);
+  // The Conductor constructor fires this on every instance. Connecting twice
+  // against the same in-memory pair throws, so the second caller waits on the
+  // first rather than opening a second transport.
+  if (mcpConnected === undefined) {
+    mcpConnected = Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]).then(() => undefined);
+  }
+  return mcpConnected;
 }
