@@ -1,0 +1,40 @@
+services:
+  # 1. Backend API & SSE Service
+  - type: web
+    name: neurofabric-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npx tsx platform/web/server.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: neurofabric-redis
+          property: connectionString
+
+  # 2. Frontend React Dashboard
+  - type: static
+    name: neurofabric-ui
+    buildCommand: cd platform/ui && npm install && npm run build
+    staticPublishPath: platform/ui/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: neurofabric-backend
+          property: url
+
+  # 3. Redis Message Broker
+  - type: redis
+    name: neurofabric-redis
+    plan: free
+    ipAllowList: []
