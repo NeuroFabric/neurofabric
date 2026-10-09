@@ -2,6 +2,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import path from "node:path";
 import { mkdirSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { Pool } from "pg";
+
+const dbPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
 
 export class CircuitBreakerError extends Error {
   constructor(message = 'Task execution halted: maximum iteration threshold exceeded.') {
@@ -817,28 +825,26 @@ export function createWedgeServer(options: WedgeOptions): Server {
         // GET /api/v1/governance/ledger
         if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
           try {
-            const Database = (await import("better-sqlite3")).default;
-            const db = new Database(path.join(cwd, "workspace", "gate.db"), { readonly: true });
-            const tableInfo = db.prepare("PRAGMA table_info(approval_tasks)").all() as { name: string }[];
-            const columnNames = new Set(tableInfo.map((column) => column.name));
+            const colCheck = await dbPool.query(`
+              SELECT column_name 
+              FROM information_schema.columns 
+              WHERE table_name='approval_tasks' AND column_name IN ('owasp_ref', 'nist_ref')
+            `);
+            const columnNames = new Set(colCheck.rows.map(r => r.column_name));
             const hasTraceability = columnNames.has("owasp_ref") && columnNames.has("nist_ref");
 
-            const rows = db.prepare(`
+            const queryResult = await dbPool.query(`
               SELECT task_token, status, subject_json, decided_at, approved_by,
                      reason, result_expires_at, collected_at, created_at
                      ${hasTraceability ? ", owasp_ref, nist_ref" : ""}
               FROM approval_tasks
               ORDER BY created_at DESC
-            `).all() as {
-              task_token: string; status: string; subject_json: string; decided_at: number | null;
-              approved_by: string | null; reason: string | null; result_expires_at: number | null;
-              collected_at: number | null; created_at: number; owasp_ref?: string | null; nist_ref?: string | null;
-            }[];
+            `);
 
-            const ledger = rows.map((row) => {
+            const ledger = queryResult.rows.map((row) => {
               let subject: unknown;
               try {
-                subject = JSON.parse(row.subject_json);
+                subject = typeof row.subject_json === "string" ? JSON.parse(row.subject_json) : row.subject_json;
               } catch {
                 subject = row.subject_json;
               }
@@ -860,10 +866,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            const code = typeof error === "object" && error !== null && "code" in error
-              ? (error as { code?: unknown }).code
-              : undefined;
-            if (code === "SQLITE_CANTOPEN" || message.includes("no such file") || message.includes("unable to open database file")) {
+            if (message.includes("relation \"approval_tasks\" does not exist")) {
               sendJson(response, 200, []);
               return;
             }
@@ -1132,21 +1135,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
 
           try {
-            const Database = (await import("better-sqlite3")).default;
-            const db = new Database(path.join(cwd, "workspace", "gate.db"));
-
-            try {
-              db.prepare("ALTER TABLE approval_tasks ADD COLUMN owasp_ref TEXT").run();
-            } catch (migrationErr) {
-              const msg = migrationErr instanceof Error ? migrationErr.message : String(migrationErr);
-              if (!msg.includes("duplicate column name")) throw migrationErr;
-            }
-            try {
-              db.prepare("ALTER TABLE approval_tasks ADD COLUMN nist_ref TEXT").run();
-            } catch (migrationErr) {
-              const msg = migrationErr instanceof Error ? migrationErr.message : String(migrationErr);
-              if (!msg.includes("duplicate column name")) throw migrationErr;
-            }
+            await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS owasp_ref TEXT");
+            await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS nist_ref TEXT");
 
             const SCHEMA_MUTATION_RE = /\b(ALTER|DROP|CREATE|TRUNCATE|RENAME|ATTACH|DETACH)\b/i;
             const payloadStr = result_json ? JSON.stringify(result_json) : "";
@@ -1154,7 +1144,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const owaspTag = isSchemaMutation ? "OWASP LLM03: Excessive Agency" : null;
             const nistTag = isSchemaMutation ? "NIST AI RMF: GOVERN 1.2" : null;
 
-            const existing = db.prepare("SELECT status FROM approval_tasks WHERE task_token = ?").get(task_token) as any;
+            const existingResult = await dbPool.query("SELECT status FROM approval_tasks WHERE task_token = $1", [task_token]);
+            const existing = existingResult.rows[0];
 
             if (!existing) {
               sendJson(response, 404, { error: "Task not found." });
@@ -1169,12 +1160,12 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const result_expires_at = decided_at + Math.floor(ttl_seconds);
             const result_string = result_json ? JSON.stringify(result_json) : null;
 
-            db.prepare(`
+            await dbPool.query(`
               UPDATE approval_tasks
-              SET status = ?, result_json = ?, decided_at = ?, approved_by = ?,
-                  reason = ?, result_expires_at = ?, owasp_ref = ?, nist_ref = ?
-              WHERE task_token = ?
-            `).run(
+              SET status = $1, result_json = $2, decided_at = $3, approved_by = $4,
+                  reason = $5, result_expires_at = $6, owasp_ref = $7, nist_ref = $8
+              WHERE task_token = $9
+            `, [
               status,
               result_string,
               decided_at,
@@ -1184,7 +1175,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
               owaspTag,
               nistTag,
               task_token,
-            );
+            ]);
 
             sendJson(response, 200, {
               success: true,
@@ -1205,10 +1196,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
         if (request.method === "GET" && resultMatch) {
           const token = resultMatch[1];
           try {
-            const Database = (await import("better-sqlite3")).default;
-            const db = new Database(path.join(cwd, "workspace", "gate.db"));
-
-            const task = db.prepare("SELECT * FROM approval_tasks WHERE task_token = ?").get(token) as any;
+            const taskResult = await dbPool.query("SELECT * FROM approval_tasks WHERE task_token = $1", [token]);
+            const task = taskResult.rows[0];
 
             if (!task) {
               sendJson(response, 404, { error: "Task not found." });
@@ -1222,15 +1211,15 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
             if (task.status === "approved" || task.status === "rejected") {
               const collected_at = Math.floor(Date.now() / 1000);
-              db.prepare(`
+              await dbPool.query(`
                 UPDATE approval_tasks 
-                SET status = 'consumed', collected_at = ? 
-                WHERE task_token = ?
-              `).run(collected_at, token);
+                SET status = 'consumed', collected_at = $1 
+                WHERE task_token = $2
+              `, [collected_at, token]);
 
               sendJson(response, 200, {
                 status: task.status,
-                result: task.result_json ? JSON.parse(task.result_json) : null,
+                result: typeof task.result_json === "string" ? JSON.parse(task.result_json) : task.result_json,
                 decided_at: task.decided_at,
                 approved_by: task.approved_by,
                 reason: task.reason,
@@ -1241,7 +1230,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
             sendJson(response, 200, {
               status: task.status,
-              result: task.result_json ? JSON.parse(task.result_json) : null,
+              result: typeof task.result_json === "string" ? JSON.parse(task.result_json) : task.result_json,
               message: `Task is no longer active (Status: ${task.status})`
             });
             return;
