@@ -12,11 +12,9 @@ services:
       - key: PORT
         value: 10000
       - key: REDIS_URL
-        fromRedis:
-          name: neurofabric-redis
-          property: connectionString
+        sync: false
 
-  # 2. Frontend React Dashboard (type: web with runtime: static)
+  # 2. Frontend React Dashboard
   - type: web
     name: neurofabric-ui
     runtime: static
@@ -32,9 +30,3 @@ services:
           type: web
           name: neurofabric-backend
           property: url
-
-# 3. Redis Message Broker (Top-level block in Render Blueprints)
-redis:
-  - name: neurofabric-redis
-    plan: free
-    ipAllowList: []
