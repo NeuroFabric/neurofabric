@@ -32,8 +32,8 @@ const LEGACY_RULES = {
   fileRules: [{ pattern: "**", read: "allow", write: "allow" }],
   destructiveCommandPatterns: ["rm -rf", "format c:"],
   destructiveCommandTokens: ["rm", "rmdir", "del", "erase", "unlink", "shred", "remove-item"],
-  secretWritePatterns: ["api_key", "password", "secret", "authorization"],
-  limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 2_000_000 },
+  secretWritePatterns: ["aws_access_key_id", "x-api-key_live", "sk_live_", "-----BEGIN PRIVATE KEY-----"],
+  limits: { maxToolCallsPerTask: 40, maxFileWritesPerTask: 10, maxBytesPerWrite: 5_000_000 },
   onViolation: "block",
 } as const;
 
@@ -197,13 +197,13 @@ test("3a. secret patterns apply to write payloads ONLY, never to read or search 
 
   // But a WRITE that would persist a secret is denied, in every content field.
   const writes: [unknown, string][] = [
-    [{ path: "notes.md", content: "db password: hunter2" }, "content"],
-    [{ path: "config.json", content: '{"api_key": "abc123"}' }, "an api key in content"],
-    [{ path: "headers.txt", contents: "Authorization: Bearer abc" }, "a header value"],
-    [{ path: "a.md", text: "the client secret" }, "text field"],
-    [{ path: "a.md", body: "my password is x" }, "body field"],
-    [{ path: "a.md", data: "authorization header" }, "data field"],
-    [{ path: "a.md", old_string: "a", new_string: "password" }, "edit new_string"],
+    [{ path: "notes.md", content: "db credentials: aws_access_key_id=123" }, "content"],
+    [{ path: "config.json", content: '{"x-api-key_live": "abc123"}' }, "an api key in content"],
+    [{ path: "headers.txt", contents: "Bearer sk_live_abc" }, "a header value"],
+    [{ path: "a.md", text: "-----BEGIN PRIVATE KEY-----" }, "text field"],
+    [{ path: "a.md", body: "my sk_live_ is x" }, "body field"],
+    [{ path: "a.md", data: "x-api-key_live header" }, "data field"],
+    [{ path: "a.md", old_string: "a", new_string: "aws_access_key_id" }, "edit new_string"],
   ];
 
   for (const [input, label] of writes) {
@@ -233,7 +233,7 @@ test("3a. secret patterns apply to write payloads ONLY, never to read or search 
   const samePathDirty = await adapter.precheckToolCall(
     "write",
     "execute",
-    { path: "docs/password-policy.md", content: "db password: hunter2" },
+    { path: "docs/password-policy.md", content: "db credentials: aws_access_key_id=123" },
     undefined,
     "w-same-path-dirty",
   );
@@ -552,13 +552,13 @@ test("7. the committed project policy file is valid and loadable", async () => {
   assert.equal(config!.version, 1);
   assert.equal(config!.limits.maxToolCallsPerTask, 1000, "the operator-raised harness budget");
   assert.equal(config!.limits.maxFileWritesPerTask, 500);
-  assert.equal(config!.limits.maxBytesPerWrite, 2_000_000);
+  assert.equal(config!.limits.maxBytesPerWrite, 5_000_000);
   assert.deepEqual(config!.destructiveCommandPatterns, ["rm -rf", "format c:"]);
   assert.deepEqual(
     config!.destructiveCommandTokens,
     ["rm", "rmdir", "del", "erase", "unlink", "shred", "remove-item"],
     "the shipped config must carry the deletion guard explicitly",
   );
-  assert.deepEqual(config!.secretWritePatterns, ["api_key", "password", "secret:", "authorization"]);
+  assert.deepEqual(config!.secretWritePatterns, ["aws_access_key_id", "x-api-key_live", "sk_live_", "-----BEGIN PRIVATE KEY-----"]);
   assert.equal(config!.onViolation, "block");
 });

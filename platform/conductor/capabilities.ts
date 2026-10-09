@@ -5,7 +5,7 @@ import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords, streamCsv
 import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
 import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
 import { open, readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { Pool } from "pg";
 import { PDFParse } from "pdf-parse";
 
 /**
@@ -642,6 +642,12 @@ export const SQLITE_READ: ToolDescriptor = {
  *
  * The connection is opened in readonly: true mode to enforce read-only semantics at the driver level.
  */
+/**
+ * READ A POSTGRESQL DATABASE AS A GOVERNED TOOL.
+ *
+ * In schema mode (no query), returns the list of tables and their columns.
+ * In query mode (with query), executes a read-only SELECT query and returns the rows.
+ */
 export async function sqliteRead(
   input: { path: string; query?: string },
   boundary?: { boundary?: { check(p: string): { allowed: boolean } } }
@@ -653,54 +659,51 @@ export async function sqliteRead(
   const target = String(input.path ?? "");
   if (boundary?.boundary) {
     const verdict = boundary.boundary.check(target);
-    if (!verdict.allowed) throw new Error(`sqlite_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
+    if (!verdict.allowed) throw new Error(`postgres_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
   }
 
-  // Check if the file exists (better-sqlite3 will throw if not, but we can give a clearer message).
-  const { existsSync } = await import("node:fs");
-  if (!existsSync(target)) {
-    throw new Error(`sqlite_read: file does not exist at ${target}`);
-  }
-
-  // Open the database in readonly mode.
-  const db = new Database(target, { readonly: true });
+  // Enforce read-only at the transaction level
+  const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const client = await dbPool.connect();
 
   try {
-    if (input.query === undefined) {
-      // SCHEMA MODE: return tables and columns.
-      const tables: { name: string; columns: string[] }[] = [];
+    await client.query("BEGIN READ ONLY");
 
-      // Get the list of tables.
-      const tableRows = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-      for (const tableRow of tableRows as { name: string }[]) {
-        const tableName = tableRow.name;
-        // Get the columns for this table.
-        const pragma = db.prepare(`PRAGMA table_info(${tableName})`).all();
-        const columns = (pragma as { name: string }[]).map(col => col.name);
+    if (input.query === undefined) {
+      // SCHEMA MODE: return tables and columns
+      const tables: { name: string; columns: string[] }[] = [];
+      const tableRows = await client.query("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema'");
+      
+      for (const tableRow of tableRows.rows) {
+        const tableName = tableRow.tablename;
+        const columnRows = await client.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1", [tableName]);
+        const columns = columnRows.rows.map(col => col.column_name);
         tables.push({ name: tableName, columns });
       }
 
+      await client.query("ROLLBACK");
       return { path: target, tables, rows: [] };
     } else {
-      // QUERY MODE: enforce read-only by checking that the query is a SELECT.
+      // QUERY MODE: Enforce read-only string patterns
       const queryTrim = input.query.trim();
       if (!queryTrim.toUpperCase().startsWith("SELECT")) {
-        throw new Error(`sqlite_read: only SELECT queries are allowed for read-only access`);
+        throw new Error(`postgres_read: only SELECT queries are allowed for read-only access`);
       }
-      // Additionally, we can check for multiple statements by looking for semicolons in the middle.
-      // But note: the query might have a semicolon at the end. We'll remove trailing semicolon and check for any remaining.
       const queryWithoutTrailingSemicolon = queryTrim.replace(/;\s*$/, "");
       if (queryWithoutTrailingSemicolon.includes(";")) {
-        throw new Error(`sqlite_read: multiple statements are not allowed`);
+        throw new Error(`postgres_read: multiple statements are not allowed`);
       }
 
-      // Execute the query.
-      const rows = db.prepare(queryTrim).all() as Record<string, string>[];
-
-      return { path: target, tables: [], rows };
+      const queryResult = await client.query(queryTrim);
+      await client.query("ROLLBACK");
+      return { path: target, tables: [], rows: queryResult.rows };
     }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
   } finally {
-    db.close();
+    client.release();
+    await dbPool.end();
   }
 }
 
@@ -987,3 +990,45 @@ export async function pilotRecord(
 export const STAGE3_CAPABILITIES: ToolDescriptor[] = [CHART_RENDER, TABLE_QUERY, LANDING_PAGE, REPORT_WRITE, APP_SCAFFOLD];
 export const STAGE4_CAPABILITIES: ToolDescriptor[] = [PILOT_RECORD];
 export const CHART = CHART_RENDER;
+
+/**
+ * VALIDATE INFRASTRUCTURE PATCH - Dry-run validation for K8s/Terraform manifests.
+ * This tool MUST be called before finalizing any remediation patch.
+ */
+export const VALIDATE_INFRASTRUCTURE_PATCH: ToolDescriptor = {
+  name: "validate_infrastructure_patch",
+  version: "stage17",
+  description: "Validates a Kubernetes YAML or Terraform manifest using dry-run against the target API. Required before finalizing any infrastructure patch.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      manifest: { type: "string", description: "The raw YAML or Terraform manifest content" },
+      format: { type: "string", enum: ["kubernetes", "terraform"], description: "The format of the manifest" },
+    },
+    required: ["manifest", "format"],
+  },
+  outputSchema: {
+    type: "object",
+    properties: {
+      valid: { type: "boolean" },
+      output: { type: "string" },
+    },
+    required: ["valid", "output"],
+  },
+  capabilities: ["infrastructure.validation"],
+  permissions: ["tool:validate_infrastructure_patch"],
+  riskLevel: "READ_ONLY",
+  idempotency: "IDEMPOTENT",
+  sideEffect: "PURE",
+  timeoutMs: 30_000,
+  retryPolicy: { maxAttempts: 1, backoffMs: 0, maxBackoffMs: 0 },
+};
+
+/** Implementation function for the validate_infrastructure_patch tool */
+export async function validateInfrastructurePatch(
+  input: { manifest: string; format: "kubernetes" | "terraform" },
+  boundary?: { boundary?: { check(p: string): { allowed: boolean } } }
+): Promise<{ valid: boolean; output: string }> {
+  const { ExecutionSandbox } = await import("./sandbox.ts");
+  return ExecutionSandbox.validateManifest(input.manifest, input.format);
+}

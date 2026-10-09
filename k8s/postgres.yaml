@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neurofebric-db
+  labels:
+    app: neurofebric-db
+spec:
+  serviceName: "neurofebric-db"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neurofebric-db
+  template:
+    metadata:
+      labels:
+        app: neurofebric-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_DB
+          value: "neurofebric"
+        - name: POSTGRES_USER
+          value: "neurofebric"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: neurofebric-secrets
+              key: db-password
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: pgdata
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neurofebric-db
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: neurofebric-db

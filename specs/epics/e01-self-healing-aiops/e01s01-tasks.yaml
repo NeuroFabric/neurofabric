@@ -1,0 +1,55 @@
+story_id: e01s01
+title: Deepen Embassy Module for Self-Healing AIOps
+status: failing
+bcps: 4
+tasks:
+  - id: 1
+    description: "Define TypeScript interfaces for Embassy, RemediationProposal, RemediationOptions, RemediationOutcome, and adapter ports"
+    verify: "ls platform/embassy/engine.ts"
+    risk: P1
+    status: failing
+    allure:
+      severity: high
+      categories:
+        - "Interface Design"
+        - "Type Safety"
+  - id: 2
+    description: "Implement Embassy class with constructor injection for adapters and dependencies"
+    verify: "grep -r \"class Embassy\" platform/embassy/engine.ts"
+    risk: P1
+    status: failing
+    allure:
+      severity: high
+      categories:
+        - "Implementation"
+        - "Dependency Injection"
+  - id: 3
+    description: "Implement the remediate method with confidence assessment, adapter selection, execution, telemetry monitoring, and automatic rollback"
+    verify: "grep -r \"async remediate\" platform/embassy/engine.ts"
+    risk: P1
+    status: failing
+    allure:
+      severity: high
+      categories:
+        - "Core Logic"
+        - "Self-Healing"
+  - id: 4
+    description: "Add default implementations for confidence scorer, telemetry monitor, and logger"
+    verify: "grep -r \"defaultConfidenceScorer\\|defaultTelemetryMonitor\\|defaultLogger\" platform/embassy/engine.ts"
+    risk: P2
+    status: failing
+    allure:
+      severity: normal
+      categories:
+        - "Defaults"
+        - "Testability"
+  - id: 5
+    description: "Export EmbassyInterface for type safety"
+    verify: "grep -r \"EmbassyInterface\" platform/embassy/engine.ts"
+    risk: P2
+    status: failing
+    allure:
+      severity: normal
+      categories:
+        - "Type Safety"
+        - "API"
