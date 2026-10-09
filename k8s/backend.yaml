@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neurofebric-backend
+  labels:
+    app: neurofebric-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neurofebric-backend
+  template:
+    metadata:
+      labels:
+        app: neurofebric-backend
+    spec:
+      containers:
+        - name: backend
+          image: neurofebric-backend:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              value: postgres://admin:admin@postgres-service:5432/neurofebric
+            - name: REDIS_URL
+              value: redis://redis-service:6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+spec:
+  selector:
+    app: neurofebric-backend
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080

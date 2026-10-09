@@ -1,6 +1,7 @@
 {
-  "name": "ui",
+  "name": "neurofabric-ui",
   "private": true,
+  "description": "NeuroFabric UI",
   "version": "0.0.0",
   "type": "module",
   "scripts": {

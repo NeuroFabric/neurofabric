@@ -1,0 +1,13 @@
+# Stage 1: Build the React Dashboard
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY platform/ui/package.json platform/ui/package-lock.json ./
+RUN npm ci
+COPY platform/ui ./
+RUN npm run build
+
+# Stage 2: Serve with Custom Nginx
+FROM nginx:alpine
+COPY platform/ui/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE 80

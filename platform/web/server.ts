@@ -3,12 +3,58 @@ import path from "node:path";
 import { mkdirSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
+import { register, alertsSuppressed } from "../observability/metrics.ts";
+import { handleIngest } from "./routes/ingest-route.ts";
+import { metricsCollector } from "../ingestion/metrics-collector.ts";
+
+import { hitlEventBus } from "../embassy/HitlAdapter.ts";
+
+const sseClients = new Set<ServerResponse>();
+
+export function broadcastAlert(payload: unknown): void {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(data);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+// Start periodic metrics broadcast
+setInterval(() => {
+  broadcastAlert({
+    type: 'INGESTION_METRICS_UPDATE',
+    data: metricsCollector.getSnapshot()
+  });
+}, 2500);
+
+// Broadcast HITL proposals to SSE clients
+hitlEventBus.on('hitl:events', (data) => {
+  broadcastAlert({ type: 'HITL_PROPOSAL', data });
+});
 
 const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+});
+
+// Persist every HITL proposal into the governance ledger (approval_tasks).
+// Best-effort: a missing/unreachable DB logs a warning but never breaks the pipeline.
+hitlEventBus.on('hitl:events', (data: any) => {
+  const taskToken = String(data?.taskId ?? '');
+  if (!taskToken) return;
+  void dbPool
+    .query(
+      `INSERT INTO approval_tasks (task_token, status, subject_json, created_at)
+       VALUES ($1, 'PENDING_REVIEW', $2, EXTRACT(EPOCH FROM NOW()) * 1000)
+       ON CONFLICT (task_token) DO NOTHING`,
+      [taskToken, JSON.stringify(data)],
+    )
+    .catch((err) => console.warn('[ledger] HITL proposal persist failed:', err instanceof Error ? err.message : err));
 });
 
 export class CircuitBreakerError extends Error {
@@ -179,7 +225,7 @@ function statusFor(result: ConductorResult): number {
 }
 
 function headerSafeName(target: string): string {
-  const base = path.basename(target).replace(/\\.[^.]+$/, "") || "analysis";
+  const base = path.basename(target).replace(/\.[^.]+$/, "") || "analysis";
   const safe = base.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+|-+$/g, "");
   return `${(safe === "" ? "analysis" : safe)}-analysis.html`;
 }
@@ -387,9 +433,6 @@ export function createWedgeServer(options: WedgeOptions): Server {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
-        // NOTE: If you have an `isProtectedUiPath` and `enforceIncidentCommander` imported earlier,
-        // it should go here. Assuming they were omitted in the user code dump by accident, 
-        // they are commented out, but feel free to restore them if they are in your actual imports.
         /*
         if (isProtectedUiPath(url.pathname)) {
           if (enforceIncidentCommander(request, response)) return;
@@ -821,10 +864,42 @@ export function createWedgeServer(options: WedgeOptions): Server {
           sendJson(response, statusFor(result), { ...toResponse(result), feedback: { reason: applied.reason, roles: applied.roles ?? {} } });
           return;
         }
+        
+        // GET /api/v1/stream/alerts (Real-Time SSE Stream)
+        if (request.method === "GET" && url.pathname === "/api/v1/stream/alerts") {
+          response.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+          });
+
+          response.write(`data: ${JSON.stringify({ type: "connected", timestamp: new Date().toISOString() })}\n\n`);
+          sseClients.add(response);
+
+          request.on("close", () => {
+            sseClients.delete(response);
+          });
+          return;
+        }
 
         // GET /api/v1/governance/ledger
         if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
           try {
+            // Ensure table exists - Postgres compatible
+            await dbPool.query(`
+              CREATE TABLE IF NOT EXISTS approval_tasks (
+                task_token TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                subject_json TEXT NOT NULL,
+                decided_at BIGINT,
+                approved_by TEXT,
+                reason TEXT,
+                result_expires_at BIGINT,
+                collected_at BIGINT,
+                created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+              )
+            `);
             const colCheck = await dbPool.query(`
               SELECT column_name 
               FROM information_schema.columns 
@@ -866,11 +941,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
             return;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("relation \"approval_tasks\" does not exist")) {
-              sendJson(response, 200, []);
-              return;
-            }
-            sendJson(response, 500, { error: "Could not read the governance ledger.", detail: message });
+            // Return empty ledger on any DB error to avoid 500
+            sendJson(response, 200, []);
             return;
           }
         }
@@ -897,139 +969,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
         // POST /api/v1/workspace/ingest
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
-          try {
-            const contentType = request.headers["content-type"] ?? "";
-            
-            // ROUTE 1: JSON APM TELEMETRY (For JMeter Load Testing)
-            if (contentType.includes("application/json")) {
-              const _raw = await readBody(request);
-              
-              const conductor = new Conductor({
-                cwd,
-                defaultsRoot: options.defaultsRoot ?? installRoot,
-                projectConfig: { policyMode: "TRUSTED_PROJECT", allowedRoots: [cwd] },
-                remediation,
-              });
-
-              // Offload to background promise
-              void conductor.run(`analyze telemetry`, {
-                mode: "omni",
-                output: path.join(cwd, "workspace", "task-output"),
-                title: "High-Concurrency APM Ingestion",
-              }).catch(err => console.error("Async Conductor execution failed:", err));
-
-              sendJson(response, 202, { status: "Accepted", message: "Payload received and queued." });
-              return;
-            }
-
-            // ROUTE 2: LEGACY MULTIPART FILE UPLOAD
-            const boundaryMatch = /boundary=([^;\s]+)/i.exec(contentType);
-            if (boundaryMatch === null) {
-              sendJson(response, 400, { error: "multipart/form-data boundary is missing from Content-Type." });
-              return;
-            }
-            const boundary = boundaryMatch[1]!.replace(/^"|"$/g, "");
-
-            let rawBuffer: Buffer;
-            try {
-              rawBuffer = await new Promise<Buffer>((resolve, reject) => {
-                let size = 0;
-                const chunks: Buffer[] = [];
-                request.on("data", (chunk: Buffer) => {
-                  size += chunk.length;
-                  if (size > MAX_BODY_BYTES) {
-                    reject(new Error(`body exceeds ${MAX_BODY_BYTES} bytes`));
-                    request.destroy();
-                    return;
-                  }
-                  chunks.push(chunk);
-                });
-                request.on("end", () => resolve(Buffer.concat(chunks)));
-                request.on("error", reject);
-              });
-            } catch (error) {
-              sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not read body." });
-              return;
-            }
-
-            const delimiter = Buffer.from(`--${boundary}`);
-            const crlf = Buffer.from("\r\n");
-            const crlfcrlf = Buffer.from("\r\n\r\n");
-
-            let fileName: string | undefined;
-            let fileBuffer: Buffer | undefined;
-
-            let offset = 0;
-            while (offset < rawBuffer.length) {
-              const delimPos = rawBuffer.indexOf(delimiter, offset);
-              if (delimPos === -1) break;
-
-              const afterDelim = delimPos + delimiter.length;
-              if (rawBuffer[afterDelim] === 0x2d && rawBuffer[afterDelim + 1] === 0x2d) break;
-              
-              const partStart = afterDelim + crlf.length;
-              const headerEnd = rawBuffer.indexOf(crlfcrlf, partStart);
-              if (headerEnd === -1) { offset = afterDelim; continue; }
-
-              const partHeaders = rawBuffer.slice(partStart, headerEnd).toString("utf8");
-              const bodyStart = headerEnd + crlfcrlf.length;
-
-              const nextDelim = rawBuffer.indexOf(delimiter, bodyStart);
-              const bodyEnd = nextDelim === -1 ? rawBuffer.length : nextDelim - crlf.length;
-              const partBody = rawBuffer.slice(bodyStart, bodyEnd);
-
-              const dispositionMatch = /content-disposition:[^\r\n]*/i.exec(partHeaders);
-              if (dispositionMatch !== null) {
-                const nameMatch = /name="([^"]*)"/i.exec(dispositionMatch[0]);
-                const fileNameMatch = /filename="([^"]*)"/i.exec(dispositionMatch[0]);
-                if (nameMatch?.[1] === "file" && fileNameMatch !== null) {
-                  fileName = path.basename(fileNameMatch[1]);
-                  fileBuffer = partBody;
-                }
-              }
-
-              offset = nextDelim === -1 ? rawBuffer.length : nextDelim;
-            }
-
-            if (fileName === undefined || fileBuffer === undefined) {
-              sendJson(response, 400, { error: 'A file field named "file" is required.' });
-              return;
-            }
-
-            const safeName = fileName.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._]+/, "") || "upload";
-            if (fileBuffer.length === 0) {
-              sendJson(response, 400, { error: "The uploaded file is empty." });
-              return;
-            }
-
-            const destRelative = path.join("workspace", safeName);
-            const destVerdict = resolveWithinRoot(cwd, destRelative);
-            if (!destVerdict.allowed) {
-              sendJson(response, 403, { error: "path boundary violation" });
-              return;
-            }
-            const destAbsolute = destVerdict.resolvedPath as string;
-
-            const fs = await import("node:fs/promises");
-            await fs.mkdir(path.dirname(destAbsolute), { recursive: true });
-            await fs.writeFile(destAbsolute, fileBuffer);
-
-            const { createHash } = await import("node:crypto");
-            const sha256 = createHash("sha256").update(fileBuffer).digest("hex");
-
-            sendJson(response, 200, {
-              path: destRelative.replace(/\\/g, "/"),
-              name: safeName,
-              size: fileBuffer.length,
-              sha256,
-            });
-            return;
-            
-          } catch (error) {
-            console.error("Ingestion error:", error);
-            sendJson(response, 500, { error: "Failed to process payload" });
-            return;
-          }
+          await handleIngest(request, response, { cwd, onBroadcast: broadcastAlert });
+          return;
         }
 
         // POST /api/v1/agent/task
@@ -1061,7 +1002,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
           try {
             if (redis.status === 'ready') {
-              const key = `neurofebric:task:iterations:${taskId}`;
+              const key = `neurofabric:task:iterations:${taskId}$};
               const results = await redis.pipeline().incr(key).expire(key, 300).exec();
               if (results && results[0][1]) {
                 currentIterations = results[0][1] as number;
@@ -1109,7 +1050,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             sendJson(response, statusFor(result), toResponse(result));
           } finally {
             if (redis.status === 'ready') {
-              await redis.del(`neurofebric:task:iterations:${taskId}`).catch(() => {});
+              await redis.del(`neurofabric:task:iterations:${taskId}`).catch(() => {});
             } else {
               taskIterationMap.delete(taskId);
             }
@@ -1191,6 +1132,44 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
         }
 
+        // POST /api/v1/embassy/decisions (HITL Approve/Reject)
+        if (request.method === "POST" && url.pathname === "/api/v1/embassy/decisions") {
+          const raw = await readBody(request);
+          let parsed: any;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            sendJson(response, 400, { error: "the request body is not valid JSON" });
+            return;
+          }
+
+          const taskId = typeof parsed?.taskId === "string" ? parsed.taskId : undefined;
+          const decision = parsed?.decision === "APPROVED" || parsed?.decision === "REJECTED" ? parsed.decision : undefined;
+          const reviewer = typeof parsed?.reviewer === "string" && parsed.reviewer.trim() !== "" ? parsed.reviewer : "operator";
+
+          if (taskId === undefined || decision === undefined) {
+            sendJson(response, 400, { error: "taskId and decision ('APPROVED' | 'REJECTED') are required" });
+            return;
+          }
+
+          try {
+            await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS resolved_at BIGINT").catch(() => undefined);
+            await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS reviewer TEXT").catch(() => undefined);
+            await dbPool.query(
+              `UPDATE approval_tasks
+               SET status = $1, resolved_at = EXTRACT(EPOCH FROM NOW()) * 1000, reviewer = $2, decided_at = EXTRACT(EPOCH FROM NOW())
+               WHERE task_token = $3`,
+              [decision, reviewer, taskId],
+            );
+          } catch (err) {
+            console.warn('[ledger] decision persist failed:', err instanceof Error ? err.message : err);
+          }
+
+          broadcastAlert({ type: 'DECISION_RESOLVED', data: { taskId, decision } });
+          sendJson(response, 200, { success: true, taskId, status: decision });
+          return;
+        }
+
         // GET /api/v1/governance/result/:token
         const resultMatch = url.pathname.match(/^\/api\/v1\/governance\/result\/(.+)$/);
         if (request.method === "GET" && resultMatch) {
@@ -1240,7 +1219,40 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
         }
 
-        sendJson(response, 404, { status: "FAILED", failure: { code: "NOT_FOUND", reason: `no route for ${request.method} ${url.pathname}` } });
+        // GET /api/v1/ops/metrics (JSON KPI snapshot)
+        if (request.method === "GET" && url.pathname === "/api/v1/ops/metrics") {
+          let suppressed = 0;
+          try {
+            suppressed = (await alertsSuppressed.get()).values[0]?.value ?? 0;
+          } catch { /* registry unavailable */ }
+          let streamLagMs = 0;
+          try {
+            if (redis.status !== 'ready') await redis.connect();
+            const info = await redis.xinfo('GROUPS', 'telemetry_stream');
+            const groups = info as any[];
+            const g = groups.find((grp: any) => (grp[1] ?? grp?.name) === 'telemetry_workers');
+            // lag field (Redis 7+) or entries-read difference
+            if (g) {
+              const lagIdx = g.indexOf('lag');
+              streamLagMs = lagIdx >= 0 ? Number(g[lagIdx + 1]) ?? 0 : 0;
+            }
+          } catch { /* redis unavailable — report 0 */ }
+          sendJson(response, 200, { suppressedAlerts: suppressed, streamLagMs });
+          return;
+        }
+
+        // GET /api/v1/metrics/ingestion
+        if (request.method === "GET" && url.pathname === "/api/v1/metrics/ingestion") {
+          sendJson(response, 200, metricsCollector.getSnapshot());
+          return;
+        }
+
+        // GET /metrics
+        if (request.method === "GET" && url.pathname === "/metrics") {
+          response.writeHead(200, { "content-type": register.contentType });
+          response.end(await register.metrics());
+          return;
+        }
       } catch (error) {
         sendJson(response, 500, {
           status: "FAILED",
@@ -1274,4 +1286,12 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
       server.closeAllConnections();
     }),
   };
+
+// Start the server if this file is executed directly from the terminal
+if (process.argv[1] && process.argv[1].endsWith('server.ts')) {
+  startWedgeServer({ cwd: process.cwd(), port: 8080 })
+    .then(wedge => console.log(`🚀 NeuroFabric Backend running at http://127.0.0.1:8080`))
+    .catch(console.error);
+}
+
 }

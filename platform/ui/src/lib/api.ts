@@ -112,7 +112,12 @@ export async function executeAnalysis(path: string, message: string): Promise<Ag
 }
 
 export async function fetchLedger(): Promise<ApprovalLedgerRecord[]> {
-  return requestJson('/api/v1/governance/ledger')
+  try {
+    const data = await requestJson<any>('/api/v1/governance/ledger');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function submitVerdict(token: string, status: 'approved' | 'refused'): Promise<VerdictResponse> {

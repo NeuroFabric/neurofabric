@@ -1,4 +1,4 @@
-# Neurofebric
+# NeuroFabric
 
 An edge inference platform. It authenticates a caller, accepts events, evaluates
 them against registered agent schemas, and emits a verdict and an alert.
@@ -117,7 +117,7 @@ a control, not an obstacle.
 
 ```bash
 # provisions the wedge
-$env:NEUROFEBRIC_GATEWAY_TOKENS='[{"id":"dev","credential":"<value>","providers":["portal"]}]'
+$env:NEUROFABRIC_GATEWAY_TOKENS='[{"id":"dev","credential":"<value>","providers":["portal"]}]'
 npm run dev
 ```
 

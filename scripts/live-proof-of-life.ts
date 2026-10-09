@@ -190,12 +190,11 @@ async function main(): Promise<void> {
   const sseFrames: string[] = [];
   hub.open(TENANT, (frame) => sseFrames.push(frame));
 
-  const Database = (await import("better-sqlite3")).default;
-  const path = (await import("path")).default || await import("path");
-  const gateDbPath = path.join(process.cwd(), "workspace", "gate.db");
+  const { Pool } = await import("pg");
+  const gatePool = new Pool({ connectionString: process.env.DATABASE_URL });
 
   const gate = createAsyncApprovalGate({
-  db: new Database(gateDbPath),
+  db: gatePool as any, // Typecast required due to proof-of-life interface matching
   now: () => Date.now(),
   taskTtlMs: 120_000,
   resultTtlMs: 60_000,

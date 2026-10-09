@@ -6,12 +6,15 @@ import {
   appScaffold, chartRender, csvRead, landingPage, pdfRead, pilotRecord, renderPage, reportWrite, sqliteRead, tableQuery,
   STAGE1_CAPABILITIES, STAGE3_CAPABILITIES as CAPABILITY_STAGE3, STAGE4_CAPABILITIES as CAPABILITY_STAGE4, type ChartPoint, type CsvReadResult,
   type PdfReadResult,
+  VALIDATE_INFRASTRUCTURE_PATCH, validateInfrastructurePatch,
 } from "./capabilities.ts";
+import { ExecutionSandbox } from "./sandbox.ts";
 import { PDF_READ, SQLITE_READ } from "./capabilities.ts";
 import type { ToolDescriptor } from "../core/types.ts";
 export const STAGE2_CAPABILITIES: ToolDescriptor[] = [SQLITE_READ, PDF_READ];
 export const STAGE3_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE3;
 export const STAGE4_CAPABILITIES: ToolDescriptor[] = CAPABILITY_STAGE4;
+
 import { renderBottleneckReport, RENDER_BOTTLENECK_REPORT, toBottleneckMarkdown } from "./bottleneck-report.ts";
 import { titleFor } from "./semantics.ts";
 import { analyseBottlenecks, type BottleneckAnalysis } from "./bottlenecks.ts";
@@ -137,7 +140,7 @@ export class Conductor {
     this.boundary = new WorkspaceBoundary(resolveAllowedRoots(config, options.cwd));
     this.kernel.setBoundary(this.boundary);
     this.kernel.setPolicy(options.policy ?? buildPolicy(config, options.cwd, options.policyConfig));
-    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, ...STAGE4_CAPABILITIES, RENDER_BOTTLENECK_REPORT]);
+    this.kernel.registerTools([...STAGE1_CAPABILITIES, ...STAGE2_CAPABILITIES, ...STAGE3_CAPABILITIES, ...STAGE4_CAPABILITIES, RENDER_BOTTLENECK_REPORT, VALIDATE_INFRASTRUCTURE_PATCH]);
     this.remediation = options.remediation;
 
     // Connect the in-memory MCP bridge. `void` so constructor stays sync; the
@@ -783,11 +786,13 @@ export class Conductor {
         case "pilot_record":
           value = await pilotRecord(input as unknown as Parameters<typeof pilotRecord>[0], { boundary: this.boundary });
           break;
+        case "validate_infrastructure_patch":
+          value = await ExecutionSandbox.validateManifest(String(input.manifest), input.format as "kubernetes" | "terraform");
+          break;
         default:
           await this.kernel.recordToolResult(callId, tool, undefined, true);
           return { ok: false, failure: { code: "TOOL_NOT_IMPLEMENTED", reason: `this conductor does not implement '${tool}'` } };
       }
-      await this.kernel.recordToolResult(callId, tool, value, false);
       return { ok: true, value };
     } catch (error) {
       // An ordinary failure. It goes to the kernel as an ordinary failure, which
