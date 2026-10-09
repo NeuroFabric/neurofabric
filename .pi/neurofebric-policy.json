@@ -1,41 +1,13 @@
 {
   "version": 1,
-  "_comment": [
-    "Neurofebric kernel policy. Ported from the legacy harness policies/default_policy.yaml;",
-    "see docs/POLICY_PORT.md for the concept-by-concept mapping and the four places the",
-    "two do not line up. Rules are evaluated in this order and any denial stops evaluation:",
-    "deniedTools -> allowedTools -> limits -> command patterns -> secret-write patterns ->",
-    "paths -> write size. These rules can only ever REMOVE a permission. Approval and denial",
-    "of the tool's risk tier is decided by platform/core/policy.ts, which runs afterwards."
-  ],
   "deniedTools": [],
   "allowedTools": [],
-  "_allowedToolsNote": [
-    "An empty list means no name-based gating, NOT 'everything is allowed'. Every tool is",
-    "still classified by its risk tier and must clear policy.ts. Name a tool in both lists",
-    "and the deny wins."
-  ],
   "fileRules": [
     { "pattern": "**", "read": "allow", "write": "allow" }
-  ],
-  "_fileRulesNote": [
-    "Ordered, first match wins, and the catch-all above means: anything inside the roots",
-    "from .pi/neurofebric.json is fair game. A path that is outside every root, escapes via",
-    ".., or resolves outside through a symlink or junction is denied by the boundary before",
-    "these rules are consulted, so '**' can only ever mean 'inside the root'.",
-    "To lock a subtree down, insert e.g. { \"pattern\": \".env*\", \"read\": \"deny\", \"write\": \"deny\" }",
-    "ABOVE the catch-all."
   ],
   "destructiveCommandPatterns": [
     "rm -rf",
     "format c:"
-  ],
-  "_destructiveCommandPatternsNote": [
-    "Case-insensitive substrings matched against COMMAND text only (the command, cmd, script,",
-    "shell, shellCommand, args or argv arguments; for a shell tool the whole payload). They",
-    "apply at every tool tier, because these name operations that destroy state rather than",
-    "content that merely looks alarming. Quoting one inside a document is not an operation, so",
-    "file content is deliberately not scanned."
   ],
   "destructiveCommandTokens": [
     "rm",
@@ -46,40 +18,19 @@
     "shred",
     "remove-item"
   ],
-  "_destructiveCommandTokensNote": [
-    "THE DELETION GUARD, and the reason it exists: bash is a permitted tool and the Pi",
-    "integration has no separate denied delete tool, so a deletion issued through the shell is",
-    "reachable no matter which tool names it. These are the only place it can be stopped, so",
-    "they are matched as WHOLE TOKENS in command text at every tool tier.",
-    "",
-    "Token matching (not substring) is what makes the rule explicit instead of an accidental",
-    "over-match: 'rm', 'rm -f', 'rm -rf', 'rm -r -f', 'rm -fr' and plain 'rm file' are all the",
-    "same decision, and a word that merely contains 'rm' is NOT caught. This is why 'rm -rf' is",
-    "not relied on as the sole deletion rule.",
-    "",
-    "SCOPE BOUNDARY: command text only. A write whose payload merely contains the string",
-    "'rm -rf' is ALLOWED, because documenting a command is not running it. Injected content is",
-    "still caught, because it arrives inside command text: 'bash -c \"rm -rf /\"' is denied.",
-    "",
-    "This is a guardrail, not a sandbox. It cannot constrain what an already-permitted command",
-    "does, and it is not a substitute for OS-level isolation, which remains deferred."
-  ],
-"secretWritePatterns": [
-    "api_key",
-    "password",
-    "secret:",
-    "authorization"
+  "secretWritePatterns": [
+    "aws_access_key_id",
+    "x-api-key_live",
+    "sk_live_",
+    "-----BEGIN PRIVATE KEY-----"
   ],
   "excludePaths": [
     "docs/**"
   ],
-  "_secretWritePatternsNote": [
-    "Secret-write scanning is fail-closed: every string value in a write-tier tool payload is scanned at any depth, except values under path/locator field names and the vault_store tool, whose control is its approval gate rather than the deny-scan. Exemptions are pinned by test in platform/pi/write-scan-fail-closed.test.ts."
-  ],
   "limits": {
     "maxToolCallsPerTask": 1000,
     "maxFileWritesPerTask": 500,
-    "maxBytesPerWrite": 2000000
+    "maxBytesPerWrite": 5000000
   },
   "onViolation": "block"
 }

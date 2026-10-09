@@ -1,0 +1,11 @@
+﻿{
+    "date":  1791442444,
+    "title":  "[CRITICAL] Pod OOMKilled: neurofebric-wedge",
+    "tags":  [
+                 "env:staging",
+                 "cluster:primary",
+                 "app:wedge"
+             ],
+    "event_type":  "metric_alert",
+    "text":  "The wedge application pod exceeded its memory limit of 512Mi and was OOMKilled by the Kubernetes scheduler. IP 192.168.1.45 went offline."
+}

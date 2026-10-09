@@ -1,0 +1,10 @@
+active_epic: e01-self-healing-aiops
+active_story: e01s01
+handoff:
+  completed_tasks:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+  story_completed: true
