@@ -89,23 +89,26 @@ function redact(value: unknown): unknown {
  * only honest answer -- accepting it would ingest an unnamed
  * source into a pipeline that routes on `source`.
  */
-export async function ingestTelemetry(payload: unknown): Promise<IngestedTelemetry> {
-  if (!isPlainObject(payload)) {
+export async function ingestTelemetry(payload: unknown) {
+  if (typeof payload !== "object" || payload === null) {
     throw new Error("Bad Request: payload is not an object");
   }
-  const source = payload.source;
-  if (typeof source !== "string" || (source !== "datadog" && source !== "splunk")) {
-    throw new Error("Bad Request: unrecognized telemetry source");
-  }
-  const severity = payload.severity;
-  if (typeof severity !== "string" || severity.length === 0) {
-    throw new Error("Bad Request: payload carries no severity");
+
+  // Extract new enterprise APM sources
+  const source = (payload as any).source;
+  if (typeof source !== "string") {
+    throw new Error("Bad Request: payload carries no source");
   }
 
-  const data = redact(payload);
-  if (!isPlainObject(data)) {
-    throw new Error("Bad Request: payload did not normalize");
+  const severity = ((payload as any).severity as string)?.toUpperCase();
+  const validSeverities = ["CRITICAL", "WARNING", "INFO", "FATAL"];
+  if (typeof severity !== "string" || !validSeverities.includes(severity)) {
+    throw new Error("Bad Request: invalid severity");
   }
 
-  return { source, severity, data };
+  if (typeof (payload as any).message !== "string") {
+    throw new Error("Bad Request: payload carries no message");
+  }
+
+  return { source, severity, data: payload };
 }
