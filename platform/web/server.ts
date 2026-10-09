@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { register, alertsSuppressed } from "../observability/metrics.ts";
 import { handleIngest } from "./routes/ingest-route.ts";
+import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
 
@@ -20,6 +21,14 @@ export function broadcastAlert(payload: unknown): void {
     }
   }
 }
+
+// Start periodic metrics broadcast
+setInterval(() => {
+  broadcastAlert({
+    type: 'INGESTION_METRICS_UPDATE',
+    data: metricsCollector.getSnapshot()
+  });
+}, 2500);
 
 // Broadcast HITL proposals to SSE clients
 hitlEventBus.on('hitl:events', (data) => {
@@ -1229,6 +1238,12 @@ export function createWedgeServer(options: WedgeOptions): Server {
             }
           } catch { /* redis unavailable — report 0 */ }
           sendJson(response, 200, { suppressedAlerts: suppressed, streamLagMs });
+          return;
+        }
+
+        // GET /api/v1/metrics/ingestion
+        if (request.method === "GET" && url.pathname === "/api/v1/metrics/ingestion") {
+          sendJson(response, 200, metricsCollector.getSnapshot());
           return;
         }
 
