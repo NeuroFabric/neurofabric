@@ -1,8 +1,8 @@
 import { Redis } from "ioredis";
 import path from "node:path";
-import { Embassy, RemediationProposal, ExecutionResult } from "../../platform/embassy/engine";
-import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter";
-import { HitlAdapter } from "../embassy/HitlAdapter";
+import { Embassy, RemediationProposal, ExecutionResult } from "../../platform/embassy/engine.ts";
+import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
+import { HitlAdapter } from "../embassy/HitlAdapter.ts";
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   lazyConnect: true,

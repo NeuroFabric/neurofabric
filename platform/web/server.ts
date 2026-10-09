@@ -8,6 +8,7 @@ import { handleIngest } from "./routes/ingest-route.ts";
 import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
+import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
 
 const sseClients = new Set<ServerResponse>();
 
@@ -30,11 +31,6 @@ setInterval(() => {
   });
 }, 2500);
 
-// Broadcast HITL proposals to SSE clients
-hitlEventBus.on('hitl:events', (data) => {
-  broadcastAlert({ type: 'HITL_PROPOSAL', data });
-});
-
 const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 20,
@@ -50,7 +46,7 @@ hitlEventBus.on('hitl:events', (data: any) => {
   void dbPool
     .query(
       `INSERT INTO approval_tasks (task_token, status, subject_json, created_at)
-       VALUES ($1, 'PENDING_REVIEW', $2, EXTRACT(EPOCH FROM NOW()) * 1000)
+       VALUES ($1, 'PENDING', $2, EXTRACT(EPOCH FROM NOW()) * 1000)
        ON CONFLICT (task_token) DO NOTHING`,
       [taskToken, JSON.stringify(data)],
     )
@@ -1002,7 +998,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
           try {
             if (redis.status === 'ready') {
-              const key = `neurofabric:task:iterations:${taskId}$};
+              const key = `neurofabric:task:iterations:${taskId}`;
               const results = await redis.pipeline().incr(key).expire(key, 300).exec();
               if (results && results[0][1]) {
                 currentIterations = results[0][1] as number;
@@ -1166,6 +1162,39 @@ export function createWedgeServer(options: WedgeOptions): Server {
           }
 
           broadcastAlert({ type: 'DECISION_RESOLVED', data: { taskId, decision } });
+
+          // CLOSED-LOOP: on approval, execute the patch and record the outcome.
+          if (decision === 'APPROVED') {
+            try {
+              let patch: any = undefined;
+              try {
+                const rowRes = await dbPool.query("SELECT subject_json FROM approval_tasks WHERE task_token = $1", [taskId]);
+                const subjectJson = rowRes.rows[0]?.subject_json;
+                const subject = typeof subjectJson === 'string' ? JSON.parse(subjectJson) : subjectJson;
+                patch = subject?.patch;
+              } catch { /* subject lookup failed — proceed with minimal patch */ }
+
+              const execution = await new AutonomousDeploymentAdapter().applyRemediation(patch ?? {});
+              const output = execution.output as { target?: string; executedAt?: string };
+
+              await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS executed_at BIGINT").catch(() => undefined);
+              await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS execution_output TEXT").catch(() => undefined);
+              await dbPool.query(
+                `UPDATE approval_tasks
+                 SET executed_at = EXTRACT(EPOCH FROM NOW()) * 1000, execution_output = $1
+                 WHERE task_token = $2`,
+                [JSON.stringify(output), taskId],
+              ).catch(() => undefined);
+
+              broadcastAlert({
+                type: 'REMEDIATION_EXECUTED',
+                data: { taskId, target: output?.target ?? 'unknown', timestamp: output?.executedAt ?? new Date().toISOString() },
+              });
+            } catch (err) {
+              console.warn('[execution] closed-loop remediation failed:', err instanceof Error ? err.message : err);
+            }
+          }
+
           sendJson(response, 200, { success: true, taskId, status: decision });
           return;
         }

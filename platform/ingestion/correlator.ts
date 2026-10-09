@@ -2,7 +2,7 @@ import Redis from "ioredis";
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 
-export class EventCorrelator {
+export default class EventCorrelator {
   /**
    * Aggregates alerts based on source and severity.
    * Returns a payload if it's the first occurrence in the window,

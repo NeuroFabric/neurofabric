@@ -1,4 +1,4 @@
-import { RemediationProposal, ExecutionResult } from "./engine";
+import { RemediationProposal, ExecutionResult } from "./engine.ts";
 import { EventEmitter } from "node:events";
 
 // Shared event emitter for HITL events (process-local).
@@ -18,7 +18,7 @@ export interface HitlProposalPayload {
   blastRadius: 'low' | 'medium' | 'high';
   patch: unknown;
   format: string;
-  status: 'PENDING_REVIEW';
+  status: 'PENDING';
   createdAt: string;
 }
 
@@ -31,11 +31,12 @@ export class HitlAdapter {
     const blastRadius = proposal.blastRadius;
     const taskId = `hitl-${incidentId}-${Date.now()}`;
 
+    const severity = (metadata['severity'] as string) ?? (blastRadius === 'high' ? 'critical' : 'warning');
     const payload: HitlProposalPayload = {
       taskId,
       incidentId,
       source: String(metadata['source'] ?? 'system'),
-      severity: blastRadius === 'high' ? 'critical' : 'warning',
+      severity: severity as 'critical' | 'warning' | 'info',
       message:
         typeof patch === 'object' && patch !== null && 'message' in patch
           ? String((patch as { message?: unknown }).message ?? '')
@@ -44,7 +45,7 @@ export class HitlAdapter {
       blastRadius,
       patch,
       format: 'unified_diff',
-      status: 'PENDING_REVIEW',
+      status: 'PENDING',
       createdAt: new Date().toISOString(),
     };
 
@@ -53,7 +54,7 @@ export class HitlAdapter {
 
     return {
       executionId: taskId,
-      output: { success: true, taskId, status: 'PENDING_REVIEW' },
+      output: { success: true, taskId, status: 'PENDING' },
     };
   }
 }

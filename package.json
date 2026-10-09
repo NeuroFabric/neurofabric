@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "NeuroFabric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018)."",
+  "description": "NeuroFabric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018).",
   "scripts": {
     "dev": "node --experimental-strip-types start-ui.mjs",
     "generate-data": "node --experimental-strip-types scripts/generate-synthetic-data.ts",

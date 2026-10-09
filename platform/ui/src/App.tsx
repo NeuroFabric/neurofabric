@@ -17,6 +17,16 @@ interface TelemetryEvent {
 
 interface OpsMetrics { suppressedAlerts: number; streamLagMs: number; sanitizedSecrets?: number }
 
+interface IngestionSnapshot {
+  eps: number
+  throughputKBps: number
+  suppressionRatio: number
+  avgLatencyMs: number
+  dlpCount: number
+  topSources: Array<{ source: string; count: number }>
+  severities: Record<'critical' | 'warning' | 'info', number>
+}
+
 const SEV_COLORS: Record<string, string> = { critical: '#f43f5e', warning: '#f59e0b', info: '#06b6d4' }
 
 function severityBadge(severity: string) {
@@ -36,6 +46,7 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false)
   const [inspect, setInspect] = useState<TelemetryEvent | null>(null)
   const [ops, setOps] = useState<OpsMetrics>({ suppressedAlerts: 0, streamLagMs: 0 })
+  const [ingestion, setIngestion] = useState<IngestionSnapshot | null>(null)
   const [tpHistory, setTpHistory] = useState<KpiSample[]>([])
   const [confHistory, setConfHistory] = useState<KpiSample[]>([])
   const eventTimes = useRef<number[]>([])
@@ -80,7 +91,9 @@ export default function App() {
         const message = JSON.parse(event.data)
         if (message.type === 'TELEMETRY_EVENT') {
           eventTimes.current.push(Date.now())
-          setTelemetry((prev) => [message.data as TelemetryEvent, ...prev].slice(0, 200))
+          setTelemetry((prev) => [message.data as TelemetryEvent, ...prev].slice(0, 50))
+        } else if (message.type === 'INGESTION_METRICS_UPDATE') {
+          setIngestion(message.data as IngestionSnapshot)
         } else if (message.type === 'HITL_PROPOSAL') {
           const p = message.data as HitlProposal
           setProposals((prev) => prev.some((x) => x.taskId === p.taskId) ? prev : [p, ...prev])
@@ -193,10 +206,10 @@ export default function App() {
 
       <main className="max-w-[1600px] mx-auto px-6 py-6 flex flex-col gap-6">
         <KpiStrip
-          throughputPerSec={throughputPerSec}
+          throughputPerSec={ingestion?.eps ?? throughputPerSec}
           throughputHistory={tpHistory}
-          suppressedAlerts={ops.suppressedAlerts}
-          sanitizedSecrets={ops.sanitizedSecrets ?? 0}
+          suppressedAlerts={ingestion ? Math.round((ingestion.suppressionRatio || 0) * (ingestion.dlpCount + 100)) : ops.suppressedAlerts}
+          sanitizedSecrets={ingestion?.dlpCount ?? ops.sanitizedSecrets ?? 0}
           streamLagMs={ops.streamLagMs}
           pendingCount={proposals.length}
           autonomyRatio={autonomyRatio}
@@ -205,7 +218,7 @@ export default function App() {
           confidenceHistory={confHistory}
         />
 
-        <ChartsPanel series={severitySeries} blast={blastDistribution} />
+        <ChartsPanel series={severitySeries} blast={blastDistribution} ingestion={ingestion} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <section className="flex flex-col gap-3">
