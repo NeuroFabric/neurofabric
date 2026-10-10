@@ -2,7 +2,7 @@ import { Card } from './card'
 import { type ApprovalLedgerRecord } from '../lib/api'
 
 export function LedgerGrid({ records }: { records: ApprovalLedgerRecord[] | undefined }) {
-  const items = Array.isArray(records) ? records : (records?.tasks || records?.records || []);
+  const items = Array.isArray(records) ? records : ((records as any)?.tasks || (records as any)?.records || []);
   if (!Array.isArray(items) || items.length === 0) {
     return (
       <Card className="flex h-32 flex-col items-center justify-center gap-2 text-slate-500">
