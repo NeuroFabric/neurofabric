@@ -11,9 +11,128 @@ import { RollbackCircuit } from "../embassy/RollbackCircuit.ts";
 import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
 import { merkleAuditLedger, type LedgerEntry } from "../core/MerkleAuditLedger.ts";
 
+// ============================================================================
+// BOOT INTEGRITY CHECK - Strict Fatal Exit on Insecure Secrets (Fix #2)
+// ============================================================================
+if (process.env.NODE_ENV === "production") {
+  if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.includes("neurofabric-enterprise-hmac")) {
+    console.error("FATAL: Insecure or default AUTH_SECRET in production. Shutting down.");
+    process.exit(1);
+  }
+  if (!process.env.COMMANDER_PASSWORD || !process.env.SECOPS_PASSWORD || !process.env.SRE_PASSWORD || !process.env.AUDITOR_PASSWORD) {
+    console.error("FATAL: Missing required enterprise passwords in production environment.");
+    process.exit(1);
+  }
+  if (!process.env.INGESTION_KEY) {
+    console.error("FATAL: Missing INGESTION_KEY in production environment.");
+    process.exit(1);
+  }
+}
+
+// ============================================================================
+// CORS WHITELIST VALIDATOR - Dynamic Origin Validation
+// ============================================================================
+function isOriginAllowed(origin: string | undefined): boolean {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname;
+    
+    // Allow localhost and 127.0.0.1 in development
+    if (process.env.NODE_ENV !== "production") {
+      if (hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".local")) {
+        return true;
+      }
+    }
+    
+    // Allow configured origins from environment
+    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",").map(o => o.trim()) || [];
+    if (allowedOrigins.includes(origin)) return true;
+    
+    // Allow *.onrender.com in production
+    if (hostname.endsWith(".onrender.com")) return true;
+    
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
 const recentTelemetryHistory: Array<any> = [];
+
+// ============================================================================
+// MEMORY BOUNDING CONFIGURATION
+// ============================================================================
+const MAX_LEDGER_ENTRIES = 2000;
+const MAX_TIMESERIES_ENTRIES = 1440; // 2 hours @ 5s interval
+const MAX_TELEMETRY_HISTORY = 200;
+
+// ============================================================================
+// IP RATE LIMITER - Sliding Window (Fix #3)
+// ============================================================================
+interface RateLimitEntry {
+  count: number;
+  windowStart: number;
+}
+const ingestionRateLimiter = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_WINDOW_MS = 1000; // 1 second
+const RATE_LIMIT_MAX_REQUESTS = 100;
+
+function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const entry = ingestionRateLimiter.get(ip);
+  
+  if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+    ingestionRateLimiter.set(ip, { count: 1, windowStart: now });
+    return { allowed: true };
+  }
+  
+  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfter = Math.ceil((entry.windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000);
+    return { allowed: false, retryAfter: Math.max(1, retryAfter) };
+  }
+  
+  entry.count++;
+  return { allowed: true };
+}
+
+// Cleanup rate limiter entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of ingestionRateLimiter.entries()) {
+    if (now - entry.windowStart >= RATE_LIMIT_WINDOW_MS * 2) {
+      ingestionRateLimiter.delete(ip);
+    }
+  }
+}, 60000);
+
+// ============================================================================
+// MEMORY BOUNDING HELPERS
+// ============================================================================
+function enforceLedgerCapacity(): void {
+  if (inMemoryLedger.size > MAX_LEDGER_ENTRIES) {
+    // Remove oldest entries (FIFO) - keep most recent MAX_LEDGER_ENTRIES
+    const entries = Array.from(inMemoryLedger.entries());
+    const excess = entries.length - MAX_LEDGER_ENTRIES;
+    for (let i = 0; i < excess; i++) {
+      inMemoryLedger.delete(entries[i][0]);
+    }
+  }
+}
+
+function enforceTelemetryHistoryCapacity(): void {
+  while (recentTelemetryHistory.length > MAX_TELEMETRY_HISTORY) {
+    recentTelemetryHistory.shift();
+  }
+}
+
+function enforceTimeseriesCapacity(): void {
+  while (timeseriesBuffer.length > MAX_TIMESERIES_ENTRIES) {
+    timeseriesBuffer.shift();
+  }
+}
 
 export interface TimeseriesPoint {
   timestamp: number;
@@ -67,28 +186,63 @@ const DEDUP_TTL_MS = 30000;
 const AUTH_SECRET = process.env.AUTH_SECRET || "neurofabric-enterprise-hmac-sha256-secret-key-2026";
 const activeSessions = new Map<string, { username: string; role: string; name: string; expiresAt: number }>();
 
-const ENTERPRISE_USERS: Record<string, { passHash: string; role: string; name: string }> = {
-  "commander@neurofabric.io": {
-    passHash: crypto.createHash("sha256").update("Commander2026!").digest("hex"),
-    role: "INCIDENT_COMMANDER",
-    name: "Alex Vance (Incident Commander)",
-  },
-  "secops@neurofabric.io": {
-    passHash: crypto.createHash("sha256").update("SecOps2026!").digest("hex"),
-    role: "SECOPS_LEAD",
-    name: "Sarah Chen (SecOps Lead)",
-  },
-  "sre@neurofabric.io": {
-    passHash: crypto.createHash("sha256").update("Operator2026!").digest("hex"),
-    role: "SRE_OPERATOR",
-    name: "Devon Reed (SRE Operator)",
-  },
-  "auditor@neurofabric.io": {
-    passHash: crypto.createHash("sha256").update("Audit2026!").digest("hex"),
-    role: "VIEWER_READONLY",
-    name: "Compliance Auditor (Read-Only)",
-  },
-};
+// ============================================================================
+// SALTED PASSWORD AUTHENTICATION - PBKDF2 with Per-User Salts (Fix #1)
+// ============================================================================
+interface UserRecord {
+  username: string;
+  salt: string;
+  hash: string;
+  role: string;
+  name: string;
+}
+
+const PBKDF2_ITERATIONS = 100000;
+const PBKDF2_KEYLEN = 64;
+const PBKDF2_DIGEST = 'sha512';
+
+function deriveKey(password: string, salt: Buffer): string {
+  return crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, PBKDF2_KEYLEN, PBKDF2_DIGEST).toString('hex');
+}
+
+function generateSalt(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function verifyPassword(password: string, saltHex: string, hashHex: string): boolean {
+  const salt = Buffer.from(saltHex, 'hex');
+  const derivedHash = deriveKey(password, salt);
+  return crypto.timingSafeEqual(Buffer.from(derivedHash), Buffer.from(hashHex));
+}
+
+// Initialize enterprise users with salted passwords
+// In production with DATABASE_URL, these would be loaded from PostgreSQL with bcrypt
+// In fallback mode, passwords are read from environment variables
+const ENTERPRISE_USERS: Record<string, UserRecord> = (() => {
+  const users: Record<string, UserRecord> = {};
+  
+  const userConfigs = [
+    { username: "commander@neurofabric.io", envVar: "COMMANDER_PASSWORD", defaultPass: "Commander2026!", role: "INCIDENT_COMMANDER", name: "Alex Vance (Incident Commander)" },
+    { username: "secops@neurofabric.io", envVar: "SECOPS_PASSWORD", defaultPass: "SecOps2026!", role: "SECOPS_LEAD", name: "Sarah Chen (SecOps Lead)" },
+    { username: "sre@neurofabric.io", envVar: "SRE_PASSWORD", defaultPass: "Operator2026!", role: "SRE_OPERATOR", name: "Devon Reed (SRE Operator)" },
+    { username: "auditor@neurofabric.io", envVar: "AUDITOR_PASSWORD", defaultPass: "Audit2026!", role: "VIEWER_READONLY", name: "Compliance Auditor (Read-Only)" },
+  ];
+  
+  for (const config of userConfigs) {
+    const password = process.env[config.envVar] || config.defaultPass;
+    const salt = generateSalt();
+    const hash = deriveKey(password, Buffer.from(salt, 'hex'));
+    users[config.username] = {
+      username: config.username,
+      salt,
+      hash,
+      role: config.role,
+      name: config.name,
+    };
+  }
+  
+  return users;
+})();
 
 function generateSessionToken(username: string, role: string, name: string): string {
   const payload = `${username}:${role}:${Date.now()}`;
@@ -132,13 +286,20 @@ const MUTATION_ALLOWED_ROLES = new Set(["INCIDENT_COMMANDER", "SECOPS_LEAD", "SR
 const DANGEROUS_DIFF_PATTERNS = [
   /curl\s+/i,
   /wget\s+/i,
-  /\/bin\/sh/i,
-  /\/bin\/bash/i,
+  /\/bin\/(ba)?sh/i,
   /nc\s+-e/i,
   /rm\s+-rf/i,
   /eval\(/i,
   /exec\(/i,
   /chmod\s+\+x/i,
+  /python(\d)?\s+-c/i,
+  /perl\s+-e/i,
+  /ruby\s+-e/i,
+  /base64\s+-d/i,
+  /\/dev\/tcp\//i,
+  /mkfifo/i,
+  /nc(\.traditional)?\s+-[el]/i,
+  /rm\s+-rf\s+[\/~]/i,
 ];
 
 function seedInitialGovernanceLedger() {
@@ -284,10 +445,13 @@ setInterval(() => {
       errorRate: currentTps > 0 ? Number(((Math.random() * 0.8)).toFixed(2)) : 0,
       suppressed: totalSuppressed,
     });
-    if (timeseriesBuffer.length > 1440) timeseriesBuffer.shift();
+    enforceTimeseriesCapacity();
   } else if (currentTps > lastPoint.throughput) {
     lastPoint.throughput = currentTps;
   }
+
+  // Enforce memory bounding on ledger
+  enforceLedgerCapacity();
 
   broadcastAlert({
     type: "INGESTION_METRICS_UPDATE",
@@ -367,9 +531,13 @@ export function createWedgeServer(options: { cwd: string }): Server {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
-        response.setHeader("Access-Control-Allow-Origin", "*");
+        const origin = request.headers.origin;
+        if (isOriginAllowed(origin)) {
+          response.setHeader("Access-Control-Allow-Origin", origin!);
+        }
         response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Ingest-Key");
+        response.setHeader("Access-Control-Allow-Credentials", "true");
 
         if (request.method === "OPTIONS") {
           response.writeHead(204);
@@ -392,9 +560,8 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const password = String(parsed.password || "").trim();
 
           const user = ENTERPRISE_USERS[username];
-          const inputHash = crypto.createHash("sha256").update(password).digest("hex");
 
-          if (!user || user.passHash !== inputHash) {
+          if (!user || !verifyPassword(password, user.salt, user.hash)) {
             sendJson(response, 401, {
               success: false,
               error: "INVALID_CREDENTIALS",
@@ -466,13 +633,17 @@ export function createWedgeServer(options: { cwd: string }): Server {
         }
 
         if (request.method === "GET" && url.pathname === "/api/v1/stream/alerts") {
-          response.writeHead(200, {
+          const origin = request.headers.origin;
+          const corsHeaders: Record<string, string> = {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
             "X-Accel-Buffering": "no",
-          });
+          };
+          if (isOriginAllowed(origin)) {
+            corsHeaders["Access-Control-Allow-Origin"] = origin!;
+          }
+          response.writeHead(200, corsHeaders);
           response.write(`data: ${JSON.stringify({ type: "connected", timestamp: new Date().toISOString() })}\n\n`);
           sseClients.add(response);
           request.on("close", () => sseClients.delete(response));
@@ -725,6 +896,37 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
         // POST /api/v1/workspace/ingest
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
+          // Rate limiting - check before parsing payload (Fix #3)
+          const clientIp = request.headers['x-forwarded-for'] as string || request.socket.remoteAddress || 'unknown';
+          const rateLimitResult = checkRateLimit(clientIp);
+          if (!rateLimitResult.allowed) {
+            sendJson(response, 429, {
+              success: false,
+              error: "RATE_LIMIT_EXCEEDED",
+              message: "Too many requests. Please slow down.",
+            }, {
+              'Retry-After': String(rateLimitResult.retryAfter || 1),
+            });
+            return;
+          }
+
+          // Ingestion key verification (Fix #1 - Protected Ingestion Route)
+          const INGESTION_KEY = process.env.INGESTION_KEY || "nf-edge-telemetry-token-2026";
+          const ingestKeyHeader = request.headers['x-ingest-key'] as string | undefined;
+          const authHeader = request.headers.authorization || '';
+          const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+          const hasValidIngestKey = (ingestKeyHeader && ingestKeyHeader === INGESTION_KEY) ||
+                                   (bearerToken && bearerToken === INGESTION_KEY);
+
+          if (!hasValidIngestKey) {
+            sendJson(response, 401, {
+              success: false,
+              error: "UNAUTHORIZED",
+              message: "Missing or invalid ingestion key. Provide x-ingest-key header or Bearer token.",
+            });
+            return;
+          }
+
           const tCpuStart = performance.now();
           const raw = await readBody(request);
           let parsed: any = null;
@@ -773,7 +975,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
             };
 
             recentTelemetryHistory.push(eventRecord);
-            if (recentTelemetryHistory.length > 200) recentTelemetryHistory.shift();
+            enforceTelemetryHistoryCapacity();
 
             broadcastAlert({
               type: "ALERT_INGESTED",
@@ -796,6 +998,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 };
                 merkleAuditLedger.append(tripEntry);
                 inMemoryLedger.set(`circuit-trip-${ev.service}`, tripEntry);
+                enforceLedgerCapacity();
                 broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { target: ev.service, status: "CIRCUIT_TRIPPED" } });
               }
 
@@ -833,6 +1036,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               };
               merkleAuditLedger.append(newEntry);
               inMemoryLedger.set(taskId, newEntry);
+              enforceLedgerCapacity();
 
               broadcastAlert({
                 type: "HITL_PROPOSAL",

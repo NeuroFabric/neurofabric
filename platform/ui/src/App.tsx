@@ -187,21 +187,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: email, password: pass }),
       });
-      if (res.status === 404 || !res.ok) {
-        const fallbackToken = `nf_dev_${btoa(email + ':' + Date.now())}`;
-        const fallbackUser: AuthUser = {
-          username: email,
-          role: email.includes('auditor') ? 'VIEWER_READONLY' : 'INCIDENT_COMMANDER',
-          name: email.includes('auditor') ? 'Compliance Auditor (Read-Only)' : 'Alex Vance (Incident Commander)',
-        };
-        setAuthToken(fallbackToken);
-        setCurrentUser(fallbackUser);
-        localStorage.setItem('nf_auth_token', fallbackToken);
-        localStorage.setItem('nf_auth_user', JSON.stringify(fallbackUser));
-        return;
-      }
-
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.token) {
         setAuthToken(data.token);
         setCurrentUser(data.user);
@@ -210,17 +196,8 @@ export default function App() {
       } else {
         setLoginError(data.message || 'Authentication failed. Check credentials.');
       }
-    } catch {
-      const fallbackToken = `nf_dev_${btoa(email + ':' + Date.now())}`;
-      const fallbackUser: AuthUser = {
-        username: email,
-        role: email.includes('auditor') ? 'VIEWER_READONLY' : 'INCIDENT_COMMANDER',
-        name: 'Alex Vance (Incident Commander)',
-      };
-      setAuthToken(fallbackToken);
-      setCurrentUser(fallbackUser);
-      localStorage.setItem('nf_auth_token', fallbackToken);
-      localStorage.setItem('nf_auth_user', JSON.stringify(fallbackUser));
+    } catch (err) {
+      setLoginError('Authentication service unreachable. Please try again later.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -394,11 +371,15 @@ export default function App() {
 
   const triggerSimulation = async (type: 'CRITICAL_ANOMALY' | 'DLP_PROBE' | 'TRAFFIC_FLOOD' | 'TRIP_BREAKER' | 'CANARY_TEST') => {
     setSimLoading(type);
+    const ingestHeaders = {
+      'Content-Type': 'application/json',
+      'X-Ingest-Key': import.meta.env.VITE_INGESTION_KEY || 'nf-edge-telemetry-token-2026',
+    };
     try {
       if (type === 'CRITICAL_ANOMALY') {
         await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: ingestHeaders,
           body: JSON.stringify({
             service: 'k8s-ingress',
             severity: 'CRITICAL',
@@ -408,7 +389,7 @@ export default function App() {
       } else if (type === 'DLP_PROBE') {
         await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: ingestHeaders,
           body: JSON.stringify({
             service: 'auth-gateway',
             severity: 'WARNING',
@@ -424,7 +405,7 @@ export default function App() {
           }));
           await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: ingestHeaders,
             body: JSON.stringify({ events: batch }),
           });
           await new Promise((r) => setTimeout(r, 150));
@@ -447,7 +428,7 @@ export default function App() {
         for (let i = 1; i <= 3; i++) {
           await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: ingestHeaders,
             body: JSON.stringify({
               service: target,
               severity: 'CRITICAL',

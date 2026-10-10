@@ -5,6 +5,7 @@
  */
 
 const TARGET_URL = (process.env.API_BASE || "http://127.0.0.1:8080").replace(/\/$/, "");
+const INGESTION_KEY = process.env.INGESTION_KEY || "nf-edge-telemetry-token-2026";
 const DURATION_MINUTES = process.env.DURATION_MINUTES ? parseFloat(process.env.DURATION_MINUTES) : 30;
 const DURATION_MS = DURATION_MINUTES * 60 * 1000;
 
@@ -46,6 +47,15 @@ const metrics: TestMetrics = {
 
 const startTime = Date.now();
 let isRunning = true;
+
+// Helper: Ingest telemetry with authentication key
+async function ingest(body: unknown): Promise<ReturnType<typeof req>> {
+  return req("/api/v1/workspace/ingest", {
+    method: "POST",
+    headers: { "x-ingest-key": INGESTION_KEY },
+    body: JSON.stringify(body),
+  });
+}
 
 // Helper: Measure HTTP Request with Latency & Status Tracking
 async function req(path: string, options: RequestInit = {}) {
@@ -101,21 +111,15 @@ async function runIngestionWorker(workerId: number) {
         severity: i === 0 && seq % 10 === 0 ? "WARNING" : "INFO",
         message: `Synthetic telemetry load event seq-${workerId}-${seq}-${i} (p95: ${10 + (seq % 15)}ms)`,
       }));
-      const res = await req("/api/v1/workspace/ingest", {
-        method: "POST",
-        body: JSON.stringify({ events: batch }),
-      });
+      const res = await ingest({ events: batch });
       if (res.status === 202) {
         metrics.featureStats.telemetryIngested += 10;
       }
     } else {
-      const res = await req("/api/v1/workspace/ingest", {
-        method: "POST",
-        body: JSON.stringify({
-          service,
-          severity: "INFO",
-          message: `Single telemetry stream event seq-${workerId}-${seq}`,
-        }),
+      const res = await ingest({
+        service,
+        severity: "INFO",
+        message: `Single telemetry stream event seq-${workerId}-${seq}`,
       });
       if (res.status === 202) {
         metrics.featureStats.telemetryIngested += 1;
@@ -136,10 +140,7 @@ async function runDlpWorker() {
     const rawPass = `dbPassword_${Date.now()}`;
     const msg = `Security probe leaked token Bearer ${rawKey} and password=${rawPass}`;
 
-    await req("/api/v1/workspace/ingest", {
-      method: "POST",
-      body: JSON.stringify({ service: "auth-gateway", severity: "WARNING", message: msg }),
-    });
+    await ingest({ service: "auth-gateway", severity: "WARNING", message: msg });
 
     const logsRes = await req("/api/v1/workspace/recent-logs");
     if (Array.isArray(logsRes.data)) {
@@ -162,16 +163,10 @@ async function runDedupWorker() {
   while (isRunning) {
     const dedupPayload = `DEDUP_BURST_EVENT_${Date.now()}`;
     // Prime the window
-    await req("/api/v1/workspace/ingest", {
-      method: "POST",
-      body: JSON.stringify({ service: "order-service", severity: "INFO", message: dedupPayload }),
-    });
+    await ingest({ service: "order-service", severity: "INFO", message: dedupPayload });
 
     // Send immediate duplicate
-    const res = await req("/api/v1/workspace/ingest", {
-      method: "POST",
-      body: JSON.stringify({ service: "order-service", severity: "INFO", message: dedupPayload }),
-    });
+    const res = await ingest({ service: "order-service", severity: "INFO", message: dedupPayload });
 
     if (res.data?.suppressed >= 1) {
       metrics.featureStats.dedupSuppressedVerified++;
@@ -227,13 +222,10 @@ async function runCircuitBreakerWorker() {
   while (isRunning) {
     // 1. Send 3 rapid critical strikes
     for (let i = 1; i <= 3; i++) {
-      await req("/api/v1/workspace/ingest", {
-        method: "POST",
-        body: JSON.stringify({
-          service: target,
-          severity: "CRITICAL",
-          message: `Flapping regression strike #${i} [STRESS-RUN]`,
-        }),
+      await ingest({
+        service: target,
+        severity: "CRITICAL",
+        message: `Flapping regression strike #${i} [STRESS-RUN]`,
       });
       await new Promise((r) => setTimeout(r, 100));
     }
