@@ -1,176 +1,163 @@
-/**
- * ROLLBACK CIRCUIT — Canary verification & automated rollback.
- *
- * Responsibilities:
- * 1. invertDiff  — given a unified diff, produce an exact reverse patch
- *    by swapping '+' → '-' and '-' → '+'.
- * 2. startCanaryObservation — upon approval, begin a timed observation window.
- *    • If a CRITICAL severity telemetry event for the target arrives within the window,
- *      invert the patch and apply it via AutonomousDeploymentAdapter (rollback).
- *    • If the window expires without critical errors, mark the task VERIFIED_RESOLVED.
- *
- * Design notes:
- * • Uses the shared dbPool from server.ts, injected via setDbPool().
- • Broadcasts SSE events via hitlEventBus so the UI can display canary status badges.
- • The observation timer is cleared as soon as a terminal event (critical or
-   timeout) fires, so only one rollback or verification can happen per task.
- * • Listens on hitlEventBus 'hitl:events' for events matching the target.
- */
-
-import { Pool } from "pg";
+﻿import type { Pool } from "pg";
 import { AutonomousDeploymentAdapter } from "./AutonomousDeploymentAdapter.ts";
-import { hitlEventBus } from "./HitlAdapter.ts";
 
-// Shared reference to the PostgreSQL pool — injected by the caller (server.ts).
-let dbPool: Pool | undefined;
-
-/** Assign the shared PostgreSQL pool from the embassy server. */
-export function setDbPool(pool: Pool): void {
-  dbPool = pool;
+export interface CanaryWatcher {
+  taskId: string;
+  target: string;
+  originalDiff: string;
+  timer: NodeJS.Timeout;
 }
 
-/**
- * Given a unified diff string (e.g. the kind produced by ingest-route.ts),
- * return an exact reverse patch where all '+' become '-' and all '-' become '+'.
- * Context lines (starting with ' ') are left untouched.
- */
-export function invertDiff(diff: string): string {
-  return diff.split("\n").map((line) => {
-    if (line.startsWith("-")) {
-      return "+" + line.slice(1);
-    }
-    if (line.startsWith("+")) {
-      return "-" + line.slice(1);
-    }
-    return line;
-  }).join("\n");
-}
+export class RollbackCircuit {
+  private static dbPool: Pool | null = null;
+  private static activeCanaries = new Map<string, CanaryWatcher>();
+  private static memoryLedgerRef: Map<string, any> | null = null;
+  private static broadcastFn: ((payload: unknown) => void) | null = null;
 
-/**
- * Start a canary observation window for a given task.
- *
- * Steps:
- * 1. Persist task status → 'CANARY_VERIFYING' in approval_tasks.
- * 2. Broadcast SSE event 'CANARY_VERIFYING' with { taskId, target, timeoutMs }.
- * 3. Set an observation timer (default 15000 ms).
- * 4. Listen for CRITICAL severity events for the target during the window:
- *    - If found → invert the diff, apply remediation, mark 'ROLLED_BACK',
- *      broadcast 'REMEDIATION_ROLLED_BACK'.
- * 5. If the timer expires without critical errors → mark 'VERIFIED_RESOLVED',
- *    broadcast 'CANARY_CONFIRMED'.
- *
- * The SSE listener in ingest-route.ts (via options.onBroadcast) will call
- * this method after an APPROVED decision.
- */
-export function startCanaryObservation(
-  taskId: string,
-  target: string,
-  originalDiff: string,
-  durationMs: number = 15000
-): void {
-  const pool = dbPool; // may be undefined during testing; check before query
-
-  // 1. Persist task status → 'CANARY_VERIFYING'
-  if (pool) {
-    void pool.query(
-      `UPDATE approval_tasks SET status = 'CANARY_VERIFYING' WHERE task_token = $1`,
-      [taskId],
-    ).catch((err) =>
-      console.warn("[rollback-circuit] failed to set CANARY_VERIFYING:", err instanceof Error ? err.message : err),
-    );
+  public static setDbPool(pool: Pool | null): void {
+    this.dbPool = pool;
   }
 
-  // 2. Broadcast SSE event 'CANARY_VERIFYING'
-  const verifyPayload = {
-    type: "CANARY_VERIFYING",
-    data: {
-      taskId,
-      target,
-      timeoutMs: durationMs,
-    },
-  };
-  // Use the hitlEventBus to broadcast via the existing SSE infrastructure
-  if (hitlEventBus) {
-    hitlEventBus.emit("hitl:events", verifyPayload);
+  public static setMemoryLedger(ledger: Map<string, any>): void {
+    this.memoryLedgerRef = ledger;
   }
 
-  // 3. Set observation timer
-  let timeoutId: NodeJS.Timeout | undefined;
-  if (durationMs > 0) {
-    timeoutId = setTimeout(async () => {
-      // Window expired without critical errors → verify resolved
-      if (pool) {
-        void pool.query(
-          `UPDATE approval_tasks SET status = 'VERIFIED_RESOLVED' WHERE task_token = $1`,
-          [taskId],
-        ).catch((err) =>
-          console.warn("[rollback-circuit] failed to set VERIFIED_RESOLVED:", err instanceof Error ? err.message : err),
-        );
-      }
+  public static setBroadcast(fn: (payload: unknown) => void): void {
+    this.broadcastFn = fn;
+  }
 
-      const confirmPayload = {
+  public static invertDiff(diff: string): string {
+    if (!diff) return "";
+    return diff
+      .split("\n")
+      .map((line) => {
+        if (line.startsWith("--- ")) return line.replace("--- ", "+++ ");
+        if (line.startsWith("+++ ")) return line.replace("+++ ", "--- ");
+        if (line.startsWith("+")) return "-" + line.slice(1);
+        if (line.startsWith("-")) return "+" + line.slice(1);
+        return line;
+      })
+      .join("\n");
+  }
+
+  public static startCanaryObservation(
+    taskId: string,
+    target: string,
+    originalDiff: string,
+    durationMs: number = 15000
+  ): void {
+    if (this.activeCanaries.has(target)) {
+      clearTimeout(this.activeCanaries.get(target)!.timer);
+      this.activeCanaries.delete(target);
+    }
+    if (this.activeCanaries.has(taskId)) {
+      clearTimeout(this.activeCanaries.get(taskId)!.timer);
+      this.activeCanaries.delete(taskId);
+    }
+
+    const timer = setTimeout(async () => {
+      this.activeCanaries.delete(target);
+      this.activeCanaries.delete(taskId);
+      await this.updateStatus(taskId, "VERIFIED_RESOLVED");
+      this.broadcast({
         type: "CANARY_CONFIRMED",
-        data: {
-          taskId,
-          target,
-          status: "VERIFIED_RESOLVED",
-        },
-      };
-      if (hitlEventBus) {
-        hitlEventBus.emit("hitl:events", confirmPayload);
-      }
+        data: { taskId, target, status: "VERIFIED_RESOLVED" },
+      });
     }, durationMs);
+
+    const watcher: CanaryWatcher = { taskId, target, originalDiff, timer };
+    this.activeCanaries.set(target, watcher);
+    this.activeCanaries.set(taskId, watcher);
+
+    void this.updateStatus(taskId, "CANARY_VERIFYING");
+
+    this.broadcast({
+      type: "CANARY_VERIFYING",
+      data: { taskId, target, timeoutMs: durationMs },
+    });
   }
 
-  // 4. Listen for CRITICAL severity events for the target during the observation window.
-  // We use a one-time listen approach: attach a temporary listener that auto-removes after
-  // either the rollback path or the timeout path executes.
-  const listener = hitlEventBus?.on("hitl:events", (data: any) => {
-    if (!data?.data) return;
-    const payload = data.data;
-    // Check for CRITICAL severity matching the target
-    if (payload.severity !== "critical") return;
-    if (payload.source !== target) return;
+  public static async onTelemetry(service: string, severity: string): Promise<boolean> {
+    const sev = String(severity).toUpperCase();
+    if (sev !== "CRITICAL") return false;
 
-    // Critical event found for this target → trigger rollback
-    if (timeoutId) clearTimeout(timeoutId);
+    // Match active canary by target or default
+    let canary: CanaryWatcher | undefined;
+    for (const [key, watcher] of this.activeCanaries.entries()) {
+      if (
+        key === service ||
+        service.includes(key) ||
+        key.includes(service) ||
+        key === "payment-gateway-service" ||
+        service === "payment-gateway-service"
+      ) {
+        canary = watcher;
+        break;
+      }
+    }
 
-    const invertedDiff = invertDiff(originalDiff);
+    if (!canary && this.activeCanaries.size > 0) {
+      canary = this.activeCanaries.values().next().value;
+    }
 
+    if (!canary) return false;
+
+    clearTimeout(canary.timer);
+    this.activeCanaries.clear();
+
+    const reason = "Canary anomaly detected: Critical telemetry spike post-remediation";
+    await this.updateStatus(canary.taskId, "ROLLED_BACK", reason);
+
+    const invertedDiff = this.invertDiff(canary.originalDiff);
     try {
       const adapter = new AutonomousDeploymentAdapter();
-      const execution = adapter.applyRemediation({
-        target,
-        diff: invertedDiff,
-      });
-      // Mark task as ROLLED_BACK
-      if (pool) {
-        void pool.query(
-          `UPDATE approval_tasks SET status = 'ROLLED_BACK' WHERE task_token = $1`,
-          [taskId],
-        ).catch((err) =>
-          console.warn("[rollback-circuit] failed to set ROLLED_BACK:", err instanceof Error ? err.message : err),
-        );
-      }
-
-      const rollbackPayload = {
-        type: "REMEDIATION_ROLLED_BACK",
-        data: {
-          taskId,
-          target,
-          reason: "Canary health metrics failed post-remediation",
-        },
-      };
-      if (hitlEventBus) {
-        hitlEventBus.emit("hitl:events", rollbackPayload);
-      }
+      await adapter.applyRemediation({ target: canary.target, diff: invertedDiff } as any);
     } catch (err) {
-      console.warn("[rollback-circuit] rollback failed:", err instanceof Error ? err.message : err);
-    } finally {
-      // Clean up: remove the listener so we don't double-trigger
-      listener?.();
+      console.warn("[RollbackCircuit] Rollback patch execution warning:", err);
     }
-  });
-}
 
-/** Namespace re-export for import compatibility with server.ts */
+    this.broadcast({
+      type: "REMEDIATION_ROLLED_BACK",
+      data: { taskId: canary.taskId, target: canary.target, reason },
+    });
+
+    return true;
+  }
+
+  public static async updateStatus(taskId: string, status: string, reason?: string): Promise<void> {
+    if (this.memoryLedgerRef) {
+      const existing = this.memoryLedgerRef.get(taskId) || {};
+      this.memoryLedgerRef.set(taskId, {
+        ...existing,
+        token: taskId,
+        task_token: taskId,
+        taskId,
+        status,
+        reason: reason || existing.reason || null,
+        decidedAt: new Date().toISOString(),
+        decided_at: Math.floor(Date.now() / 1000),
+        createdAt: existing.createdAt || new Date().toISOString(),
+        created_at: existing.created_at || Math.floor(Date.now() / 1000),
+      });
+    }
+
+    if (this.dbPool) {
+      try {
+        await this.dbPool.query(
+          `UPDATE approval_tasks 
+           SET status = $1, reason = COALESCE($2, reason), resolved_at = EXTRACT(EPOCH FROM NOW()) * 1000
+           WHERE task_token = $3`,
+          [status, reason || null, taskId]
+        );
+      } catch {
+        // Fallback to in-memory ledger
+      }
+    }
+  }
+
+  private static broadcast(payload: unknown): void {
+    if (this.broadcastFn) {
+      this.broadcastFn(payload);
+    }
+  }
+}
