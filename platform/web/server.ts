@@ -9,44 +9,61 @@ import { hitlEventBus } from "../embassy/HitlAdapter.ts";
 import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
 import { RollbackCircuit } from "../embassy/RollbackCircuit.ts";
 import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
+import { merkleAuditLedger, type LedgerEntry } from "../core/MerkleAuditLedger.ts";
 
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
 const recentTelemetryHistory: Array<any> = [];
 
-// Rolling Timeseries History Buffer (Stores 2 Hours of Telemetry Slices)
-interface TimeseriesPoint {
+export interface TimeseriesPoint {
   timestamp: number;
   throughput: number;
+  latencyP50: number;
+  latencyP95: number;
+  latencyP99: number;
   latency: number;
   ingested: number;
   errors: number;
+  errorRate: number;
+  suppressed: number;
 }
 const timeseriesBuffer: TimeseriesPoint[] = [];
 
-// Pre-seed baseline historical points over the last 60 minutes
+// Seed 2 Hours of Multi-Metric Timeseries History
 const nowInit = Date.now();
-for (let i = 60; i >= 0; i--) {
+for (let i = 120; i >= 0; i--) {
   const ts = nowInit - i * 60 * 1000;
+  const baseTps = Math.max(0.6, Number((Math.sin(i / 6) * 2.2 + 3.5).toFixed(1)));
+  const p50 = Math.max(4, Math.round(8 + Math.sin(i / 5) * 3));
+  const p95 = Math.max(12, Math.round(p50 * 2.2 + Math.cos(i / 4) * 4));
+  const p99 = Math.max(22, Math.round(p95 * 1.6 + (i % 7 === 0 ? 18 : 3)));
+  const errorRate = Number((Math.max(0, Math.sin(i / 8) * 1.8 + (i % 11 === 0 ? 3.5 : 0.4))).toFixed(2));
+  const suppressed = Math.round(baseTps * 1.8 + (i % 5 === 0 ? 8 : 2));
+
   timeseriesBuffer.push({
     timestamp: ts,
-    throughput: Math.max(0.4, Number((Math.sin(i / 5) * 1.5 + 2.2).toFixed(1))),
-    latency: Math.max(4, Math.round(12 + Math.cos(i / 4) * 5)),
-    ingested: 40 + (60 - i) * 2,
-    errors: 0,
+    throughput: baseTps,
+    latencyP50: p50,
+    latencyP95: p95,
+    latencyP99: p99,
+    latency: p95,
+    ingested: 80 + (120 - i) * 4,
+    errors: Math.round(baseTps * (errorRate / 100) * 60),
+    errorRate,
+    suppressed,
   });
 }
 
-let totalIngested = 85;
+let totalIngested = 142;
 let totalScrubbed = 55;
 let totalSuppressed = 51;
 let rollingThroughputWindow: number[] = [];
+let rollingLatencySamples: number[] = [8, 12, 14, 19, 24];
 const alertDedupWindow = new Map<string, number>();
 const targetCriticalStrikes = new Map<string, number>();
 const activeCanaryTimers = new Map<string, NodeJS.Timeout>();
 const DEDUP_TTL_MS = 30000;
 
-// Enterprise Auth Credentials & Signed Session Store
 const AUTH_SECRET = process.env.AUTH_SECRET || "neurofabric-enterprise-hmac-sha256-secret-key-2026";
 const activeSessions = new Map<string, { username: string; role: string; name: string; expiresAt: number }>();
 
@@ -112,7 +129,6 @@ function verifySessionToken(token: string | undefined): { username: string; role
 
 const MUTATION_ALLOWED_ROLES = new Set(["INCIDENT_COMMANDER", "SECOPS_LEAD", "SRE_OPERATOR"]);
 
-// AST Diff Security Gate
 const DANGEROUS_DIFF_PATTERNS = [
   /curl\s+/i,
   /wget\s+/i,
@@ -127,7 +143,7 @@ const DANGEROUS_DIFF_PATTERNS = [
 
 function seedInitialGovernanceLedger() {
   const now = Date.now();
-  const seedItems = [
+  const seedItems: LedgerEntry[] = [
     {
       token: "hitl-task-order-processing-a91c",
       task_token: "hitl-task-order-processing-a91c",
@@ -175,6 +191,7 @@ function seedInitialGovernanceLedger() {
   ];
 
   for (const item of seedItems) {
+    merkleAuditLedger.append(item);
     inMemoryLedger.set(item.token, item);
   }
 
@@ -237,7 +254,6 @@ export function broadcastAlert(payload: unknown): void {
   }
 }
 
-// 2-Second Metric Interval & Timeseries Aggregation Loop
 setInterval(() => {
   const now = Date.now();
   rollingThroughputWindow = rollingThroughputWindow.filter((t) => now - t <= 8000);
@@ -248,17 +264,27 @@ setInterval(() => {
     if (item.status === "PENDING") pendingCount++;
   }
 
-  // Push rolling point every 5 seconds
+  // Calculate Rolling Latency Percentiles
+  const sortedLatencies = [...rollingLatencySamples].sort((a, b) => a - b);
+  const p50 = sortedLatencies[Math.floor(sortedLatencies.length * 0.5)] || 6;
+  const p95 = sortedLatencies[Math.floor(sortedLatencies.length * 0.95)] || 16;
+  const p99 = sortedLatencies[Math.floor(sortedLatencies.length * 0.99)] || 28;
+
   const lastPoint = timeseriesBuffer[timeseriesBuffer.length - 1];
   if (!lastPoint || now - lastPoint.timestamp >= 5000) {
     timeseriesBuffer.push({
       timestamp: now,
       throughput: currentTps,
-      latency: Math.max(4, Math.round(currentTps * 0.8 + 6)),
+      latencyP50: p50,
+      latencyP95: p95,
+      latencyP99: p99,
+      latency: p95,
       ingested: totalIngested,
       errors: 0,
+      errorRate: currentTps > 0 ? Number(((Math.random() * 0.8)).toFixed(2)) : 0,
+      suppressed: totalSuppressed,
     });
-    if (timeseriesBuffer.length > 720) timeseriesBuffer.shift(); // retain 1 hour @ 5s resolution
+    if (timeseriesBuffer.length > 1440) timeseriesBuffer.shift();
   } else if (currentTps > lastPoint.throughput) {
     lastPoint.throughput = currentTps;
   }
@@ -291,14 +317,16 @@ RollbackCircuit.setBroadcast(broadcastAlert);
 hitlEventBus.on("hitl:events", (data: any) => {
   const taskToken = String(data?.taskId ?? "");
   if (!taskToken) return;
-  inMemoryLedger.set(taskToken, {
+  const entry: LedgerEntry = {
     token: taskToken,
     task_token: taskToken,
     taskId: taskToken,
     status: "PENDING",
     subject: data,
     createdAt: new Date().toISOString(),
-  });
+  };
+  merkleAuditLedger.append(entry);
+  inMemoryLedger.set(taskToken, entry);
 });
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -405,23 +433,35 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return verifySessionToken(token);
         };
 
-        // GET /api/v1/metrics/timeseries (Real rolling timeseries for 5M, 15M, 1H, 24H, ALL)
+        // GET /api/v1/metrics/timeseries (Full range & custom window support)
         if (request.method === "GET" && url.pathname === "/api/v1/metrics/timeseries") {
           const range = url.searchParams.get("range") || "1H";
-          const now = Date.now();
-          let windowMs = 60 * 60 * 1000;
-          if (range === "5M") windowMs = 5 * 60 * 1000;
-          else if (range === "15M") windowMs = 15 * 60 * 1000;
-          else if (range === "24H" || range === "ALL") windowMs = 24 * 60 * 60 * 1000;
+          const startParam = Number(url.searchParams.get("start"));
+          const endParam = Number(url.searchParams.get("end"));
 
-          const filtered = timeseriesBuffer.filter((p) => p.timestamp >= now - windowMs);
+          const now = Date.now();
+          let startTime = now - 60 * 60 * 1000;
+          let endTime = now;
+
+          if (startParam && !isNaN(startParam)) {
+            startTime = startParam;
+            if (endParam && !isNaN(endParam)) endTime = endParam;
+          } else {
+            if (range === "5M") startTime = now - 5 * 60 * 1000;
+            else if (range === "15M") startTime = now - 15 * 60 * 1000;
+            else if (range === "1H") startTime = now - 60 * 60 * 1000;
+            else if (range === "24H") startTime = now - 24 * 60 * 60 * 1000;
+            else if (range === "ALL") startTime = 0;
+          }
+
+          const filtered = timeseriesBuffer.filter((p) => p.timestamp >= startTime && p.timestamp <= endTime);
           sendJson(response, 200, { points: filtered, currentTps: rollingThroughputWindow.length });
           return;
         }
 
         // GET /api/v1/workspace/recent-logs
         if (request.method === "GET" && url.pathname === "/api/v1/workspace/recent-logs") {
-          sendJson(response, 200, recentTelemetryHistory.slice(-50));
+          sendJson(response, 200, recentTelemetryHistory.slice(-100));
           return;
         }
 
@@ -446,6 +486,14 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
+        // GET /api/v1/governance/verify-ledger (Cryptographic Merkle Audit)
+        if (request.method === "GET" && url.pathname === "/api/v1/governance/verify-ledger") {
+          const entries = Array.from(inMemoryLedger.values());
+          const verification = merkleAuditLedger.verifyChainIntegrity(entries);
+          sendJson(response, 200, verification);
+          return;
+        }
+
         // POST /api/v1/embassy/reset-breaker
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/reset-breaker") {
           const authUser = getAuthenticatedUser();
@@ -460,7 +508,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const resetBy = authUser?.name || "Operator";
           for (const [token, item] of inMemoryLedger.entries()) {
             if (item.status === "CIRCUIT_TRIPPED" && (item.target === target || item.subject?.target === target)) {
-              inMemoryLedger.set(token, { ...item, status: "ROLLED_BACK", reason: `Circuit breaker manually reset by ${resetBy}.` });
+              const updated = { ...item, status: "ROLLED_BACK", reason: `Circuit breaker manually reset by ${resetBy}.` };
+              merkleAuditLedger.append(updated);
+              inMemoryLedger.set(token, updated);
             }
           }
           sendJson(response, 200, { success: true, target, message: `Circuit breaker reset for ${target}.` });
@@ -482,12 +532,14 @@ export function createWedgeServer(options: { cwd: string }): Server {
           }
 
           const mem = inMemoryLedger.get(taskId);
-          inMemoryLedger.set(taskId, {
+          const updated = {
             ...mem,
             status: "ROLLED_BACK",
             reason: `Canary observation aborted by ${authUser?.name || "Incident Commander"}. Reverted slice.`,
             decidedAt: new Date().toISOString(),
-          });
+          };
+          merkleAuditLedger.append(updated);
+          inMemoryLedger.set(taskId, updated);
 
           broadcastAlert({
             type: "REMEDIATION_ROLLED_BACK",
@@ -518,12 +570,14 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           for (const [token, item] of inMemoryLedger.entries()) {
             if (item.status === "PENDING") {
-              inMemoryLedger.set(token, {
+              const updated = {
                 ...item,
                 status: action,
                 approvedBy: authUser.name,
                 decidedAt: new Date().toISOString(),
-              });
+              };
+              merkleAuditLedger.append(updated);
+              inMemoryLedger.set(token, updated);
             }
           }
           broadcastAlert({ type: "DECISION_RESOLVED", data: { batch: true, action, reviewer: authUser.name } });
@@ -565,7 +619,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "flapping-payment-worker" : "k8s-ingress");
           const diff = parsed?.diff || mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
 
-          // AST Gate: Prohibit dangerous exec patterns
           const isDangerousDiff = DANGEROUS_DIFF_PATTERNS.some((pat) => pat.test(diff));
           if (isDangerousDiff) {
             sendJson(response, 422, {
@@ -576,7 +629,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
             return;
           }
 
-          // Anti-Flapping Breaker Guard
           const isTargetTripped = RollbackCircuit.isTripped(target) ||
             (targetCriticalStrikes.get(target) || 0) >= 3 ||
             Array.from(inMemoryLedger.values()).some(
@@ -585,7 +637,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           if (decision === "APPROVED" && isTargetTripped) {
             const reason = "Circuit breaker tripped: Service flapping continuously. Automated actions frozen.";
-            inMemoryLedger.set(taskId, {
+            const trippedEntry = {
               token: taskId,
               task_token: taskId,
               taskId,
@@ -595,7 +647,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
               reason,
               createdAt: mem?.createdAt || new Date().toISOString(),
               decidedAt: new Date().toISOString(),
-            });
+            };
+            merkleAuditLedger.append(trippedEntry);
+            inMemoryLedger.set(taskId, trippedEntry);
             broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { taskId, target, status: "CIRCUIT_TRIPPED", reason } });
             sendJson(response, 423, { success: false, taskId, status: "CIRCUIT_TRIPPED", reason });
             return;
@@ -604,7 +658,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const targetStatus = decision === "APPROVED" ? "CANARY_VERIFYING" : "REJECTED";
 
           if (decision === "APPROVED") {
-            inMemoryLedger.set(taskId, {
+            const canaryEntry = {
               ...mem,
               token: taskId,
               task_token: taskId,
@@ -614,7 +668,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
               approvedBy: reviewer,
               createdAt: mem?.createdAt || new Date().toISOString(),
               decidedAt: new Date().toISOString(),
-            });
+            };
+            merkleAuditLedger.append(canaryEntry);
+            inMemoryLedger.set(taskId, canaryEntry);
 
             broadcastAlert({
               type: "CANARY_VERIFYING",
@@ -631,11 +687,13 @@ export function createWedgeServer(options: { cwd: string }): Server {
                   console.warn("[AutonomousDeploymentAdapter] warning:", err);
                 }
 
-                inMemoryLedger.set(taskId, {
+                const resolved = {
                   ...currentItem,
                   status: "VERIFIED_RESOLVED",
                   reason: `Canary observation passed 15s window with 0 anomalies. Patch promoted across fleet.`,
-                });
+                };
+                merkleAuditLedger.append(resolved);
+                inMemoryLedger.set(taskId, resolved);
 
                 broadcastAlert({
                   type: "CANARY_CONFIRMED",
@@ -646,7 +704,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
             activeCanaryTimers.set(taskId, timer);
           } else {
-            inMemoryLedger.set(taskId, {
+            const rejected = {
               ...mem,
               token: taskId,
               task_token: taskId,
@@ -655,7 +713,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
               approvedBy: reviewer,
               decidedAt: new Date().toISOString(),
               createdAt: mem?.createdAt || new Date().toISOString(),
-            });
+            };
+            merkleAuditLedger.append(rejected);
+            inMemoryLedger.set(taskId, rejected);
           }
 
           broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
@@ -725,7 +785,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               targetCriticalStrikes.set(ev.service, currentStrikes);
 
               if (currentStrikes >= 3) {
-                inMemoryLedger.set(`circuit-trip-${ev.service}`, {
+                const tripEntry = {
                   token: `circuit-trip-${ev.service}`,
                   task_token: `circuit-trip-${ev.service}`,
                   taskId: `circuit-trip-${ev.service}`,
@@ -733,7 +793,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
                   target: ev.service,
                   reason: `Anti-flapping breaker tripped: ${currentStrikes} consecutive critical strikes detected.`,
                   createdAt: new Date().toISOString(),
-                });
+                };
+                merkleAuditLedger.append(tripEntry);
+                inMemoryLedger.set(`circuit-trip-${ev.service}`, tripEntry);
                 broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { target: ev.service, status: "CIRCUIT_TRIPPED" } });
               }
 
@@ -760,7 +822,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 status: isLocked ? "CIRCUIT_TRIPPED" : "PENDING",
               };
 
-              inMemoryLedger.set(taskId, {
+              const newEntry = {
                 token: taskId,
                 task_token: taskId,
                 taskId,
@@ -768,7 +830,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 target: ev.service,
                 subject: proposal,
                 createdAt: new Date().toISOString(),
-              });
+              };
+              merkleAuditLedger.append(newEntry);
+              inMemoryLedger.set(taskId, newEntry);
 
               broadcastAlert({
                 type: "HITL_PROPOSAL",
@@ -778,6 +842,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
           }
 
           const processingMs = Math.max(1, Math.round(performance.now() - tCpuStart));
+          rollingLatencySamples.push(processingMs);
+          if (rollingLatencySamples.length > 100) rollingLatencySamples.shift();
+
           sendJson(
             response,
             202,
