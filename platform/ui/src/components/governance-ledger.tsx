@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Search, FileText, Download } from 'lucide-react'
 import type { ApprovalLedgerRecord } from '../lib/api'
 
-const FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'AUTONOMOUS'] as const
+const FILTERS = ['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'AUTONOMOUS', 'ROLLED_BACK'] as const
 
 function statusBadge(status: string) {
   const s = status?.toUpperCase()
@@ -14,6 +14,7 @@ function statusBadge(status: string) {
     REFUSED: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
     AUTONOMOUS: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
     AUTONOMOUSLY_APPLIED: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
+    ROLLED_BACK: 'text-red-400 bg-red-500/10 border-red-500/30',
   }
   const cls = map[s] ?? 'text-zinc-400 bg-zinc-500/10 border-zinc-500/30'
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase ${cls}`}>{s || '—'}</span>
