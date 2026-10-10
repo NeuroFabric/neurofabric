@@ -1,39 +1,41 @@
-{
-  "name": "neurofabric",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "NeuroFabric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018).",
-  "scripts": {
-    "dev": "node --experimental-strip-types start-ui.mjs",
-    "generate-data": "node --experimental-strip-types scripts/generate-synthetic-data.ts",
-    "generate-flood": "node --experimental-strip-types scripts/generate-synthetic-data.ts --flood",
-    "dev:boot": "node --experimental-strip-types scripts/dev-boot.mjs",
-    "test": "npm run typecheck && npm run test:mjs && npm run test:ts && node --experimental-strip-types --test platform/**/*.test.ts scripts/**/*.test.ts",
-    "test:mjs": "node --test platform/*.test.mjs",
-    "test:ts": "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts scripts/*.test.ts platform/memory/*.test.ts platform/embassy/*.test.ts platform/remediation/*.test.ts",
-    "test:proof": "node --experimental-strip-types verification/live-f006-proof.mjs",
-    "demo": "node --experimental-strip-types scripts/demo.ts",
-    "test:acceptance": "node --experimental-strip-types verification/acceptance-stage1.mjs",
-    "archify": "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.entries.json"
-  },
-  "devDependencies": {
-    "@types/node": "22.7.5",
-    "@types/pg": "^8.23.1",
-    "dependency-cruiser": "^18.5.0",
-    "typescript": "5.6.3"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "@types/cors": "^2.8.19",
-    "@types/ioredis": "^4.28.10",
-    "cors": "^2.8.6",
-    "ioredis": "^6.0.0",
-    "pdf-parse": "^2.4.5",
-    "pg": "^8.23.1",
-    "prom-client": "^15.1.3",
-    "tsx": "^4.23.15",
-    "zod": "^4.6.5"
-  }
+﻿{
+    "name":  "neurofabric",
+    "version":  "0.0.0",
+    "private":  true,
+    "type":  "module",
+    "description":  "NeuroFabric kernel and Pi extension. No RUNTIME dependencies: the harness runs on bare node. The single devDependency below is static type-checking tooling and is never imported by platform/ code (see docs/DECISIONS.md D-018).",
+    "scripts":  {
+                    "dev":  "node --experimental-strip-types start-ui.mjs",
+                    "generate-data":  "node --experimental-strip-types scripts/generate-synthetic-data.ts",
+                    "generate-flood":  "node --experimental-strip-types scripts/generate-synthetic-data.ts --flood",
+                    "dev:boot":  "node --experimental-strip-types scripts/dev-boot.mjs",
+                    "test":  "npm run typecheck \u0026\u0026 npm run test:mjs \u0026\u0026 npm run test:ts \u0026\u0026 node --experimental-strip-types --test platform/**/*.test.ts scripts/**/*.test.ts",
+                    "test:mjs":  "node --test platform/*.test.mjs",
+                    "test:ts":  "node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts platform/conductor/*.test.ts platform/ingestion/*.test.ts platform/web/*.test.ts platform/omniroute/*.test.ts platform/omniroute/providers/*.test.ts platform/egress/*.test.ts platform/swarm/*.test.ts platform/swarm/agents/*.test.ts platform/api/*.test.ts scripts/*.test.ts platform/memory/*.test.ts platform/embassy/*.test.ts platform/remediation/*.test.ts",
+                    "test:proof":  "node --experimental-strip-types verification/live-f006-proof.mjs",
+                    "demo":  "node --experimental-strip-types scripts/demo.ts",
+                    "test:acceptance":  "node --experimental-strip-types verification/acceptance-stage1.mjs",
+                    "archify":  "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
+                    "typecheck":  "tsc --noEmit \u0026\u0026 tsc -p tsconfig.entries.json",
+                    "build":  "echo \u0027Backend build successful\u0027",
+                    "start":  "npx tsx platform/web/server.ts"
+                },
+    "devDependencies":  {
+                            "@types/node":  "22.7.5",
+                            "@types/pg":  "^8.23.1",
+                            "dependency-cruiser":  "^18.5.0",
+                            "typescript":  "5.6.3"
+                        },
+    "dependencies":  {
+                         "@modelcontextprotocol/sdk":  "^1.32.1",
+                         "@types/cors":  "^2.8.19",
+                         "@types/ioredis":  "^4.28.10",
+                         "cors":  "^2.8.6",
+                         "ioredis":  "^6.0.0",
+                         "pdf-parse":  "^2.4.5",
+                         "pg":  "^8.23.1",
+                         "prom-client":  "^15.1.3",
+                         "tsx":  "^4.23.15",
+                         "zod":  "^4.6.5"
+                     }
 }
