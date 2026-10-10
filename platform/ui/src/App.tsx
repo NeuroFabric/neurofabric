@@ -131,7 +131,7 @@ export default function App() {
       });
       if (res.status === 404 || !res.ok) {
         const fallbackToken = `nf_dev_${btoa(email + ':' + Date.now())}`;
-        const fallbackUser = {
+        const fallbackUser: AuthUser = {
           username: email,
           role: email.includes('auditor') ? 'VIEWER_READONLY' : 'INCIDENT_COMMANDER',
           name: email.includes('auditor') ? 'Compliance Auditor (Read-Only)' : 'Alex Vance (Incident Commander)',
@@ -154,7 +154,7 @@ export default function App() {
       }
     } catch {
       const fallbackToken = `nf_dev_${btoa(email + ':' + Date.now())}`;
-      const fallbackUser = {
+      const fallbackUser: AuthUser = {
         username: email,
         role: email.includes('auditor') ? 'VIEWER_READONLY' : 'INCIDENT_COMMANDER',
         name: 'Alex Vance (Incident Commander)',
@@ -175,7 +175,6 @@ export default function App() {
     localStorage.removeItem('nf_auth_user');
   };
 
-  // Time Range Window Configuration
   const rangeConfig = useMemo(() => {
     const now = Date.now();
     let durationMs = 15 * 60 * 1000;
@@ -212,7 +211,6 @@ export default function App() {
     };
   }, [timeRange]);
 
-  // Fetch Governance Ledger
   const fetchLedger = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/governance/ledger`);
@@ -250,7 +248,6 @@ export default function App() {
     }
   }, []);
 
-  // Fetch Recent Logs from Backend History
   const fetchRecentLogs = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/workspace/recent-logs`);
@@ -283,7 +280,6 @@ export default function App() {
     }
   }, []);
 
-  // Trigger Interactive Simulation Events
   const triggerSimulation = async (type: 'CRITICAL_ANOMALY' | 'DLP_PROBE' | 'TRAFFIC_FLOOD' | 'TRIP_BREAKER') => {
     setSimLoading(type);
     try {
@@ -401,7 +397,7 @@ export default function App() {
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
 
     es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(true);
+    es.onerror = () => setConnected(false);
 
     es.onmessage = (event) => {
       try {
@@ -472,7 +468,6 @@ export default function App() {
     };
   }, [fetchLedger, fetchMetrics, fetchRecentLogs]);
 
-  // Robust Filtering for Logs and Ledger
   const filteredLogs = useMemo(() => {
     if (timeRange === 'ALL') return telemetryLogs;
     return telemetryLogs.filter((log) => log.rawTime >= rangeConfig.startTime);
@@ -496,7 +491,6 @@ export default function App() {
     }).length;
   };
 
-  // Dynamic 16-Bucket Waveform Generator
   const chartBuckets = useMemo(() => {
     const bucketCount = 16;
     const now = Date.now();
@@ -513,7 +507,6 @@ export default function App() {
       const logsInBucket = telemetryLogs.filter((l) => l.rawTime >= bStart && l.rawTime < bEnd);
       const totalEvents = logsInBucket.length;
 
-      // Realistic density computation
       let calculatedTps = Math.round((totalEvents / Math.max(1, stepMs / 1000)) * 10) / 10;
       if (i === bucketCount - 1 && metrics.throughput > 0) {
         calculatedTps = Math.max(calculatedTps, metrics.throughput);
@@ -569,7 +562,7 @@ export default function App() {
 
         {/* Right Header Navigation & Session Strip */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3.5 self-start lg:self-auto">
-          {currentUser && (
+          {currentUser ? (
             <div className="flex items-center gap-3 p-1.5 px-3 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
               <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-indigo-500 border border-indigo-400/40 flex items-center justify-center font-bold text-xs text-white">
                 {currentUser.name[0]}
@@ -585,6 +578,13 @@ export default function App() {
                 Sign Out
               </button>
             </div>
+          ) : (
+            <button
+              onClick={() => handleLogin('commander@neurofabric.io', 'Commander2026!')}
+              className="px-4 py-1.5 rounded-xl text-xs font-mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg cursor-pointer transition-all"
+            >
+              Sign In
+            </button>
           )}
 
           <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
@@ -1164,6 +1164,87 @@ export default function App() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enterprise Authentication Portal (Shown if signed out) */}
+      {!currentUser && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
+          <div className="relative bg-gradient-to-b from-[#131b2e] via-[#0f1524] to-[#0a0e1a] border border-slate-700/80 rounded-2xl max-w-md w-full p-7 space-y-6 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
+            <div className="text-center space-y-2">
+              <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white text-xl shadow-[0_0_24px_rgba(99,102,241,0.5)] border border-indigo-400/30">
+                N
+              </div>
+              <h2 className="text-xl font-black text-white tracking-tight">NeuroFabric Ops Access</h2>
+              <p className="text-xs text-slate-400">Enterprise Closed-Loop Remediation Security Perimeter</p>
+            </div>
+
+            {loginError && (
+              <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-800/60 text-rose-300 text-xs font-mono text-center">
+                {loginError}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Quick Persona Access</span>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Incident Commander', email: 'commander@neurofabric.io', pass: 'Commander2026!', color: 'border-indigo-500/50 hover:bg-indigo-950/40 text-indigo-300' },
+                  { label: 'SecOps Lead', email: 'secops@neurofabric.io', pass: 'SecOps2026!', color: 'border-cyan-500/50 hover:bg-cyan-950/40 text-cyan-300' },
+                  { label: 'SRE Operator', email: 'sre@neurofabric.io', pass: 'Operator2026!', color: 'border-emerald-500/50 hover:bg-emerald-950/40 text-emerald-300' },
+                  { label: 'Auditor (Read-Only)', email: 'auditor@neurofabric.io', pass: 'Audit2026!', color: 'border-slate-600/50 hover:bg-slate-800/40 text-slate-300' },
+                ].map((persona, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleLogin(persona.email, persona.pass)}
+                    className={`p-2 rounded-xl border text-[11px] font-mono font-semibold transition-all text-left cursor-pointer bg-[#0c111e]/80 ${persona.color}`}
+                  >
+                    <div className="font-bold">{persona.label}</div>
+                    <div className="text-[9px] opacity-70 truncate">{persona.email}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleLogin();
+              }}
+              className="space-y-3.5 text-xs font-mono pt-2 border-t border-slate-800"
+            >
+              <div>
+                <label className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Corporate Email</label>
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Password</label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full py-2.5 rounded-xl font-bold font-sans text-xs bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-600/40 cursor-pointer transition-all disabled:opacity-50"
+              >
+                {isLoggingIn ? 'Authenticating...' : 'Authorize Session'}
+              </button>
+            </form>
           </div>
         </div>
       )}
