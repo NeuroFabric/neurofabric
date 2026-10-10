@@ -56,15 +56,11 @@ interface TelemetryLog {
   dlpScrubbed?: boolean;
 }
 
-interface ChartDataPoint {
-  time: string;
-  throughput: number;
-  latency: number;
-}
-
 export default function App() {
   const [connected, setConnected] = useState<boolean>(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('15M');
+  const [hoveredPoint, setHoveredPoint] = useState<{ time: string; throughput: number; latency: number; x: number; y: number } | null>(null);
+
   const [metrics, setMetrics] = useState<IngestionMetrics>({
     throughput: 0,
     suppressedAlerts: 0,
@@ -85,37 +81,45 @@ export default function App() {
   const [isDeciding, setIsDeciding] = useState<boolean>(false);
   const [ledgerFilter, setLedgerFilter] = useState<string>('ALL');
 
-  // Selected Task Modal / Inspection Drawer
   const [selectedTask, setSelectedTask] = useState<LedgerEntry | null>(null);
-
-  // Queue State
   const [pendingQueue, setPendingQueue] = useState<HitlProposal[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(0);
 
-  // Live Chart Sliding History (Last 16 Ticks)
-  const [telemetryHistory, setTelemetryHistory] = useState<ChartDataPoint[]>(() => {
-    const initial = [];
+  // Time Range Window Calculations
+  const rangeConfig = useMemo(() => {
     const now = Date.now();
-    for (let i = 15; i >= 0; i--) {
-      initial.push({
-        time: new Date(now - i * 3000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        throughput: Math.floor(Math.random() * 4),
-        latency: 12 + Math.floor(Math.random() * 8),
-      });
-    }
-    return initial;
-  });
+    let durationMs = 15 * 60 * 1000;
+    let label = '15 Minutes';
 
-  // Calculate cutoff timestamp for selected timeframe
-  const timeCutoff = useMemo(() => {
-    const now = Date.now();
     switch (timeRange) {
-      case '5M': return now - 5 * 60 * 1000;
-      case '15M': return now - 15 * 60 * 1000;
-      case '1H': return now - 60 * 60 * 1000;
-      case '24H': return now - 24 * 60 * 60 * 1000;
-      case 'ALL': return 0;
+      case '5M':
+        durationMs = 5 * 60 * 1000;
+        label = '5 Minutes';
+        break;
+      case '15M':
+        durationMs = 15 * 60 * 1000;
+        label = '15 Minutes';
+        break;
+      case '1H':
+        durationMs = 60 * 60 * 1000;
+        label = '1 Hour';
+        break;
+      case '24H':
+        durationMs = 24 * 60 * 60 * 1000;
+        label = '24 Hours';
+        break;
+      case 'ALL':
+        durationMs = 48 * 60 * 60 * 1000;
+        label = 'All Historical';
+        break;
     }
+
+    return {
+      startTime: now - durationMs,
+      endTime: now,
+      durationMs,
+      label,
+    };
   }, [timeRange]);
 
   const fetchLedger = useCallback(async () => {
@@ -159,31 +163,14 @@ export default function App() {
     try {
       const ingRes = await fetch(`${API_BASE}/api/v1/metrics/ingestion`).then((r) => (r.ok ? r.json() : null));
       if (ingRes) {
-        setMetrics((prev) => {
-          const updated = {
-            ...prev,
-            throughput: ingRes.throughput ?? prev.throughput,
-            secretsScrubbed: ingRes.secretsScrubbed ?? prev.secretsScrubbed,
-            suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
-            hitlPending: ingRes.hitlPending ?? prev.hitlPending,
-            trippedCircuits: ingRes.trippedCircuits || prev.trippedCircuits || [],
-          };
-
-          // Append to chart history
-          setTelemetryHistory((h) => {
-            const next = [
-              ...h.slice(1),
-              {
-                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                throughput: updated.throughput,
-                latency: Math.max(8, Math.min(80, (updated.streamLagMs || 10) + Math.floor(Math.random() * 6))),
-              },
-            ];
-            return next;
-          });
-
-          return updated;
-        });
+        setMetrics((prev) => ({
+          ...prev,
+          throughput: ingRes.throughput ?? prev.throughput,
+          secretsScrubbed: ingRes.secretsScrubbed ?? prev.secretsScrubbed,
+          suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
+          hitlPending: ingRes.hitlPending ?? prev.hitlPending,
+          trippedCircuits: ingRes.trippedCircuits || prev.trippedCircuits || [],
+        }));
       }
     } catch (err) {
       console.warn('[Metrics] Fetch failed:', err);
@@ -319,7 +306,7 @@ export default function App() {
                   message: payload.data.message || 'Telemetry event processed',
                   dlpScrubbed: Boolean(payload.data.scrubbed),
                 },
-                ...prev.slice(0, 49),
+                ...prev.slice(0, 99),
               ]);
             }
             break;
@@ -340,49 +327,100 @@ export default function App() {
 
   // Filtered by Time Range + Status
   const filteredLogs = useMemo(() => {
-    return telemetryLogs.filter((log) => log.rawTime >= timeCutoff);
-  }, [telemetryLogs, timeCutoff]);
+    return telemetryLogs.filter((log) => log.rawTime >= rangeConfig.startTime);
+  }, [telemetryLogs, rangeConfig.startTime]);
 
   const filteredLedger = useMemo(() => {
     return ledger.filter((item) => {
-      const matchTime = (item.createdTimestamp || 0) >= timeCutoff;
+      const matchTime = (item.createdTimestamp || 0) >= rangeConfig.startTime;
       if (!matchTime) return false;
       if (ledgerFilter === 'ALL') return true;
       return item.status.toUpperCase() === ledgerFilter;
     });
-  }, [ledger, timeCutoff, ledgerFilter]);
+  }, [ledger, rangeConfig.startTime, ledgerFilter]);
 
   const getFilterCount = (filterName: string) => {
     return ledger.filter((item) => {
-      const matchTime = (item.createdTimestamp || 0) >= timeCutoff;
+      const matchTime = (item.createdTimestamp || 0) >= rangeConfig.startTime;
       if (!matchTime) return false;
       if (filterName === 'ALL') return true;
       return item.status.toUpperCase() === filterName;
     }).length;
   };
 
-  // SVG Chart Render Helpers
-  const maxThroughput = Math.max(10, ...telemetryHistory.map((d) => d.throughput));
-  const maxLatency = Math.max(60, ...telemetryHistory.map((d) => d.latency));
+  // Dynamic Time-Bucket Chart Generator (16 Proportional Buckets)
+  const chartBuckets = useMemo(() => {
+    const bucketCount = 16;
+    const { startTime, endTime, durationMs } = rangeConfig;
+    const stepMs = durationMs / bucketCount;
 
-  const throughputPoints = telemetryHistory
-    .map((d, i) => `${(i / 15) * 360},${70 - (d.throughput / maxThroughput) * 55}`)
+    const buckets = Array.from({ length: bucketCount }, (_, i) => {
+      const bStart = startTime + i * stepMs;
+      const bEnd = bStart + stepMs;
+      const midTime = new Date(bStart + stepMs / 2);
+      const timeLabel = midTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      // Aggregate real events falling in this bucket
+      const logsInBucket = telemetryLogs.filter((l) => l.rawTime >= bStart && l.rawTime < bEnd);
+      const tasksInBucket = ledger.filter((t) => (t.createdTimestamp || 0) >= bStart && (t.createdTimestamp || 0) < bEnd);
+
+      const totalEvents = logsInBucket.length + tasksInBucket.length;
+      // Convert to evt/s rate based on bucket duration in seconds
+      const bucketSeconds = Math.max(1, stepMs / 1000);
+      let calculatedTps = Math.round((totalEvents / bucketSeconds) * 10) / 10;
+
+      // Ensure the latest bucket reflects live metric
+      if (i === bucketCount - 1 && metrics.throughput > 0) {
+        calculatedTps = Math.max(calculatedTps, metrics.throughput);
+      }
+
+      // Latency estimation per bucket
+      const latency = Math.max(4, Math.min(65, (metrics.streamLagMs || 8) + (totalEvents > 0 ? totalEvents * 3 : 0)));
+
+      return {
+        label: timeLabel,
+        throughput: calculatedTps,
+        latency,
+      };
+    });
+
+    return buckets;
+  }, [rangeConfig, telemetryLogs, ledger, metrics.throughput, metrics.streamLagMs]);
+
+  const maxChartThroughput = Math.max(5, ...chartBuckets.map((b) => b.throughput));
+  const maxChartLatency = Math.max(50, ...chartBuckets.map((b) => b.latency));
+
+  const throughputPoints = chartBuckets
+    .map((b, i) => `${(i / 15) * 360},${70 - (b.throughput / maxChartThroughput) * 55}`)
     .join(' ');
 
-  const latencyPoints = telemetryHistory
-    .map((d, i) => `${(i / 15) * 360},${70 - (d.latency / maxLatency) * 55}`)
+  const latencyPoints = chartBuckets
+    .map((b, i) => `${(i / 15) * 360},${70 - (b.latency / maxChartLatency) * 55}`)
     .join(' ');
+
+  // Dynamic X-Axis Milestone Labels (4 Markers)
+  const timelineMilestones = useMemo(() => {
+    const { startTime, endTime } = rangeConfig;
+    const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    return [
+      formatTime(startTime),
+      formatTime(startTime + (endTime - startTime) * 0.33),
+      formatTime(startTime + (endTime - startTime) * 0.66),
+      formatTime(endTime) + ' (Now)',
+    ];
+  }, [rangeConfig]);
 
   return (
     <div className="min-h-screen bg-[#070a10] text-slate-100 p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Dynamic Ambient Background Glows */}
+      {/* Ambient Depth Background Glows */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden -z-10">
         <div className="absolute -top-32 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[128px]" />
         <div className="absolute top-1/3 -right-32 w-96 h-96 bg-cyan-600/10 rounded-full blur-[140px]" />
         <div className="absolute -bottom-32 left-1/3 w-96 h-96 bg-rose-600/5 rounded-full blur-[160px]" />
       </div>
 
-      {/* Top Header & Timeframe Command Bar */}
+      {/* Header & Operational Range Command Strip */}
       <header className="flex flex-col lg:flex-row lg:items-center justify-between pb-6 border-b border-slate-800/80 gap-5">
         <div className="flex items-center gap-3.5">
           <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white shadow-[0_0_24px_rgba(99,102,241,0.4)] border border-indigo-400/30">
@@ -399,9 +437,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Header: Stream Status & Time Range Selector */}
+        {/* Right Header: Real-Time Stream Status & Active Time Range Selector */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3.5 self-start lg:self-auto">
-          {/* Live Indicator */}
           <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-900/90 border border-slate-700/60 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] backdrop-blur-md">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-amber-400'}`} />
             <span className="text-xs font-mono font-semibold text-slate-200">
@@ -409,14 +446,13 @@ export default function App() {
             </span>
           </div>
 
-          {/* Time Range Selector */}
           <div className="flex items-center p-1 rounded-xl bg-[#0e1320] border border-slate-800 shadow-lg shadow-black/40">
             <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider px-2 font-semibold">Range</span>
             {(['5M', '15M', '1H', '24H', 'ALL'] as TimeRange[]).map((r) => (
               <button
                 key={r}
                 onClick={() => setTimeRange(r)}
-                className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                className={`px-3 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
                   timeRange === r
                     ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-[0_2px_10px_rgba(99,102,241,0.4)] border border-indigo-400/30'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -429,7 +465,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* KPI Metric Strip (Glassmorphic Cards) */}
+      {/* KPI Metric Strip */}
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-6">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400', glow: 'shadow-cyan-500/10' },
@@ -452,45 +488,38 @@ export default function App() {
         ))}
       </section>
 
-      {/* Live Telemetry Visualizer Section (Dual Real-Time Graphs) */}
+      {/* Live Telemetry Visualizer: Dual Synchronized Time-Bucket Charts */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-        {/* Graph 1: Live Ingestion Throughput Waveform */}
+        {/* Chart 1: Ingestion Throughput Waveform */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#101625]/90 to-[#090d16]/95 border border-slate-800/90 rounded-xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Live Ingestion Throughput
+                Ingestion Throughput Trend ({rangeConfig.label})
               </h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-slate-400">Current:</span>
               <span className="text-cyan-400 font-bold tabular-nums">{metrics.throughput} evt/s</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/40 text-cyan-300">
-                Peak: {maxThroughput}
+                Peak: {maxChartThroughput} evt/s
               </span>
             </div>
           </div>
 
-          {/* SVG Waveform Chart */}
-          <div className="h-24 w-full pt-1">
+          <div className="h-28 w-full pt-1 relative">
             <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00f2fe" stopOpacity="0.35" />
+                  <stop offset="0%" stopColor="#00f2fe" stopOpacity="0.4" />
                   <stop offset="100%" stopColor="#00f2fe" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
-              {/* Subtle Gridlines */}
-              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-              {/* Fill Area */}
-              <polygon
-                points={`0,80 ${throughputPoints} 360,80`}
-                fill="url(#cyanGrad)"
-              />
-              {/* Path Line */}
+              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <polygon points={`0,80 ${throughputPoints} 360,80`} fill="url(#cyanGrad)" />
               <polyline
                 points={throughputPoints}
                 fill="none"
@@ -498,52 +527,78 @@ export default function App() {
                 strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="drop-shadow-[0_0_8px_rgba(0,242,254,0.6)]"
+                className="drop-shadow-[0_0_10px_rgba(0,242,254,0.7)]"
               />
+
+              {/* Interactive Hover Marker Points */}
+              {chartBuckets.map((b, i) => {
+                const cx = (i / 15) * 360;
+                const cy = 70 - (b.throughput / maxChartThroughput) * 55;
+                return (
+                  <circle
+                    key={i}
+                    cx={cx}
+                    cy={cy}
+                    r={3}
+                    className="fill-cyan-400 stroke-[#090d16] stroke-2 hover:r-5 cursor-pointer transition-all"
+                    onMouseEnter={() => setHoveredPoint({ time: b.label, throughput: b.throughput, latency: b.latency, x: cx, y: cy })}
+                    onMouseLeave={() => setHoveredPoint(null)}
+                  />
+                );
+              })}
             </svg>
+
+            {hoveredPoint && (
+              <div
+                className="absolute z-20 pointer-events-none bg-[#0e1422] border border-cyan-500/50 rounded-lg p-2 text-[10px] font-mono shadow-xl text-white transform -translate-x-1/2 -translate-y-full mb-2"
+                style={{ left: `${(hoveredPoint.x / 360) * 100}%`, top: '30%' }}
+              >
+                <div className="text-cyan-400 font-bold">{hoveredPoint.time}</div>
+                <div>Throughput: {hoveredPoint.throughput} evt/s</div>
+                <div>Latency: {hoveredPoint.latency}ms</div>
+              </div>
+            )}
           </div>
-          <div className="flex justify-between text-[10px] font-mono text-slate-500 pt-1">
-            <span>T-45s</span>
-            <span>T-30s</span>
-            <span>T-15s</span>
-            <span className="text-cyan-400">Live (Now)</span>
+
+          <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
+            {timelineMilestones.map((m, idx) => (
+              <span key={idx} className={idx === 3 ? 'text-cyan-400 font-bold' : ''}>
+                {m}
+              </span>
+            ))}
           </div>
         </div>
 
-        {/* Graph 2: Telemetry Latency & Canary Observation Window */}
+        {/* Chart 2: Latency & Canary Observation Delta */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#101625]/90 to-[#090d16]/95 border border-slate-800/90 rounded-xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-emerald-400/30 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Stream Latency & Canary Delta
+                Stream Latency & Canary Window ({rangeConfig.label})
               </h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-slate-400">Stream Lag:</span>
               <span className="text-emerald-400 font-bold tabular-nums">{metrics.streamLagMs}ms</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
-                15s Window
+                Window: 15s
               </span>
             </div>
           </div>
 
-          {/* SVG Latency Chart */}
-          <div className="h-24 w-full pt-1">
+          <div className="h-28 w-full pt-1 relative">
             <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="emeraldGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
                   <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
-              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
-              <polygon
-                points={`0,80 ${latencyPoints} 360,80`}
-                fill="url(#emeraldGrad)"
-              />
+              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <polygon points={`0,80 ${latencyPoints} 360,80`} fill="url(#emeraldGrad)" />
               <polyline
                 points={latencyPoints}
                 fill="none"
@@ -551,22 +606,39 @@ export default function App() {
                 strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="drop-shadow-[0_0_8px_rgba(16,185,129,0.6)]"
+                className="drop-shadow-[0_0_10px_rgba(16,185,129,0.7)]"
               />
+
+              {chartBuckets.map((b, i) => {
+                const cx = (i / 15) * 360;
+                const cy = 70 - (b.latency / maxChartLatency) * 55;
+                return (
+                  <circle
+                    key={i}
+                    cx={cx}
+                    cy={cy}
+                    r={3}
+                    className="fill-emerald-400 stroke-[#090d16] stroke-2 hover:r-5 cursor-pointer transition-all"
+                    onMouseEnter={() => setHoveredPoint({ time: b.label, throughput: b.throughput, latency: b.latency, x: cx, y: cy })}
+                    onMouseLeave={() => setHoveredPoint(null)}
+                  />
+                );
+              })}
             </svg>
           </div>
-          <div className="flex justify-between text-[10px] font-mono text-slate-500 pt-1">
-            <span>T-45s</span>
-            <span>T-30s</span>
-            <span>T-15s</span>
-            <span className="text-emerald-400">Live (Now)</span>
+
+          <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
+            {timelineMilestones.map((m, idx) => (
+              <span key={idx} className={idx === 3 ? 'text-emerald-400 font-bold' : ''}>
+                {m}
+              </span>
+            ))}
           </div>
         </div>
       </section>
 
       {/* Main Grid: Autonomous Remediation Circuit & Live Ingestion Stream */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
-        {/* Left Column: Autonomous Remediation Circuit */}
         <section className="lg:col-span-7 bg-gradient-to-b from-[#111726]/90 to-[#0b0f18]/95 border border-slate-800 rounded-xl p-5 shadow-2xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
             <div className="flex items-center gap-3">
@@ -608,7 +680,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Persistent Lockout Banners */}
           {activeTrippedTargets.map((target) => (
             <div key={target} className="mb-4 p-4 rounded-xl bg-gradient-to-r from-red-950/90 to-red-900/80 border border-red-500 text-red-200 flex items-center justify-between shadow-[0_0_20px_rgba(239,68,68,0.25)] animate-pulse">
               <div className="flex items-center gap-2.5">
@@ -737,14 +808,14 @@ export default function App() {
           )}
         </section>
 
-        {/* Right Column: Live Ingestion Stream */}
+        {/* Live Ingestion Stream */}
         <section className="lg:col-span-5 bg-gradient-to-b from-[#111726]/90 to-[#0b0f18]/95 border border-slate-800 rounded-xl p-5 flex flex-col justify-between shadow-2xl backdrop-blur-md">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
                 Live Ingestion Stream
               </h2>
-              <span className="text-xs font-mono text-cyan-400 font-bold">{filteredLogs.length} Events ({timeRange})</span>
+              <span className="text-xs font-mono text-cyan-400 font-bold">{filteredLogs.length} Events ({rangeConfig.label})</span>
             </div>
 
             <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
@@ -765,7 +836,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="text-center py-14 text-slate-500 text-xs font-mono">
-                  No ingestion payloads matching time range "{timeRange}".
+                  No ingestion payloads matching time range "{rangeConfig.label}".
                 </div>
               )}
             </div>
@@ -777,17 +848,16 @@ export default function App() {
         </section>
       </div>
 
-      {/* Governance & Audit Ledger Section */}
+      {/* Governance Ledger Table */}
       <section className="bg-gradient-to-b from-[#111726]/90 to-[#0b0f18]/95 border border-slate-800 rounded-xl p-5 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
               Immutable Governance Ledger
             </h2>
-            <p className="text-xs text-slate-400">PostgreSQL Audit Trail with OWASP & NIST Traceability &bull; Window: {timeRange}</p>
+            <p className="text-xs text-slate-400">PostgreSQL Audit Trail with OWASP & NIST Traceability &bull; Window: {rangeConfig.label}</p>
           </div>
 
-          {/* Filter Pills with Counts and Hover Cursor */}
           <div className="flex flex-wrap gap-1.5 text-xs font-medium">
             {['ALL', 'PENDING', 'CANARY_VERIFYING', 'VERIFIED_RESOLVED', 'ROLLED_BACK', 'CIRCUIT_TRIPPED', 'APPROVED', 'REJECTED'].map((filter) => {
               const count = getFilterCount(filter);
@@ -871,7 +941,7 @@ export default function App() {
               ) : (
                 <tr>
                   <td colSpan={6} className="text-center py-10 text-slate-500 font-mono">
-                    No ledger entries match filter "{ledgerFilter}" within range "{timeRange}".
+                    No ledger entries match filter "{ledgerFilter}" within range "{rangeConfig.label}".
                   </td>
                 </tr>
               )}
@@ -880,7 +950,7 @@ export default function App() {
         </div>
       </section>
 
-      {/* Task Inspection Drawer / Modal */}
+      {/* Audit Inspection Modal */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-gradient-to-b from-[#131a29] to-[#0c101a] border border-slate-700 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
