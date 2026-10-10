@@ -10,6 +10,8 @@ import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdap
 import { RollbackCircuit } from "../embassy/RollbackCircuit.ts";
 import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
 import { merkleAuditLedger, type LedgerEntry } from "../core/MerkleAuditLedger.ts";
+import { agenticDiagnosticAdapter } from "../embassy/AgenticDiagnosticAdapter.ts";
+import { gitHubGitOpsAdapter } from "../embassy/GitHubGitOpsAdapter.ts";
 
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
@@ -57,7 +59,6 @@ const targetCriticalStrikes = new Map<string, number>();
 const activeCanaryTimers = new Map<string, NodeJS.Timeout>();
 const DEDUP_TTL_MS = 30000;
 
-// Dynamic microservice traffic counters
 const serviceDistribution: Record<string, { count: number; latency: number; status: string }> = {
   "order-service": { count: 2650, latency: 312, status: "NOMINAL" },
   "auth-gateway": { count: 2190, latency: 328, status: "DLP ENFORCED" },
@@ -66,7 +67,6 @@ const serviceDistribution: Record<string, { count: number; latency: number; stat
   "flapping-payment-worker": { count: 421, latency: 390, status: "NOMINAL" },
 };
 
-// Rate limiting map (100 req/sec per IP)
 const ipRateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(ip: string): boolean {
@@ -496,6 +496,21 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return verifySessionToken(token);
         };
 
+        // POST /api/v1/embassy/diagnose (Agentic LLM RCA Endpoint)
+        if (request.method === "POST" && url.pathname === "/api/v1/embassy/diagnose") {
+          const raw = await readBody(request);
+          let parsed: any = {};
+          try { parsed = JSON.parse(raw); } catch {}
+
+          const report = await agenticDiagnosticAdapter.diagnose(parsed);
+          sendJson(response, 200, {
+            success: true,
+            provider: (agenticDiagnosticAdapter as any).provider || (report as any).provider || "heuristic",
+            report,
+          });
+          return;
+        }
+
         // GET /api/v1/metrics/timeseries
         if (request.method === "GET" && url.pathname === "/api/v1/metrics/timeseries") {
           const range = url.searchParams.get("range") || "1H";
@@ -578,10 +593,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/governance/verify-ledger
+        // GET /api/v1/governance/verify-ledger (Verifies true append-only chain)
         if (request.method === "GET" && url.pathname === "/api/v1/governance/verify-ledger") {
-          const entries = Array.from(inMemoryLedger.values());
-          const verification = merkleAuditLedger.verifyChainIntegrity(entries);
+          const verification = merkleAuditLedger.verifyChainIntegrity();
           sendJson(response, 200, verification);
           return;
         }
@@ -845,6 +859,44 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const targetStatus = decision === "APPROVED" ? "CANARY_VERIFYING" : "REJECTED";
 
           if (decision === "APPROVED") {
+            let rca: any = null;
+            let gitops: any = null;
+
+            try {
+              rca = await agenticDiagnosticAdapter.diagnose({
+                service: target,
+                target,
+                diff,
+                taskId,
+                stackTrace: mem?.reason || mem?.subject?.reason || `Telemetry degradation on ${target}`,
+                context: {
+                  topology: `${target} -> cluster`,
+                  blastRadius: "medium",
+                  recentDiffs: diff,
+                },
+              });
+            } catch (e) {
+              console.warn("[AgenticDiagnosticAdapter] diagnose warning:", e);
+            }
+
+            try {
+              gitops = await gitHubGitOpsAdapter.dispatchRemediation({
+                taskId,
+                taskToken: taskId,
+                target,
+                diff,
+                rca: rca || {
+                  rootCause: "Autonomous Patch Applied",
+                  explanation: "Verified proposal approved by Incident Commander",
+                  blastRadius: "medium",
+                  confidence: 85,
+                  diff,
+                },
+              });
+            } catch (e) {
+              console.warn("[GitHubGitOpsAdapter] dispatch warning:", e);
+            }
+
             const canaryEntry = {
               ...mem,
               token: taskId,
@@ -855,13 +907,15 @@ export function createWedgeServer(options: { cwd: string }): Server {
               approvedBy: reviewer,
               createdAt: mem?.createdAt || new Date().toISOString(),
               decidedAt: new Date().toISOString(),
+              rca,
+              gitops,
             };
             merkleAuditLedger.append(canaryEntry);
             inMemoryLedger.set(taskId, canaryEntry);
 
             broadcastAlert({
               type: "CANARY_VERIFYING",
-              data: { taskId, target, slice: "10%", timeoutMs: 15000, reviewer },
+              data: { taskId, target, slice: "10%", timeoutMs: 15000, reviewer, rca, gitops },
             });
 
             const timer = setTimeout(async () => {
@@ -890,6 +944,17 @@ export function createWedgeServer(options: { cwd: string }): Server {
             }, 15000);
 
             activeCanaryTimers.set(taskId, timer);
+
+            broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
+            sendJson(response, 200, {
+              success: true,
+              taskId,
+              status: targetStatus,
+              reviewer,
+              rca,
+              gitops,
+            });
+            return;
           } else {
             const rejected = {
               ...mem,
@@ -903,11 +968,11 @@ export function createWedgeServer(options: { cwd: string }): Server {
             };
             merkleAuditLedger.append(rejected);
             inMemoryLedger.set(taskId, rejected);
-          }
 
-          broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
-          sendJson(response, 200, { success: true, taskId, status: targetStatus, reviewer });
-          return;
+            broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
+            sendJson(response, 200, { success: true, taskId, status: targetStatus, reviewer });
+            return;
+          }
         }
 
         // POST /api/v1/embassy/reset-breaker

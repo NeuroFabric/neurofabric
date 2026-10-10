@@ -15,11 +15,14 @@ export interface LedgerEntry {
   merkleHash?: string;
   owaspRef?: string | null;
   nistRef?: string | null;
+  rca?: any;
+  gitops?: any;
 }
 
 export class MerkleAuditLedger {
   private secret: string;
   private currentHash: string;
+  private chain: LedgerEntry[] = [];
 
   constructor(secret: string = process.env.AUTH_SECRET || "neurofabric-enterprise-hmac-sha256-secret-key-2026") {
     this.secret = secret;
@@ -32,20 +35,30 @@ export class MerkleAuditLedger {
   }
 
   public append(entry: LedgerEntry): LedgerEntry {
-    entry.prevHash = this.currentHash;
-    entry.merkleHash = this.computeEntryHash(this.currentHash, entry);
-    this.currentHash = entry.merkleHash;
-    return entry;
+    const record: LedgerEntry = { ...entry };
+    record.prevHash = this.currentHash;
+    record.merkleHash = this.computeEntryHash(this.currentHash, record);
+    this.currentHash = record.merkleHash;
+    this.chain.push(record);
+
+    entry.prevHash = record.prevHash;
+    entry.merkleHash = record.merkleHash;
+    return record;
   }
 
-  public verifyChainIntegrity(entries: LedgerEntry[]): {
+  public getChain(): LedgerEntry[] {
+    return [...this.chain];
+  }
+
+  public verifyChainIntegrity(entries?: LedgerEntry[]): {
     valid: boolean;
     chainLength: number;
     rootHash: string;
     verifiedAt: string;
     brokenAt?: string;
   } {
-    if (!entries || entries.length === 0) {
+    const list = entries && entries.length > 0 ? entries : this.chain;
+    if (!list || list.length === 0) {
       return {
         valid: true,
         chainLength: 0,
@@ -55,26 +68,24 @@ export class MerkleAuditLedger {
     }
 
     let prev = "0".repeat(64);
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
       const expected = this.computeEntryHash(prev, e);
       if (e.merkleHash && e.merkleHash !== expected) {
         return {
           valid: false,
-          chainLength: entries.length,
+          chainLength: list.length,
           rootHash: prev,
           verifiedAt: new Date().toISOString(),
           brokenAt: e.token || e.taskId || `index-${i}`,
         };
       }
       prev = e.merkleHash || expected;
-      e.merkleHash = expected;
-      e.prevHash = prev;
     }
 
     return {
       valid: true,
-      chainLength: entries.length,
+      chainLength: list.length,
       rootHash: prev,
       verifiedAt: new Date().toISOString(),
     };
