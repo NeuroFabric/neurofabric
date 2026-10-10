@@ -25,7 +25,7 @@ interface HitlProposal {
     diff?: string;
     target?: string;
   };
-  status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANARY_VERIFYING' | 'ROLLED_BACK' | 'VERIFIED_RESOLVED';
+  status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANARY_VERIFYING' | 'ROLLED_BACK' | 'VERIFIED_RESOLVED' | 'CIRCUIT_TRIPPED';
 }
 
 interface LedgerEntry {
@@ -65,6 +65,7 @@ export default function App() {
   const [activeProposal, setActiveProposal] = useState<HitlProposal | null>(null);
   const [activeCanary, setActiveCanary] = useState<{ taskId: string; target: string; timeoutMs?: number } | null>(null);
   const [rolledBackTask, setRolledBackTask] = useState<{ taskId: string; target: string; reason?: string } | null>(null);
+  const [trippedCircuit, setTrippedCircuit] = useState<{ target: string; reason?: string } | null>(null);
   const [verifiedResolved, setVerifiedResolved] = useState<{ taskId: string; target: string } | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [telemetryLogs, setTelemetryLogs] = useState<TelemetryLog[]>([]);
@@ -75,8 +76,31 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/governance/ledger`);
       if (res.ok) {
-        const data = await res.json();
+        const data: LedgerEntry[] = await res.json();
         setLedger(Array.isArray(data) ? data : []);
+
+        // Embassy Queue Drainage: If no proposal is currently active, pull the oldest pending task
+        setActiveProposal((current) => {
+          if (current) return current;
+          const pending = (Array.isArray(data) ? data : []).find((t) => t.status === 'PENDING');
+          if (pending && pending.subject) {
+            return {
+              taskId: pending.token,
+              target: pending.subject.target || 'service',
+              title: pending.subject.title || `Critical Anomaly on ${pending.subject.target}`,
+              reason: pending.subject.reason || 'Pending verification',
+              severity: pending.subject.severity || 'CRITICAL',
+              confidence: pending.subject.confidence ?? 88,
+              blastRadius: pending.subject.blastRadius ?? '15%',
+              patch: pending.subject.patch || {
+                diff: '--- deployment.yaml\n+++ deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5',
+                target: pending.subject.target,
+              },
+              status: 'PENDING',
+            };
+          }
+          return null;
+        });
       }
     } catch (err) {
       console.warn('[Ledger] Fetch failed:', err);
@@ -91,10 +115,11 @@ export default function App() {
       ]);
       setMetrics((prev) => ({
         ...prev,
-        suppressedAlerts: opsRes?.suppressedAlerts ?? prev.suppressedAlerts,
+        suppressedAlerts: opsRes?.suppressedAlerts ?? ingRes?.suppressedAlerts ?? prev.suppressedAlerts,
         streamLagMs: opsRes?.streamLagMs ?? prev.streamLagMs,
         throughput: ingRes?.throughput ?? prev.throughput,
         secretsScrubbed: ingRes?.secretsScrubbed ?? prev.secretsScrubbed,
+        hitlPending: ingRes?.hitlPending ?? prev.hitlPending,
       }));
     } catch (err) {
       console.warn('[Metrics] Fetch failed:', err);
@@ -117,6 +142,11 @@ export default function App() {
         body: JSON.stringify({ taskId, decision, reviewer: 'Incident Commander' }),
       });
       if (res.ok) {
+        const body = await res.json();
+        if (body.status === 'CIRCUIT_TRIPPED') {
+          setTrippedCircuit({ target: activeProposal?.target || 'service', reason: body.reason });
+          setActiveProposal(null);
+        }
         await fetchLedger();
       }
     } catch (err) {
@@ -132,7 +162,7 @@ export default function App() {
     const pollTimer = setInterval(() => {
       fetchMetrics();
       fetchLedger();
-    }, 5000);
+    }, 4000);
 
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
 
@@ -155,39 +185,34 @@ export default function App() {
                 ...prev,
                 throughput: payload.data.throughput ?? prev.throughput,
                 secretsScrubbed: payload.data.secretsScrubbed ?? prev.secretsScrubbed,
+                suppressedAlerts: payload.data.suppressedAlerts ?? prev.suppressedAlerts,
+                hitlPending: payload.data.hitlPending ?? prev.hitlPending,
               }));
             }
             break;
 
           case 'HITL_PROPOSAL':
-          case 'NEW_PROPOSAL':
             if (payload.data) {
-              setActiveProposal({
-                taskId: payload.data.taskId || payload.data.taskToken || `task-${Date.now()}`,
+              setActiveProposal((current) => current || {
+                taskId: payload.data.taskId || `task-${Date.now()}`,
                 target: payload.data.target || 'redis-cluster',
-                title: payload.data.title || `Critical Anomaly on ${payload.data.target || 'service'}`,
-                reason: payload.data.reason || 'SLA latency threshold breached',
+                title: payload.data.title || `Critical Anomaly on ${payload.data.target}`,
+                reason: payload.data.reason || 'SLA threshold breached',
                 severity: payload.data.severity || 'CRITICAL',
                 confidence: payload.data.confidence ?? 88,
                 blastRadius: payload.data.blastRadius ?? '15%',
-                patch: payload.data.patch || {
-                  diff: '--- deployment.yaml\n+++ deployment.yaml\n@@ -12,3 +12,3 @@\n-  replicas: 2\n+  replicas: 5',
-                  target: payload.data.target || 'redis-cluster',
-                },
+                patch: payload.data.patch,
                 status: 'PENDING',
               });
               setMetrics((m) => ({ ...m, hitlPending: m.hitlPending + 1 }));
             }
             break;
 
-          case 'REMEDIATION_DEPLOYED':
-            setActiveProposal((prev) => (prev ? { ...prev, status: 'CANARY_VERIFYING' } : null));
-            break;
-
           case 'CANARY_VERIFYING':
             setActiveCanary(payload.data);
             setRolledBackTask(null);
             setVerifiedResolved(null);
+            setTrippedCircuit(null);
             setActiveProposal((prev) => (prev ? { ...prev, status: 'CANARY_VERIFYING' } : null));
             break;
 
@@ -199,15 +224,22 @@ export default function App() {
             fetchLedger();
             break;
 
-          case 'REMEDIATION_ROLLED_BACK':
+          case 'CIRCUIT_TRIPPED':
             setActiveCanary(null);
-            setRolledBackTask(payload.data);
+            setTrippedCircuit(payload.data);
             setActiveProposal(null);
-            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             fetchLedger();
             break;
 
-          case 'DECISION_RESOLVED':
+          case 'REMEDIATION_ROLLED_BACK':
+            setActiveCanary(null);
+            if (payload.data?.status === 'CIRCUIT_TRIPPED') {
+              setTrippedCircuit(payload.data);
+            } else {
+              setRolledBackTask(payload.data);
+            }
+            setActiveProposal(null);
+            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             fetchLedger();
             break;
 
@@ -248,7 +280,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0d14] text-slate-100 p-4 md:p-8 font-sans">
-      {/* Header */}
       <header className="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-slate-800 gap-4">
         <div className="flex items-center gap-3">
           <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
@@ -273,7 +304,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* KPI Metric Strip */}
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-6">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400' },
@@ -292,7 +322,6 @@ export default function App() {
         ))}
       </section>
 
-      {/* Main Grid: Autonomous Remediation Circuit & Live Ingestion Stream */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
         <section className="lg:col-span-7 bg-[#111622] border border-slate-800 rounded-lg p-5">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
@@ -301,6 +330,20 @@ export default function App() {
             </h2>
             <span className="text-xs font-mono text-slate-400">Canary Verification Window: 15s</span>
           </div>
+
+          {trippedCircuit && (
+            <div className="mb-4 p-3.5 rounded-lg bg-red-950/80 border border-red-500 text-red-200 flex items-center justify-between shadow-lg shadow-red-950/50">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-ping" />
+                <span className="text-xs font-medium">
+                  <strong>Circuit Breaker Tripped on {trippedCircuit.target}:</strong> Flapping oscillation halted. Automated actions frozen.
+                </span>
+              </div>
+              <span className="text-[10px] font-mono uppercase bg-red-900 border border-red-600 px-2 py-0.5 rounded font-bold">
+                Lockout Active
+              </span>
+            </div>
+          )}
 
           {activeCanary && (
             <div className="mb-4 p-3.5 rounded-lg bg-amber-950/40 border border-amber-500/50 text-amber-300 flex items-center justify-between animate-pulse">
@@ -440,7 +483,6 @@ export default function App() {
         </section>
       </div>
 
-      {/* Governance & Audit Ledger */}
       <section className="bg-[#111622] border border-slate-800 rounded-lg p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
@@ -451,7 +493,7 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap gap-1.5 text-xs font-medium">
-            {['ALL', 'PENDING', 'CANARY_VERIFYING', 'VERIFIED_RESOLVED', 'ROLLED_BACK', 'APPROVED', 'REJECTED'].map((filter) => (
+            {['ALL', 'PENDING', 'CANARY_VERIFYING', 'VERIFIED_RESOLVED', 'ROLLED_BACK', 'CIRCUIT_TRIPPED', 'APPROVED', 'REJECTED'].map((filter) => (
               <button
                 key={filter}
                 onClick={() => setLedgerFilter(filter)}
@@ -487,6 +529,7 @@ export default function App() {
                     CANARY_VERIFYING: 'bg-cyan-950/80 text-cyan-300 border-cyan-800',
                     VERIFIED_RESOLVED: 'bg-emerald-950/80 text-emerald-300 border-emerald-800',
                     ROLLED_BACK: 'bg-rose-950/80 text-rose-300 border-rose-800',
+                    CIRCUIT_TRIPPED: 'bg-red-950/90 text-red-200 border-red-500 font-bold',
                     APPROVED: 'bg-blue-950/80 text-blue-300 border-blue-800',
                     REJECTED: 'bg-slate-800 text-slate-300 border-slate-700',
                   };

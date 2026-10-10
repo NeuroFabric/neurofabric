@@ -8,9 +8,17 @@ async function post(path: string, body: any) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    return { status: res.status, latencyMs: Date.now() - t0, data: await res.json().catch(() => ({})) };
+    const serverTiming = res.headers.get("server-timing") || "";
+    const serverDuration = res.headers.get("x-response-time-ms");
+    const json = await res.json().catch(() => ({}));
+    return {
+      status: res.status,
+      latencyMs: Date.now() - t0,
+      serverProcessingMs: json.processingMs || (serverDuration ? parseInt(serverDuration, 10) : null),
+      data: json,
+    };
   } catch (err: any) {
-    return { status: 500, latencyMs: Date.now() - t0, error: err.message };
+    return { status: 500, latencyMs: Date.now() - t0, serverProcessingMs: null, error: err.message };
   }
 }
 
@@ -45,7 +53,7 @@ async function runBattleTests() {
   }
 
   // -------------------------------------------------------------------------
-  // SCENARIO 1: Thundering Herd Telemetry Burst (100 Concurrent Requests)
+  // SCENARIO 1: Thundering Herd Telemetry Burst & Deduplication
   // -------------------------------------------------------------------------
   console.log("--> [Scenario 1] Thundering Herd Telemetry Storm (100 Concurrent POSTs)...");
   const services = ["auth-svc", "billing-worker", "db-proxy", "api-gateway", "cache-shard", "ml-infer", "audit-log", "search-indexer", "checkout-svc", "notif-hub"];
@@ -54,7 +62,7 @@ async function runBattleTests() {
     return post("/api/v1/workspace/ingest", {
       service: svc,
       severity: i % 10 === 0 ? "CRITICAL" : "INFO",
-      message: `Storm event #${i} from worker cluster`,
+      message: `Storm event on worker cluster: error_code=0xDEADBEEF`,
       timestamp: new Date().toISOString(),
     });
   });
@@ -64,7 +72,7 @@ async function runBattleTests() {
   const totalDuration = Date.now() - tStart;
   const successCount = results.filter((r) => r.status === 202).length;
   const perRequestThroughputMs = Math.round(totalDuration / results.length);
-  const reqPerSec = Math.round((results.length / (totalDuration / 1000)));
+  const reqPerSec = Math.round(results.length / (totalDuration / 1000));
 
   console.log(`      Dispatched 100 requests in ${totalDuration}ms | Success: ${successCount}/100 | Throughput: ${perRequestThroughputMs}ms/req (${reqPerSec} req/s)`);
   assert("100% of burst requests accepted (HTTP 202)", successCount === 100);
@@ -76,14 +84,15 @@ async function runBattleTests() {
   console.log("\n--> [Scenario 2] Adversarial Fuzzing & Injection Defense...");
   
   const redosPayload = "Bearer " + "a".repeat(10000) + "!@#$";
-  const tRedos = Date.now();
   const fuzzRes = await post("/api/v1/workspace/ingest", {
     service: "adversarial-probe",
     severity: "WARNING",
     message: `Authorization payload test: ${redosPayload}`,
   });
-  const redosDuration = Date.now() - tRedos;
-  assert("ReDoS probe processed in linear time (<100ms)", fuzzRes.status === 202 && redosDuration < 100);
+  
+  const serverMs = fuzzRes.serverProcessingMs ?? fuzzRes.latencyMs;
+  console.log(`      ReDoS Probe Server Processing Time: ${serverMs}ms (Total RTT: ${fuzzRes.latencyMs}ms)`);
+  assert("ReDoS probe processed in linear time (Server CPU < 50ms)", fuzzRes.status === 202 && serverMs < 50);
 
   const injectionRes = await post("/api/v1/workspace/ingest", {
     service: "k8s-ingress",
@@ -118,7 +127,6 @@ async function runBattleTests() {
     console.log(`      Executed Strike ${strike}/3 on target ${flappingTarget}`);
   }
 
-  // 4th attempt: Must be blocked by tripped circuit breaker
   const blockedTask = `flapping-task-blocked-${Date.now().toString(36)}`;
   const blockedRes = await post("/api/v1/embassy/decisions", {
     taskId: blockedTask,

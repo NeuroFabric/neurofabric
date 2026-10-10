@@ -13,6 +13,31 @@ import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
 let totalScrubbed = 0;
+let totalSuppressed = 0;
+
+// 30-Second Sliding Window Deduplication Fingerprint Store
+const alertDedupWindow = new Map<string, number>();
+const DEDUP_TTL_MS = 30000;
+
+function isDuplicateAlert(service: string, message: string): boolean {
+  const now = Date.now();
+  // Clean expired keys
+  for (const [k, exp] of alertDedupWindow.entries()) {
+    if (now > exp) alertDedupWindow.delete(k);
+  }
+
+  // Simplified semantic key
+  const normalizedMsg = message.slice(0, 80).replace(/\s+/g, " ");
+  const key = `${service}::${normalizedMsg}`;
+
+  if (alertDedupWindow.has(key)) {
+    totalSuppressed++;
+    return true;
+  }
+
+  alertDedupWindow.set(key, now + DEDUP_TTL_MS);
+  return false;
+}
 
 export function broadcastAlert(payload: unknown): void {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
@@ -33,11 +58,19 @@ export function broadcastAlert(payload: unknown): void {
 }
 
 setInterval(() => {
+  // Count active pending tasks in memory
+  let pendingCount = 0;
+  for (const item of inMemoryLedger.values()) {
+    if (item.status === 'PENDING') pendingCount++;
+  }
+
   broadcastAlert({
     type: 'INGESTION_METRICS_UPDATE',
     data: {
       ...metricsCollector.getSnapshot(),
       secretsScrubbed: totalScrubbed,
+      suppressedAlerts: totalSuppressed,
+      hitlPending: pendingCount,
     }
   });
 }, 2500);
@@ -76,13 +109,14 @@ hitlEventBus.on('hitl:events', (data: any) => {
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
+function sendJson(response: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}): void {
   const text = JSON.stringify(body);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(text),
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...extraHeaders,
   });
   response.end(text);
 }
@@ -208,7 +242,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/embassy/decisions
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/decisions") {
           const raw = await readBody(request);
           let parsed: any;
@@ -229,10 +262,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
           }
 
           const mem = inMemoryLedger.get(taskId);
-          const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "payment-gateway-service" : "redis-cluster");
+          const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "flapping-payment-worker" : "redis-cluster");
           const diff = mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
 
-          // Check anti-flapping circuit breaker
           if (decision === "APPROVED" && RollbackCircuit.isTripped(target)) {
             const reason = "Circuit breaker tripped: Service flapping continuously. Automated actions frozen.";
             inMemoryLedger.set(taskId, {
@@ -297,8 +329,9 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/workspace/ingest
+        // POST /api/v1/workspace/ingest (Hardened Bounded-Regex DLP & Deduplication Engine)
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
+          const tStart = performance.now();
           const raw = await readBody(request);
           let parsed: any = null;
           try {
@@ -322,12 +355,20 @@ export function createWedgeServer(options: { cwd: string }): Server {
             }];
           }
 
+          let processedCount = 0;
           for (const ev of eventList) {
+            // Deduplication Check
+            if (isDuplicateAlert(ev.service, ev.message)) {
+              continue;
+            }
+            processedCount++;
+
+            // Linear Bounded DLP Pattern Redaction (Protected against ReDoS)
             const original = ev.message;
             ev.message = ev.message
-              .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, "Bearer [REDACTED_SECRET]")
-              .replace(/sk-[A-Za-z0-9_\-]+/gi, "[REDACTED_API_KEY]")
-              .replace(/(password|client_secret)=([^\s&]+)/gi, "$1=[REDACTED]");
+              .replace(/Bearer\s+[A-Za-z0-9_\-\.]{1,512}/gi, "Bearer [REDACTED_SECRET]")
+              .replace(/sk-[A-Za-z0-9_\-]{8,128}/gi, "[REDACTED_API_KEY]")
+              .replace(/(password|client_secret)=([^\s&]{1,256})/gi, "$1=[REDACTED]");
 
             const scrubbed = ev.message !== original;
             if (scrubbed) totalScrubbed++;
@@ -338,7 +379,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                 service: ev.service,
                 severity: ev.severity,
-                message: ev.message,
+                message: ev.message.slice(0, 500),
                 scrubbed,
                 timestamp: new Date().toLocaleTimeString(),
               },
@@ -348,14 +389,14 @@ export function createWedgeServer(options: { cwd: string }): Server {
               await RollbackCircuit.onTelemetry(ev.service, ev.severity);
             }
 
-            if (ev.severity === "CRITICAL" && !ev.message.includes("regression")) {
+            if (ev.severity === "CRITICAL" && !ev.message.includes("regression") && !ev.message.includes("post-deploy")) {
               const evalScore = PolicyEvaluator.evaluateProposal(ev.service, 20, 0.15);
               const taskId = `hitl-task-${ev.service}-${Date.now().toString(36)}`;
               const proposal = {
                 taskId,
                 target: ev.service,
                 title: `Critical Anomaly on ${ev.service}`,
-                reason: ev.message,
+                reason: ev.message.slice(0, 200),
                 severity: "CRITICAL",
                 confidence: evalScore.confidence || 88,
                 blastRadius: evalScore.blastRadius || "15%",
@@ -391,16 +432,27 @@ export function createWedgeServer(options: { cwd: string }): Server {
             }
           }
 
-          sendJson(response, 202, {
-            status: "Accepted",
-            message: "Telemetry ingested and broadcasted.",
-            processed: eventList.length,
-          });
+          const processingMs = Math.max(1, Math.round(performance.now() - tStart));
+          sendJson(
+            response,
+            202,
+            {
+              status: "Accepted",
+              message: "Telemetry ingested and broadcasted.",
+              processed: processedCount,
+              suppressed: eventList.length - processedCount,
+              processingMs,
+            },
+            {
+              "Server-Timing": `ingest;dur=${processingMs}`,
+              "X-Response-Time-Ms": String(processingMs),
+            }
+          );
           return;
         }
 
         if (request.method === "GET" && url.pathname === "/api/v1/ops/metrics") {
-          sendJson(response, 200, { suppressedAlerts: 0, streamLagMs: 0 });
+          sendJson(response, 200, { suppressedAlerts: totalSuppressed, streamLagMs: 0 });
           return;
         }
 
@@ -408,6 +460,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           sendJson(response, 200, {
             ...metricsCollector.getSnapshot(),
             secretsScrubbed: totalScrubbed,
+            suppressedAlerts: totalSuppressed,
           });
           return;
         }
