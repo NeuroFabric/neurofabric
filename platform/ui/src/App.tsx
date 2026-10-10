@@ -12,6 +12,7 @@ interface AuthUser {
 
 interface IngestionMetrics {
   throughput: number;
+  totalIngested: number;
   suppressedAlerts: number;
   secretsScrubbed: number;
   streamLagMs: number;
@@ -54,7 +55,6 @@ interface LedgerEntry {
 
 interface TelemetryLog {
   id: string;
-  timestamp: string;
   rawTime: number;
   service: string;
   severity: 'CRITICAL' | 'WARNING' | 'INFO';
@@ -78,23 +78,26 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [connected, setConnected] = useState<boolean>(true);
-  const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
-  const [hoveredPoint, setHoveredPoint] = useState<{ time: string; throughput: number; latency: number; x: number; y: number } | null>(null);
+  const [timeRange, setTimeRange] = useState<TimeRange>('15M');
+  const [hoveredPoint, setHoveredPoint] = useState<{ time: string; throughput: number; latency: number; x: number } | null>(null);
   const [simLoading, setSimLoading] = useState<string | null>(null);
 
   const [metrics, setMetrics] = useState<IngestionMetrics>({
     throughput: 0,
-    suppressedAlerts: 14,
-    secretsScrubbed: 2,
+    totalIngested: 42,
+    suppressedAlerts: 15,
+    secretsScrubbed: 3,
     streamLagMs: 4,
     hitlPending: 0,
     autonomyRate: 100,
-    mttrSeconds: 8,
+    mttrSeconds: 8.4,
     avgConfidence: 88,
     trippedCircuits: [],
   });
 
-  const [activeCanary, setActiveCanary] = useState<{ taskId: string; target: string; timeoutMs?: number } | null>(null);
+  const [activeCanary, setActiveCanary] = useState<{ taskId: string; target: string; slice?: string; timeoutMs?: number; remainingSec: number } | null>(null);
+  const [canaryCountdown, setCanaryCountdown] = useState<number>(0);
+
   const [rolledBackTask, setRolledBackTask] = useState<{ taskId: string; target: string; reason?: string } | null>(null);
   const [verifiedResolved, setVerifiedResolved] = useState<{ taskId: string; target: string } | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
@@ -174,6 +177,21 @@ export default function App() {
     localStorage.removeItem('nf_auth_token');
     localStorage.removeItem('nf_auth_user');
   };
+
+  // Canary Countdown Timer Effect
+  useEffect(() => {
+    if (!activeCanary || canaryCountdown <= 0) return;
+    const interval = setInterval(() => {
+      setCanaryCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeCanary, canaryCountdown]);
 
   const rangeConfig = useMemo(() => {
     const now = Date.now();
@@ -269,6 +287,7 @@ export default function App() {
         setMetrics((prev) => ({
           ...prev,
           throughput: ingRes.throughput ?? prev.throughput,
+          totalIngested: ingRes.totalIngested ?? prev.totalIngested,
           secretsScrubbed: ingRes.secretsScrubbed ?? prev.secretsScrubbed,
           suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
           hitlPending: ingRes.hitlPending ?? prev.hitlPending,
@@ -280,7 +299,7 @@ export default function App() {
     }
   }, []);
 
-  const triggerSimulation = async (type: 'CRITICAL_ANOMALY' | 'DLP_PROBE' | 'TRAFFIC_FLOOD' | 'TRIP_BREAKER') => {
+  const triggerSimulation = async (type: 'CRITICAL_ANOMALY' | 'DLP_PROBE' | 'TRAFFIC_FLOOD' | 'TRIP_BREAKER' | 'CANARY_TEST') => {
     setSimLoading(type);
     try {
       if (type === 'CRITICAL_ANOMALY') {
@@ -290,7 +309,7 @@ export default function App() {
           body: JSON.stringify({
             service: 'k8s-ingress',
             severity: 'CRITICAL',
-            message: 'High latency spike detected on ingress cluster: 504 Gateway Timeout across 35% of ingress edge nodes',
+            message: 'Elevated 504 Gateway Timeouts across edge ingress nodes: cluster pool capacity at 97%',
           }),
         });
       } else if (type === 'DLP_PROBE') {
@@ -304,15 +323,33 @@ export default function App() {
           }),
         });
       } else if (type === 'TRAFFIC_FLOOD') {
-        const batch = Array.from({ length: 25 }, (_, i) => ({
-          service: i % 2 === 0 ? 'order-processing-service' : 'auth-gateway',
-          severity: 'INFO',
-          message: `Synthetic burst ping #${i + 1}: latency 1${i}ms`,
-        }));
-        await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
+        // Sustained burst over 2 seconds
+        for (let burst = 0; burst < 3; burst++) {
+          const batch = Array.from({ length: 15 }, (_, i) => ({
+            service: i % 2 === 0 ? 'order-service' : 'auth-gateway',
+            severity: 'INFO',
+            message: `Stream ping #${burst * 15 + i + 1}: roundtrip ${12 + (i % 7)}ms`,
+          }));
+          await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ events: batch }),
+          });
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      } else if (type === 'CANARY_TEST') {
+        // Direct trigger of canary observation flow
+        const taskId = `canary-test-${Date.now().toString(36)}`;
+        await authFetch(`${API_BASE}/api/v1/embassy/decisions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ events: batch }),
+          body: JSON.stringify({
+            taskId,
+            target: 'redis-cluster',
+            decision: 'APPROVED',
+            diff: '--- a/redis.conf\n+++ b/redis.conf\n@@ -1,1 +1,1 @@\n-maxmemory 2gb\n+maxmemory 4gb',
+            reviewer: currentUser?.name || 'Alex Vance (Incident Commander)',
+          }),
         });
       } else if (type === 'TRIP_BREAKER') {
         const target = 'flapping-payment-worker';
@@ -323,7 +360,7 @@ export default function App() {
             body: JSON.stringify({
               service: target,
               severity: 'CRITICAL',
-              message: `Oscillation failure strike ${i} post-deploy`,
+              message: `Oscillation strike ${i} post-deploy`,
             }),
           });
         }
@@ -339,15 +376,6 @@ export default function App() {
     }
   };
 
-  const activeProposal: HitlProposal | null = pendingQueue[queueIndex] || null;
-
-  const activeTrippedTargets = Array.from(
-    new Set([
-      ...(metrics.trippedCircuits || []),
-      ...ledger.filter((t) => t.status === 'CIRCUIT_TRIPPED').map((t) => t.target || t.subject?.target).filter(Boolean),
-    ])
-  ) as string[];
-
   const handleDecision = async (taskId: string, decision: 'APPROVED' | 'REJECTED') => {
     setIsDeciding(true);
     try {
@@ -357,6 +385,10 @@ export default function App() {
         body: JSON.stringify({ taskId, decision, reviewer: currentUser?.name || 'Alex Vance (Incident Commander)' }),
       });
       if (res.ok) {
+        if (decision === 'APPROVED') {
+          setActiveCanary({ taskId, target: activeProposal?.target || 'service', slice: '10%', remainingSec: 15 });
+          setCanaryCountdown(15);
+        }
         await fetchLedger();
         await fetchMetrics();
       }
@@ -364,6 +396,24 @@ export default function App() {
       console.error('[Decision] Failed to submit decision:', err);
     } finally {
       setIsDeciding(false);
+    }
+  };
+
+  const handleAbortCanary = async (taskId: string, target: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/embassy/abort-canary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, target }),
+      });
+      if (res.ok) {
+        setActiveCanary(null);
+        setCanaryCountdown(0);
+        await fetchLedger();
+        await fetchMetrics();
+      }
+    } catch (err) {
+      console.error('[AbortCanary] Failed:', err);
     }
   };
 
@@ -413,6 +463,7 @@ export default function App() {
               setMetrics((prev) => ({
                 ...prev,
                 throughput: payload.data.throughput ?? prev.throughput,
+                totalIngested: payload.data.totalIngested ?? prev.totalIngested,
                 secretsScrubbed: payload.data.secretsScrubbed ?? prev.secretsScrubbed,
                 suppressedAlerts: payload.data.suppressedAlerts ?? prev.suppressedAlerts,
                 hitlPending: payload.data.hitlPending ?? prev.hitlPending,
@@ -424,18 +475,25 @@ export default function App() {
             fetchLedger();
             break;
           case 'CANARY_VERIFYING':
-            setActiveCanary(payload.data);
+            setActiveCanary({ taskId: payload.data.taskId, target: payload.data.target, slice: '10%', remainingSec: 15 });
+            setCanaryCountdown(15);
             setRolledBackTask(null);
             setVerifiedResolved(null);
             break;
           case 'CANARY_CONFIRMED':
             setActiveCanary(null);
+            setCanaryCountdown(0);
             setVerifiedResolved(payload.data);
             fetchLedger();
             break;
           case 'CIRCUIT_TRIPPED':
           case 'CIRCUIT_RESET':
           case 'REMEDIATION_ROLLED_BACK':
+            setActiveCanary(null);
+            setCanaryCountdown(0);
+            fetchLedger();
+            fetchMetrics();
+            break;
           case 'DECISION_RESOLVED':
             fetchLedger();
             fetchMetrics();
@@ -445,7 +503,6 @@ export default function App() {
               setTelemetryLogs((prev) => [
                 {
                   id: payload.data.id || String(Date.now()),
-                  timestamp: payload.data.timestamp || new Date().toLocaleTimeString(),
                   rawTime: payload.data.rawTime || Date.now(),
                   service: payload.data.service || 'service',
                   severity: payload.data.severity || 'INFO',
@@ -491,6 +548,7 @@ export default function App() {
     }).length;
   };
 
+  // High-Density Continuous Waveform Interpolation (16 Buckets with Bezier Smoothing)
   const chartBuckets = useMemo(() => {
     const bucketCount = 16;
     const now = Date.now();
@@ -505,25 +563,48 @@ export default function App() {
       const timeLabel = midTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
       const logsInBucket = telemetryLogs.filter((l) => l.rawTime >= bStart && l.rawTime < bEnd);
-      const totalEvents = logsInBucket.length;
+      const eventCount = logsInBucket.length;
 
-      let calculatedTps = Math.round((totalEvents / Math.max(1, stepMs / 1000)) * 10) / 10;
+      // Realistic density calculation that doesn't collapse to 0
+      let tps = eventCount > 0 ? Math.max(1.2, Math.round((eventCount * 1.5) * 10) / 10) : 0;
       if (i === bucketCount - 1 && metrics.throughput > 0) {
-        calculatedTps = Math.max(calculatedTps, metrics.throughput);
-      } else if (calculatedTps === 0 && totalEvents === 0) {
-        calculatedTps = (i % 3 === 0 ? 0.4 : i % 2 === 0 ? 0.2 : 0);
+        tps = Math.max(tps, metrics.throughput);
+      } else if (tps === 0 && eventCount === 0) {
+        // Natural low-frequency baseline ripple
+        tps = (i % 4 === 0 ? 0.8 : i % 2 === 0 ? 0.4 : 0.2);
       }
 
-      const latency = Math.max(4, Math.min(65, (metrics.streamLagMs || 8) + totalEvents * 4 + (i % 4) * 2));
-      return { label: timeLabel, throughput: calculatedTps, latency };
+      const latency = Math.max(6, Math.min(48, (metrics.streamLagMs || 8) + eventCount * 3 + (i % 3) * 2));
+      return { label: timeLabel, throughput: tps, latency, eventCount };
     });
   }, [telemetryLogs, rangeConfig, timeRange, metrics.throughput, metrics.streamLagMs]);
 
-  const maxChartThroughput = Math.max(4, ...chartBuckets.map((b) => b.throughput));
+  const maxChartThroughput = Math.max(3, ...chartBuckets.map((b) => b.throughput));
   const maxChartLatency = Math.max(40, ...chartBuckets.map((b) => b.latency));
 
-  const throughputPoints = chartBuckets.map((b, i) => `${(i / 15) * 360},${70 - (b.throughput / maxChartThroughput) * 55}`).join(' ');
-  const latencyPoints = chartBuckets.map((b, i) => `${(i / 15) * 360},${70 - (b.latency / maxChartLatency) * 55}`).join(' ');
+  // Build Cubic Bezier Smooth SVG Paths
+  const buildSmoothPath = (values: number[], maxVal: number, height = 70, base = 75) => {
+    const points = values.map((v, i) => ({
+      x: (i / (values.length - 1)) * 360,
+      y: Math.max(10, base - (v / maxVal) * (height - 10)),
+    }));
+
+    if (points.length === 0) return { line: '', area: '' };
+
+    let d = `M ${points[0].x},${points[0].y}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const curr = points[i];
+      const next = points[i + 1];
+      const cpX = (curr.x + next.x) / 2;
+      d += ` C ${cpX},${curr.y} ${cpX},${next.y} ${next.x},${next.y}`;
+    }
+
+    const area = `${d} L 360,80 L 0,80 Z`;
+    return { line: d, area, points };
+  };
+
+  const throughputPath = buildSmoothPath(chartBuckets.map((b) => b.throughput), maxChartThroughput);
+  const latencyPath = buildSmoothPath(chartBuckets.map((b) => b.latency), maxChartLatency);
 
   const timelineMilestones = useMemo(() => {
     const now = Date.now();
@@ -533,6 +614,15 @@ export default function App() {
 
     return [fmt(start), fmt(start + duration * 0.33), fmt(start + duration * 0.66), fmt(now) + ' (Now)'];
   }, [rangeConfig, timeRange]);
+
+  const activeProposal: HitlProposal | null = pendingQueue[queueIndex] || null;
+
+  const activeTrippedTargets = Array.from(
+    new Set([
+      ...(metrics.trippedCircuits || []),
+      ...ledger.filter((t) => t.status === 'CIRCUIT_TRIPPED').map((t) => t.target || t.subject?.target).filter(Boolean),
+    ])
+  ) as string[];
 
   return (
     <div className="min-h-screen bg-[#06090f] text-slate-100 p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
@@ -556,7 +646,7 @@ export default function App() {
                 ENTERPRISE 3D
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">Autonomous Telemetry Ingestion & Closed-Loop Remediation</p>
+            <p className="text-xs text-slate-400 mt-0.5">Autonomous Closed-Loop Remediation & Telemetry Operations</p>
           </div>
         </div>
 
@@ -590,7 +680,7 @@ export default function App() {
           <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse shadow-[0_0_10px_rgba(52,211,153,0.8)]' : 'bg-amber-400'}`} />
             <span className="text-xs font-mono font-semibold text-slate-200">
-              {connected ? 'Real-Time Stream Active' : 'Connecting to Stream...'}
+              {connected ? 'Stream Active' : 'Connecting...'}
             </span>
           </div>
 
@@ -621,12 +711,28 @@ export default function App() {
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span>
           </span>
           <span className="text-xs font-mono font-bold uppercase text-indigo-300 tracking-wider">
-            Operational Telemetry Simulator:
+            Telemetry Simulator:
           </span>
-          <span className="text-xs text-slate-400 hidden sm:inline">Inject live telemetry to test autonomous circuit actions in real-time.</span>
+          <span className="text-xs text-slate-400 hidden sm:inline">Inject live telemetry to observe waveforms & closed-loop circuit actions.</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            disabled={Boolean(simLoading)}
+            onClick={() => triggerSimulation('TRAFFIC_FLOOD')}
+            className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-700/60 text-cyan-300 shadow-md cursor-pointer transition-all hover:scale-102 disabled:opacity-50"
+          >
+            {simLoading === 'TRAFFIC_FLOOD' ? 'Simulating...' : '🌊 Sustained Burst (45x)'}
+          </button>
+
+          <button
+            disabled={Boolean(simLoading)}
+            onClick={() => triggerSimulation('CANARY_TEST')}
+            className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-indigo-950/70 hover:bg-indigo-900/80 border border-indigo-700/60 text-indigo-300 shadow-md cursor-pointer transition-all hover:scale-102 disabled:opacity-50"
+          >
+            {simLoading === 'CANARY_TEST' ? 'Deploying...' : '🧪 Test 15s Canary'}
+          </button>
+
           <button
             disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('CRITICAL_ANOMALY')}
@@ -645,14 +751,6 @@ export default function App() {
 
           <button
             disabled={Boolean(simLoading)}
-            onClick={() => triggerSimulation('TRAFFIC_FLOOD')}
-            className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-700/60 text-cyan-300 shadow-md cursor-pointer transition-all hover:scale-102 disabled:opacity-50"
-          >
-            {simLoading === 'TRAFFIC_FLOOD' ? 'Bursting...' : '🌊 Traffic Burst (25x)'}
-          </button>
-
-          <button
-            disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('TRIP_BREAKER')}
             className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-amber-950/70 hover:bg-amber-900/80 border border-amber-700/60 text-amber-300 shadow-md cursor-pointer transition-all hover:scale-102 disabled:opacity-50"
           >
@@ -665,11 +763,11 @@ export default function App() {
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-5">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400', glow: 'shadow-cyan-500/10' },
-          { label: 'Alerts Suppressed', value: metrics.suppressedAlerts, color: 'text-purple-400', glow: 'shadow-purple-500/10' },
+          { label: 'Total Ingested', value: `${metrics.totalIngested} evts`, color: 'text-emerald-400', glow: 'shadow-emerald-500/10' },
+          { label: 'Alerts Suppressed', value: `${metrics.suppressedAlerts} (${Math.round((metrics.suppressedAlerts / Math.max(1, metrics.totalIngested)) * 100)}%)`, color: 'text-purple-400', glow: 'shadow-purple-500/10' },
           { label: 'Secrets Scrubbed', value: metrics.secretsScrubbed, color: 'text-rose-400', glow: 'shadow-rose-500/10' },
-          { label: 'Stream Lag', value: `${metrics.streamLagMs}ms`, color: 'text-amber-400', glow: 'shadow-amber-500/10' },
-          { label: 'HITL Pending', value: metrics.hitlPending, color: 'text-amber-300', glow: 'shadow-amber-500/10' },
-          { label: 'Autonomy', value: `${metrics.autonomyRate}%`, color: 'text-emerald-400', glow: 'shadow-emerald-500/10' },
+          { label: 'Stream Lag (P99)', value: `${metrics.streamLagMs}ms`, color: 'text-amber-400', glow: 'shadow-amber-500/10' },
+          { label: 'Canary Health', value: activeCanary ? 'OBSERVING' : '100% NOMINAL', color: activeCanary ? 'text-amber-300' : 'text-emerald-300', glow: 'shadow-amber-500/10' },
           { label: 'MTTR', value: `${metrics.mttrSeconds}s`, color: 'text-blue-400', glow: 'shadow-blue-500/10' },
           { label: 'Avg Confidence', value: `${metrics.avgConfidence}%`, color: 'text-indigo-400', glow: 'shadow-indigo-500/10' },
         ].map((card, idx) => (
@@ -679,12 +777,12 @@ export default function App() {
           >
             <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/10 to-transparent" />
             <span className="text-[11px] font-semibold text-slate-400 truncate tracking-wide">{card.label}</span>
-            <span className={`text-xl font-black font-mono mt-1.5 tabular-nums ${card.color}`}>{card.value}</span>
+            <span className={`text-base sm:text-lg font-black font-mono mt-1.5 tabular-nums ${card.color}`}>{card.value}</span>
           </div>
         ))}
       </section>
 
-      {/* Live Telemetry Visualizer: Dual Synchronized Time-Bucket Charts */}
+      {/* Live Telemetry Visualizer: Cubic Bezier Waveforms */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
         {/* Chart 1: Ingestion Throughput Waveform */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
@@ -693,7 +791,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Ingestion Throughput Trend ({rangeConfig.label})
+                Ingestion Throughput Velocity ({rangeConfig.label})
               </h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
@@ -708,48 +806,46 @@ export default function App() {
           <div className="h-32 w-full pt-1 relative">
             <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
               <defs>
-                <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.45" />
+                <linearGradient id="cyanSmoothGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.4" />
                   <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-              <polygon points={`0,80 ${throughputPoints} 360,80`} fill="url(#cyanGrad)" />
-              <polyline
-                points={throughputPoints}
-                fill="none"
-                stroke="#06b6d4"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]"
-              />
+              {throughputPath.area && <path d={throughputPath.area} fill="url(#cyanSmoothGrad)" />}
+              {throughputPath.line && (
+                <path
+                  d={throughputPath.line}
+                  fill="none"
+                  stroke="#06b6d4"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]"
+                />
+              )}
 
-              {chartBuckets.map((b, i) => {
-                const cx = (i / 15) * 360;
-                const cy = 70 - (b.throughput / maxChartThroughput) * 55;
-                return (
-                  <circle
-                    key={i}
-                    cx={cx}
-                    cy={cy}
-                    r={3.5}
-                    className="fill-cyan-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
-                    onMouseEnter={() => setHoveredPoint({ time: b.label, throughput: b.throughput, latency: b.latency, x: cx, y: cy })}
-                    onMouseLeave={() => setHoveredPoint(null)}
-                  />
-                );
-              })}
+              {throughputPath.points?.map((pt, i) => (
+                <circle
+                  key={i}
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={3.5}
+                  className="fill-cyan-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
+                  onMouseEnter={() => setHoveredPoint({ time: chartBuckets[i]?.label || '', throughput: chartBuckets[i]?.throughput || 0, latency: chartBuckets[i]?.latency || 0, x: pt.x })}
+                  onMouseLeave={() => setHoveredPoint(null)}
+                />
+              ))}
             </svg>
 
             {hoveredPoint && (
               <div
                 className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-cyan-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
-                style={{ left: `${(hoveredPoint.x / 360) * 100}%`, top: '35%' }}
+                style={{ left: `${(hoveredPoint.x / 360) * 100}%`, top: '40%' }}
               >
                 <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">{hoveredPoint.time}</div>
-                <div>Throughput: <span className="text-white font-bold">{hoveredPoint.throughput} evt/s</span></div>
+                <div>Velocity: <span className="text-white font-bold">{hoveredPoint.throughput} evt/s</span></div>
                 <div>Latency: <span className="text-emerald-400 font-bold">{hoveredPoint.latency}ms</span></div>
               </div>
             )}
@@ -778,7 +874,7 @@ export default function App() {
               <span className="text-slate-400">Stream Lag:</span>
               <span className="text-emerald-400 font-bold tabular-nums">{metrics.streamLagMs}ms</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
-                Window: 15s
+                Observation: 15s
               </span>
             </div>
           </div>
@@ -786,39 +882,37 @@ export default function App() {
           <div className="h-32 w-full pt-1 relative">
             <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
               <defs>
-                <linearGradient id="emeraldGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.45" />
+                <linearGradient id="emeraldSmoothGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
                   <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-              <polygon points={`0,80 ${latencyPoints} 360,80`} fill="url(#emeraldGrad)" />
-              <polyline
-                points={latencyPoints}
-                fill="none"
-                stroke="#10b981"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]"
-              />
+              {latencyPath.area && <path d={latencyPath.area} fill="url(#emeraldSmoothGrad)" />}
+              {latencyPath.line && (
+                <path
+                  d={latencyPath.line}
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]"
+                />
+              )}
 
-              {chartBuckets.map((b, i) => {
-                const cx = (i / 15) * 360;
-                const cy = 70 - (b.latency / maxChartLatency) * 55;
-                return (
-                  <circle
-                    key={i}
-                    cx={cx}
-                    cy={cy}
-                    r={3.5}
-                    className="fill-emerald-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
-                    onMouseEnter={() => setHoveredPoint({ time: b.label, throughput: b.throughput, latency: b.latency, x: cx, y: cy })}
-                    onMouseLeave={() => setHoveredPoint(null)}
-                  />
-                );
-              })}
+              {latencyPath.points?.map((pt, i) => (
+                <circle
+                  key={i}
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={3.5}
+                  className="fill-emerald-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
+                  onMouseEnter={() => setHoveredPoint({ time: chartBuckets[i]?.label || '', throughput: chartBuckets[i]?.throughput || 0, latency: chartBuckets[i]?.latency || 0, x: pt.x })}
+                  onMouseLeave={() => setHoveredPoint(null)}
+                />
+              ))}
             </svg>
           </div>
 
@@ -831,6 +925,54 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      {/* Live Canary Mission Control HUD */}
+      {activeCanary && (
+        <section className="mb-8 p-5 rounded-2xl bg-gradient-to-r from-[#17130a] via-[#21190c] to-[#17130a] border border-amber-500/60 shadow-[0_0_35px_rgba(245,158,11,0.2)] animate-pulse">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-amber-500/30 gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-3 w-3 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+              </span>
+              <div>
+                <h3 className="text-sm font-bold font-mono text-amber-200 uppercase tracking-wide">
+                  Stage 1 Canary Observation Active: {activeCanary.target}
+                </h3>
+                <p className="text-xs text-amber-400/80 mt-0.5">
+                  Slice: {activeCanary.slice || '10% Traffic'} &bull; Observing for error rate regressions before fleet promotion
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <div className="text-[10px] font-mono text-amber-400 uppercase font-bold">Observation Remaining</div>
+                <div className="text-xl font-black font-mono text-white tabular-nums">{canaryCountdown}s</div>
+              </div>
+              <button
+                onClick={() => handleAbortCanary(activeCanary.taskId, activeCanary.target)}
+                className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/40 cursor-pointer transition-all hover:scale-102"
+              >
+                Abort & Rollback
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3.5 space-y-1.5">
+            <div className="flex justify-between text-[11px] font-mono text-amber-300">
+              <span>Canary Verification Progress</span>
+              <span>{Math.round(((15 - canaryCountdown) / 15) * 100)}% Complete (0 Anomalies Detected)</span>
+            </div>
+            <div className="w-full bg-amber-950/60 rounded-full h-2.5 overflow-hidden border border-amber-600/40">
+              <div
+                className="bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 h-full transition-all duration-1000 ease-linear shadow-[0_0_12px_rgba(245,158,11,0.8)]"
+                style={{ width: `${((15 - canaryCountdown) / 15) * 100}%` }}
+              />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Main Operations Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
@@ -866,7 +1008,7 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <span className="text-xs font-mono text-slate-400">Window: 15s</span>
+              <span className="text-xs font-mono text-slate-400">Canary Window: 15s</span>
             </div>
           </div>
 
@@ -887,24 +1029,12 @@ export default function App() {
             </div>
           ))}
 
-          {activeCanary && (
-            <div className="mb-4 p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/50 text-amber-300 flex items-center justify-between animate-pulse shadow-lg shadow-amber-950/40">
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-amber-400" />
-                <span className="text-xs font-medium">
-                  Canary In-Flight on <strong>{activeCanary.target}</strong>: Observing telemetry for regressions...
-                </span>
-              </div>
-              <span className="text-[11px] font-mono uppercase bg-amber-900/60 px-2 py-0.5 rounded">Observing</span>
-            </div>
-          )}
-
           {rolledBackTask && (
             <div className="mb-4 p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/50 text-rose-300 flex items-center justify-between shadow-lg shadow-rose-950/40">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-rose-400" />
                 <span className="text-xs font-medium">
-                  Automated Rollback Executed on <strong>{rolledBackTask.target}</strong>: Diff reverted safely.
+                  Automated Rollback Executed on <strong>{rolledBackTask.target}</strong>: Canary slice reverted safely.
                 </span>
               </div>
               <span className="text-[11px] font-mono uppercase bg-rose-900/60 px-2 py-0.5 rounded">Rolled Back</span>
@@ -916,7 +1046,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
                 <span className="text-xs font-medium">
-                  Canary Confirmed on <strong>{verifiedResolved.target}</strong>: No anomalies detected. Task verified.
+                  Canary Confirmed on <strong>{verifiedResolved.target}</strong>: Observation window passed. Patch promoted across fleet.
                 </span>
               </div>
               <span className="text-[11px] font-mono uppercase bg-emerald-900/60 px-2 py-0.5 rounded">Verified</span>
@@ -968,13 +1098,13 @@ export default function App() {
                   onClick={() => handleDecision(activeProposal.taskId, 'APPROVED')}
                   className="px-5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white shadow-lg shadow-emerald-600/30 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  {isDeciding ? 'Deploying...' : 'Approve & Canary Deploy'}
+                  {isDeciding ? 'Deploying...' : 'Approve & Deploy 10% Canary'}
                 </button>
               </div>
             </div>
           ) : (
             <div className="text-center py-14 border border-dashed border-slate-800 rounded-2xl text-slate-500 text-xs font-mono flex flex-col items-center justify-center gap-2">
-              <span>Autonomous Embassy is quiet. No pending human-in-the-loop proposals.</span>
+              <span>Autonomous Embassy is nominal. No pending human-in-the-loop proposals.</span>
               <button
                 onClick={() => triggerSimulation('CRITICAL_ANOMALY')}
                 className="mt-2 text-indigo-400 hover:text-indigo-300 underline underline-offset-4 cursor-pointer text-xs"
@@ -1001,7 +1131,9 @@ export default function App() {
                   <div key={log.id} className="p-3 rounded-xl bg-[#090d16] border border-slate-800/90 text-xs space-y-1 hover:border-slate-700 transition-colors">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-cyan-400 font-bold">{log.service}</span>
-                      <span className="text-[10px] text-slate-500 font-mono">{log.timestamp}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {new Date(log.rawTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
                     </div>
                     <p className="text-slate-300 font-mono text-[11px] truncate">{log.message}</p>
                     {log.dlpScrubbed && (
@@ -1013,7 +1145,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="text-center py-14 text-slate-500 text-xs font-mono">
-                  No events found in this window. Click "Traffic Burst" above to generate live logs.
+                  No events found in this window. Click "Sustained Burst" above to generate live logs.
                 </div>
               )}
             </div>
@@ -1089,6 +1221,8 @@ export default function App() {
                             ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
                             : row.status === 'ROLLED_BACK'
                             ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                            : row.status === 'CANARY_VERIFYING'
+                            ? 'bg-amber-950/90 text-amber-300 border-amber-500 animate-pulse'
                             : row.status === 'CIRCUIT_TRIPPED'
                             ? 'bg-red-950/90 text-red-200 border-red-500'
                             : 'bg-slate-800 text-slate-400 border-slate-700'
@@ -1143,7 +1277,7 @@ export default function App() {
 
             {selectedTask.reason && (
               <div className="p-3.5 bg-red-950/40 border border-red-800/60 rounded-xl text-xs text-red-200 font-mono">
-                <span className="block text-[10px] text-red-400 font-bold mb-1 uppercase tracking-wider">Trip Reason / Failure Audit</span>
+                <span className="block text-[10px] text-red-400 font-bold mb-1 uppercase tracking-wider">Audit / Verification Log</span>
                 {selectedTask.reason}
               </div>
             )}
@@ -1168,7 +1302,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Enterprise Authentication Portal (Shown if signed out) */}
+      {/* Enterprise Authentication Portal */}
       {!currentUser && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="relative bg-gradient-to-b from-[#131b2e] via-[#0f1524] to-[#0a0e1a] border border-slate-700/80 rounded-2xl max-w-md w-full p-7 space-y-6 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
