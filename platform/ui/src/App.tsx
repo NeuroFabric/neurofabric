@@ -4,6 +4,12 @@ const API_BASE = (import.meta.env.VITE_API_URL || 'https://neurofabric-backend.o
 
 type TimeRange = '5M' | '15M' | '1H' | '24H' | 'ALL';
 
+interface AuthUser {
+  username: string;
+  role: string;
+  name: string;
+}
+
 interface IngestionMetrics {
   throughput: number;
   suppressedAlerts: number;
@@ -57,6 +63,17 @@ interface TelemetryLog {
 }
 
 export default function App() {
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    const cached = localStorage.getItem('nf_auth_user');
+    return cached ? JSON.parse(cached) : null;
+  });
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('nf_auth_token'));
+  const [loginEmail, setLoginEmail] = useState<string>('commander@neurofabric.io');
+  const [loginPassword, setLoginPassword] = useState<string>('Commander2026!');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+
   const [connected, setConnected] = useState<boolean>(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('15M');
   const [hoveredPoint, setHoveredPoint] = useState<{ time: string; throughput: number; latency: number; x: number; y: number } | null>(null);
@@ -85,41 +102,67 @@ export default function App() {
   const [pendingQueue, setPendingQueue] = useState<HitlProposal[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(0);
 
-  // Time Range Window Calculations
+  // Authenticated fetch helper
+  const authFetch = useCallback(
+    async (url: string, options: RequestInit = {}) => {
+      const headers = new Headers(options.headers || {});
+      if (authToken) {
+        headers.set('Authorization', `Bearer ${authToken}`);
+      }
+      return fetch(url, { ...options, headers });
+    },
+    [authToken]
+  );
+
+  const handleLogin = async (emailOverride?: string, passOverride?: string) => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    const email = emailOverride || loginEmail;
+    const pass = passOverride || loginPassword;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: email, password: pass }),
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setAuthToken(data.token);
+        setCurrentUser(data.user);
+        localStorage.setItem('nf_auth_token', data.token);
+        localStorage.setItem('nf_auth_user', JSON.stringify(data.user));
+      } else {
+        setLoginError(data.message || 'Authentication failed. Check credentials.');
+      }
+    } catch {
+      setLoginError('Could not reach authentication server.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    setCurrentUser(null);
+    localStorage.removeItem('nf_auth_token');
+    localStorage.removeItem('nf_auth_user');
+  };
+
   const rangeConfig = useMemo(() => {
     const now = Date.now();
     let durationMs = 15 * 60 * 1000;
     let label = '15 Minutes';
 
     switch (timeRange) {
-      case '5M':
-        durationMs = 5 * 60 * 1000;
-        label = '5 Minutes';
-        break;
-      case '15M':
-        durationMs = 15 * 60 * 1000;
-        label = '15 Minutes';
-        break;
-      case '1H':
-        durationMs = 60 * 60 * 1000;
-        label = '1 Hour';
-        break;
-      case '24H':
-        durationMs = 24 * 60 * 60 * 1000;
-        label = '24 Hours';
-        break;
-      case 'ALL':
-        durationMs = 48 * 60 * 60 * 1000;
-        label = 'All Historical';
-        break;
+      case '5M': durationMs = 5 * 60 * 1000; label = '5 Minutes'; break;
+      case '15M': durationMs = 15 * 60 * 1000; label = '15 Minutes'; break;
+      case '1H': durationMs = 60 * 60 * 1000; label = '1 Hour'; break;
+      case '24H': durationMs = 24 * 60 * 60 * 1000; label = '24 Hours'; break;
+      case 'ALL': durationMs = 48 * 60 * 60 * 1000; label = 'All Historical'; break;
     }
 
-    return {
-      startTime: now - durationMs,
-      endTime: now,
-      durationMs,
-      label,
-    };
+    return { startTime: now - durationMs, endTime: now, durationMs, label };
   }, [timeRange]);
 
   const fetchLedger = useCallback(async () => {
@@ -187,16 +230,23 @@ export default function App() {
   ) as string[];
 
   const handleDecision = async (taskId: string, decision: 'APPROVED' | 'REJECTED') => {
+    if (!currentUser || currentUser.role === 'VIEWER_READONLY') {
+      alert('Your role does not have authorization to approve or reject remediation patches.');
+      return;
+    }
     setIsDeciding(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/embassy/decisions`, {
+      const res = await authFetch(`${API_BASE}/api/v1/embassy/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, decision, reviewer: 'Incident Commander' }),
+        body: JSON.stringify({ taskId, decision, reviewer: currentUser.name }),
       });
       if (res.ok) {
         await fetchLedger();
         await fetchMetrics();
+      } else {
+        const err = await res.json();
+        alert(`Action rejected: ${err.message || err.error}`);
       }
     } catch (err) {
       console.error('[Decision] Failed to submit decision:', err);
@@ -206,23 +256,33 @@ export default function App() {
   };
 
   const handleResetBreaker = async (target: string) => {
+    if (!currentUser || currentUser.role === 'VIEWER_READONLY') {
+      alert('Requires Operator or Commander privileges to reset circuit breakers.');
+      return;
+    }
     try {
-      await fetch(`${API_BASE}/api/v1/embassy/reset-breaker`, {
+      const res = await authFetch(`${API_BASE}/api/v1/embassy/reset-breaker`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target }),
       });
-      setSelectedTask(null);
-      await fetchLedger();
-      await fetchMetrics();
+      if (res.ok) {
+        setSelectedTask(null);
+        await fetchLedger();
+        await fetchMetrics();
+      }
     } catch (err) {
       console.error('[ResetBreaker] Failed:', err);
     }
   };
 
   const handleBatchReject = async () => {
+    if (!currentUser || currentUser.role === 'VIEWER_READONLY') {
+      alert('Read-only users cannot perform batch dismissals.');
+      return;
+    }
     try {
-      await fetch(`${API_BASE}/api/v1/embassy/batch-decisions`, {
+      await authFetch(`${API_BASE}/api/v1/embassy/batch-decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'REJECT_ALL' }),
@@ -253,10 +313,7 @@ export default function App() {
         if (!payload || !payload.type) return;
 
         switch (payload.type) {
-          case 'connected':
-            setConnected(true);
-            break;
-
+          case 'connected': setConnected(true); break;
           case 'INGESTION_METRICS_UPDATE':
             if (payload.data) {
               setMetrics((prev) => ({
@@ -269,23 +326,17 @@ export default function App() {
               }));
             }
             break;
-
-          case 'HITL_PROPOSAL':
-            fetchLedger();
-            break;
-
+          case 'HITL_PROPOSAL': fetchLedger(); break;
           case 'CANARY_VERIFYING':
             setActiveCanary(payload.data);
             setRolledBackTask(null);
             setVerifiedResolved(null);
             break;
-
           case 'CANARY_CONFIRMED':
             setActiveCanary(null);
             setVerifiedResolved(payload.data);
             fetchLedger();
             break;
-
           case 'CIRCUIT_TRIPPED':
           case 'CIRCUIT_RESET':
           case 'REMEDIATION_ROLLED_BACK':
@@ -293,7 +344,6 @@ export default function App() {
             fetchLedger();
             fetchMetrics();
             break;
-
           case 'ALERT_INGESTED':
             if (payload.data) {
               setTelemetryLogs((prev) => [
@@ -310,12 +360,9 @@ export default function App() {
               ]);
             }
             break;
-
-          default:
-            break;
         }
       } catch (err) {
-        console.error('[SSE] Message parsing error:', err);
+        console.error('[SSE] Error:', err);
       }
     };
 
@@ -325,7 +372,6 @@ export default function App() {
     };
   }, [fetchLedger, fetchMetrics]);
 
-  // Filtered by Time Range + Status
   const filteredLogs = useMemo(() => {
     return telemetryLogs.filter((log) => log.rawTime >= rangeConfig.startTime);
   }, [telemetryLogs, rangeConfig.startTime]);
@@ -348,61 +394,42 @@ export default function App() {
     }).length;
   };
 
-  // Dynamic Time-Bucket Chart Generator (16 Proportional Buckets)
   const chartBuckets = useMemo(() => {
     const bucketCount = 16;
-    const { startTime, endTime, durationMs } = rangeConfig;
+    const { startTime, durationMs } = rangeConfig;
     const stepMs = durationMs / bucketCount;
 
-    const buckets = Array.from({ length: bucketCount }, (_, i) => {
+    return Array.from({ length: bucketCount }, (_, i) => {
       const bStart = startTime + i * stepMs;
       const bEnd = bStart + stepMs;
       const midTime = new Date(bStart + stepMs / 2);
       const timeLabel = midTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-      // Aggregate real events falling in this bucket
       const logsInBucket = telemetryLogs.filter((l) => l.rawTime >= bStart && l.rawTime < bEnd);
       const tasksInBucket = ledger.filter((t) => (t.createdTimestamp || 0) >= bStart && (t.createdTimestamp || 0) < bEnd);
-
       const totalEvents = logsInBucket.length + tasksInBucket.length;
-      // Convert to evt/s rate based on bucket duration in seconds
       const bucketSeconds = Math.max(1, stepMs / 1000);
       let calculatedTps = Math.round((totalEvents / bucketSeconds) * 10) / 10;
 
-      // Ensure the latest bucket reflects live metric
       if (i === bucketCount - 1 && metrics.throughput > 0) {
         calculatedTps = Math.max(calculatedTps, metrics.throughput);
       }
 
-      // Latency estimation per bucket
       const latency = Math.max(4, Math.min(65, (metrics.streamLagMs || 8) + (totalEvents > 0 ? totalEvents * 3 : 0)));
 
-      return {
-        label: timeLabel,
-        throughput: calculatedTps,
-        latency,
-      };
+      return { label: timeLabel, throughput: calculatedTps, latency };
     });
-
-    return buckets;
   }, [rangeConfig, telemetryLogs, ledger, metrics.throughput, metrics.streamLagMs]);
 
   const maxChartThroughput = Math.max(5, ...chartBuckets.map((b) => b.throughput));
   const maxChartLatency = Math.max(50, ...chartBuckets.map((b) => b.latency));
 
-  const throughputPoints = chartBuckets
-    .map((b, i) => `${(i / 15) * 360},${70 - (b.throughput / maxChartThroughput) * 55}`)
-    .join(' ');
+  const throughputPoints = chartBuckets.map((b, i) => `${(i / 15) * 360},${70 - (b.throughput / maxChartThroughput) * 55}`).join(' ');
+  const latencyPoints = chartBuckets.map((b, i) => `${(i / 15) * 360},${70 - (b.latency / maxChartLatency) * 55}`).join(' ');
 
-  const latencyPoints = chartBuckets
-    .map((b, i) => `${(i / 15) * 360},${70 - (b.latency / maxChartLatency) * 55}`)
-    .join(' ');
-
-  // Dynamic X-Axis Milestone Labels (4 Markers)
   const timelineMilestones = useMemo(() => {
     const { startTime, endTime } = rangeConfig;
     const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
     return [
       formatTime(startTime),
       formatTime(startTime + (endTime - startTime) * 0.33),
@@ -413,14 +440,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#070a10] text-slate-100 p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Ambient Depth Background Glows */}
+      {/* Dynamic Background Ambient Lighting */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden -z-10">
         <div className="absolute -top-32 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[128px]" />
         <div className="absolute top-1/3 -right-32 w-96 h-96 bg-cyan-600/10 rounded-full blur-[140px]" />
         <div className="absolute -bottom-32 left-1/3 w-96 h-96 bg-rose-600/5 rounded-full blur-[160px]" />
       </div>
 
-      {/* Header & Operational Range Command Strip */}
+      {/* Top Header */}
       <header className="flex flex-col lg:flex-row lg:items-center justify-between pb-6 border-b border-slate-800/80 gap-5">
         <div className="flex items-center gap-3.5">
           <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white shadow-[0_0_24px_rgba(99,102,241,0.4)] border border-indigo-400/30">
@@ -437,12 +464,37 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Header: Real-Time Stream Status & Active Time Range Selector */}
+        {/* Right Header: Active Identity Profile & Controls */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3.5 self-start lg:self-auto">
+          {currentUser ? (
+            <div className="flex items-center gap-3 p-1.5 px-3 rounded-xl bg-[#0e1320] border border-slate-800 shadow-lg">
+              <div className="h-7 w-7 rounded-lg bg-indigo-600/40 border border-indigo-500/40 flex items-center justify-center font-bold text-xs text-indigo-300">
+                {currentUser.name[0]}
+              </div>
+              <div className="text-left text-xs font-mono">
+                <div className="text-white font-semibold truncate max-w-[140px]">{currentUser.name}</div>
+                <div className="text-[10px] text-cyan-400 font-bold">{currentUser.role}</div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="ml-2 text-[10px] font-mono text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/40 border border-rose-800/40 hover:bg-rose-900/60 cursor-pointer transition-all"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setCurrentUser(null)}
+              className="px-4 py-1.5 text-xs font-mono font-bold rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-600/40 transition-all cursor-pointer"
+            >
+              Sign In to Ops
+            </button>
+          )}
+
           <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-900/90 border border-slate-700/60 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] backdrop-blur-md">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-amber-400'}`} />
             <span className="text-xs font-mono font-semibold text-slate-200">
-              {connected ? 'Real-Time Stream Active' : 'Connecting to Stream...'}
+              {connected ? 'Real-Time Stream Active' : 'Connecting...'}
             </span>
           </div>
 
@@ -530,7 +582,6 @@ export default function App() {
                 className="drop-shadow-[0_0_10px_rgba(0,242,254,0.7)]"
               />
 
-              {/* Interactive Hover Marker Points */}
               {chartBuckets.map((b, i) => {
                 const cx = (i / 15) * 360;
                 const cy = 70 - (b.throughput / maxChartThroughput) * 55;
@@ -569,7 +620,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chart 2: Latency & Canary Observation Delta */}
+        {/* Chart 2: Latency & Canary Delta */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#101625]/90 to-[#090d16]/95 border border-slate-800/90 rounded-xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-emerald-400/30 to-transparent" />
           <div className="flex items-center justify-between mb-2">
@@ -950,7 +1001,7 @@ export default function App() {
         </div>
       </section>
 
-      {/* Audit Inspection Modal */}
+      {/* Task Inspection Drawer */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-gradient-to-b from-[#131a29] to-[#0c101a] border border-slate-700 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
@@ -961,12 +1012,7 @@ export default function App() {
                 </span>
                 <h3 className="font-semibold text-white text-sm font-mono truncate max-w-xs">{selectedTask.token}</h3>
               </div>
-              <button
-                onClick={() => setSelectedTask(null)}
-                className="text-slate-400 hover:text-white text-sm font-mono cursor-pointer"
-              >
-                ✕
-              </button>
+              <button onClick={() => setSelectedTask(null)} className="text-slate-400 hover:text-white text-sm font-mono cursor-pointer">✕</button>
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-xs font-mono">
@@ -1005,6 +1051,95 @@ export default function App() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Enterprise Authentication Portal (Shown if logged out) */}
+      {!currentUser && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
+          <div className="relative bg-gradient-to-b from-[#131b2e] via-[#0f1524] to-[#0a0e1a] border border-slate-700/80 rounded-2xl max-w-md w-full p-7 space-y-6 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
+            <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500 to-transparent" />
+            
+            <div className="text-center space-y-2">
+              <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white text-xl shadow-[0_0_24px_rgba(99,102,241,0.5)] border border-indigo-400/30">
+                N
+              </div>
+              <h2 className="text-xl font-black text-white tracking-tight">NeuroFabric Ops Access</h2>
+              <p className="text-xs text-slate-400">Enterprise Closed-Loop Remediation Security Perimeter</p>
+            </div>
+
+            {loginError && (
+              <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-800/60 text-rose-300 text-xs font-mono text-center">
+                {loginError}
+              </div>
+            )}
+
+            {/* Quick 1-Click Persona Logins */}
+            <div className="space-y-2">
+              <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Quick Persona Access</span>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Incident Commander', email: 'commander@neurofabric.io', pass: 'Commander2026!', color: 'border-indigo-500/50 hover:bg-indigo-950/40 text-indigo-300' },
+                  { label: 'SecOps Lead', email: 'secops@neurofabric.io', pass: 'SecOps2026!', color: 'border-cyan-500/50 hover:bg-cyan-950/40 text-cyan-300' },
+                  { label: 'SRE Operator', email: 'sre@neurofabric.io', pass: 'Operator2026!', color: 'border-emerald-500/50 hover:bg-emerald-950/40 text-emerald-300' },
+                  { label: 'Auditor (Read-Only)', email: 'auditor@neurofabric.io', pass: 'Audit2026!', color: 'border-slate-600/50 hover:bg-slate-800/40 text-slate-300' },
+                ].map((persona, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleLogin(persona.email, persona.pass)}
+                    className={`p-2 rounded-xl border text-[11px] font-mono font-semibold transition-all text-left cursor-pointer bg-[#0c111e]/80 ${persona.color}`}
+                  >
+                    <div className="font-bold">{persona.label}</div>
+                    <div className="text-[9px] opacity-70 truncate">{persona.email}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="relative flex items-center justify-center">
+              <div className="border-t border-slate-800 w-full" />
+              <span className="bg-[#0f1524] px-2 text-[10px] font-mono text-slate-500 uppercase">Or custom login</span>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleLogin();
+              }}
+              className="space-y-3.5 text-xs font-mono"
+            >
+              <div>
+                <label className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Corporate Email</label>
+                <input
+                  type="email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Password</label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full py-2.5 rounded-xl font-bold font-sans text-xs bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-600/40 cursor-pointer transition-all disabled:opacity-50"
+              >
+                {isLoggingIn ? 'Authenticating with Embassy...' : 'Authorize Session'}
+              </button>
+            </form>
           </div>
         </div>
       )}
