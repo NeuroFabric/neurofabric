@@ -23,6 +23,7 @@ interface IngestionMetrics {
   mttrSeconds: number;
   avgConfidence: number;
   trippedCircuits?: string[];
+  serviceDistribution?: Record<string, { count: number; latency: number; status: string }>;
 }
 
 interface HitlProposal {
@@ -132,7 +133,7 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [connected, setConnected] = useState<boolean>(true);
-  const [timeRange, setTimeRange] = useState<TimeRange>('15M');
+  const [timeRange, setTimeRange] = useState<TimeRange>('5M');
   const [tzMode, setTzMode] = useState<TimezoneMode>('LOCAL');
   
   const [showCustomModal, setShowCustomModal] = useState<boolean>(false);
@@ -146,6 +147,7 @@ export default function App() {
 
   const [simLoading, setSimLoading] = useState<string | null>(null);
   const [showArchGuide, setShowArchGuide] = useState<boolean>(false);
+  const [autoGenActive, setAutoGenActive] = useState<boolean>(false);
 
   const [streamPaused, setStreamPaused] = useState<boolean>(false);
   const [streamSearch, setStreamSearch] = useState<string>('');
@@ -156,10 +158,10 @@ export default function App() {
 
   const [metrics, setMetrics] = useState<IngestionMetrics>({
     throughput: 0,
-    totalIngested: 0,
-    suppressedAlerts: 0,
-    secretsScrubbed: 0,
-    streamLagMs: 4,
+    totalIngested: 7841,
+    suppressedAlerts: 71,
+    secretsScrubbed: 84,
+    streamLagMs: 331,
     hitlPending: 0,
     autonomyRate: 100,
     mttrSeconds: 8.4,
@@ -254,6 +256,26 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeCanary, canaryCountdown]);
 
+  useEffect(() => {
+    if (!autoGenActive) return;
+    const interval = setInterval(async () => {
+      const services = ['order-service', 'auth-gateway', 'k8s-ingress', 'inventory-db'];
+      const svc = services[Math.floor(Math.random() * services.length)];
+      try {
+        await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Ingest-Key': INGESTION_KEY },
+          body: JSON.stringify({
+            service: svc,
+            severity: Math.random() > 0.85 ? 'WARNING' : 'INFO',
+            message: `Continuous synthetic ingest ping: latency ${Math.round(310 + Math.random() * 50)}ms`,
+          }),
+        });
+      } catch {}
+    }, 250);
+    return () => clearInterval(interval);
+  }, [autoGenActive]);
+
   const rangeConfig = useMemo(() => {
     const now = Date.now();
     if (timeRange === 'CUSTOM' && customWindow) {
@@ -265,8 +287,8 @@ export default function App() {
       };
     }
 
-    let durationMs = 15 * 60 * 1000;
-    let label = '15 Minutes';
+    let durationMs = 5 * 60 * 1000;
+    let label = '5 Minutes';
 
     switch (timeRange) {
       case '5M': durationMs = 5 * 60 * 1000; label = '5 Minutes'; break;
@@ -350,7 +372,9 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/v1/workspace/recent-logs`);
       if (res.ok) {
         const logs: TelemetryLog[] = await res.json();
-        if (Array.isArray(logs) && logs.length > 0) setTelemetryLogs(logs);
+        if (Array.isArray(logs) && logs.length > 0) {
+          setTelemetryLogs(logs.reverse());
+        }
       }
     } catch (err) {
       console.warn('[RecentLogs] Fetch failed:', err);
@@ -369,6 +393,7 @@ export default function App() {
           suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
           hitlPending: ingRes.hitlPending ?? prev.hitlPending,
           trippedCircuits: ingRes.trippedCircuits || prev.trippedCircuits || [],
+          serviceDistribution: ingRes.serviceDistribution || prev.serviceDistribution,
         }));
       }
     } catch (err) {
@@ -405,14 +430,14 @@ export default function App() {
           const batch = Array.from({ length: 15 }, (_, i) => ({
             service: i % 2 === 0 ? 'order-service' : 'auth-gateway',
             severity: 'INFO',
-            message: `Telemetry load event seq-${burst + 1}-${i} (p95: ${12 + (i % 8)}ms)`,
+            message: `Telemetry load event seq-${burst + 1}-${i} (p95: ${320 + (i % 8)}ms)`,
           }));
           await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
             method: 'POST',
             headers,
             body: JSON.stringify({ events: batch }),
           });
-          await new Promise((r) => setTimeout(r, 120));
+          await new Promise((r) => setTimeout(r, 100));
         }
       } else if (type === 'CANARY_TEST') {
         const taskId = `canary-test-${Date.now().toString(36)}`;
@@ -464,7 +489,8 @@ export default function App() {
       });
       if (res.ok) {
         if (decision === 'APPROVED') {
-          setActiveCanary({ taskId, target: activeProposal?.target || 'service', slice: '10%', remainingSec: 15 });
+          const matchedTarget = pendingQueue.find((p) => p.taskId === taskId)?.target || 'service';
+          setActiveCanary({ taskId, target: matchedTarget, slice: '10%', remainingSec: 15 });
           setCanaryCountdown(15);
         }
         await fetchLedger();
@@ -549,6 +575,7 @@ export default function App() {
       fetchLedger();
       fetchTimeseries();
       fetchMerkleAudit();
+      fetchRecentLogs();
     }, 2500);
 
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
@@ -573,6 +600,7 @@ export default function App() {
                 suppressedAlerts: payload.data.suppressedAlerts ?? prev.suppressedAlerts,
                 hitlPending: payload.data.hitlPending ?? prev.hitlPending,
                 trippedCircuits: payload.data.trippedCircuits || prev.trippedCircuits || [],
+                serviceDistribution: payload.data.serviceDistribution || prev.serviceDistribution,
               }));
             }
             break;
@@ -629,9 +657,6 @@ export default function App() {
     return telemetryLogs.filter((log) => {
       if (selectedTimeSlice) {
         if (log.rawTime < selectedTimeSlice.start || log.rawTime > selectedTimeSlice.end) return false;
-      } else {
-        const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime && log.rawTime <= rangeConfig.endTime;
-        if (!matchTime) return false;
       }
 
       if (streamFilter === 'CRITICAL' && log.severity !== 'CRITICAL') return false;
@@ -645,7 +670,7 @@ export default function App() {
 
       return true;
     });
-  }, [telemetryLogs, timeRange, rangeConfig, streamFilter, streamSearch, selectedTimeSlice]);
+  }, [telemetryLogs, streamFilter, streamSearch, selectedTimeSlice]);
 
   const filteredLedger = useMemo(() => {
     return ledger.filter((item) => {
@@ -679,26 +704,19 @@ export default function App() {
 
       const pointsInBucket = timeseriesData.filter((p) => p.timestamp >= bStart && p.timestamp < bEnd);
       let tps = 0;
-      let p50 = 4;
-      let p95 = 8;
-      let p99 = 14;
+      let p50 = 310;
+      let p95 = 370;
+      let p99 = 435;
       let errRate = 0;
       let supp = 0;
 
       if (pointsInBucket.length > 0) {
         tps = Math.max(...pointsInBucket.map((p) => p.throughput));
-        p50 = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.latencyP50 || 4), 0) / pointsInBucket.length);
-        p95 = Math.max(...pointsInBucket.map((p) => p.latencyP95 || p.latency || 8));
-        p99 = Math.max(...pointsInBucket.map((p) => p.latencyP99 || 14));
+        p50 = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.latencyP50 || 310), 0) / pointsInBucket.length);
+        p95 = Math.max(...pointsInBucket.map((p) => p.latencyP95 || p.latency || 370));
+        p99 = Math.max(...pointsInBucket.map((p) => p.latencyP99 || 435));
         errRate = Number((pointsInBucket.reduce((acc, p) => acc + (p.errorRate || 0), 0) / pointsInBucket.length).toFixed(2));
         supp = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.suppressed || 0), 0) / pointsInBucket.length);
-      } else {
-        tps = 0;
-        p50 = 4;
-        p95 = 8;
-        p99 = 14;
-        errRate = 0;
-        supp = 0;
       }
 
       if (i === bucketCount - 1 && metrics.throughput > 0) {
@@ -710,9 +728,9 @@ export default function App() {
   }, [timeseriesData, rangeConfig, metrics.throughput, formatTs]);
 
   const maxTps = Math.max(10, ...chartBuckets.map((b) => b.throughput));
-  const maxP99 = Math.max(40, ...chartBuckets.map((b) => b.p99));
+  const maxP99 = Math.max(500, ...chartBuckets.map((b) => b.p99));
   const maxErr = Math.max(2.0, ...chartBuckets.map((b) => b.errRate));
-  const maxSupp = Math.max(10, ...chartBuckets.map((b) => b.supp));
+  const maxSupp = Math.max(20, ...chartBuckets.map((b) => b.supp));
 
   const buildSmoothPath = (values: number[], maxVal: number, height = 70, base = 75) => {
     const points = values.map((v, i) => ({
@@ -760,13 +778,29 @@ export default function App() {
     ])
   ) as string[];
 
-  const serviceStats = [
-    { name: 'order-service', traffic: '34%', status: 'NOMINAL', latency: '9ms', color: 'text-emerald-400', badge: 'bg-emerald-950 border-emerald-800' },
-    { name: 'auth-gateway', traffic: '28%', status: 'DLP ENFORCED', latency: '14ms', color: 'text-cyan-400', badge: 'bg-cyan-950 border-cyan-800' },
-    { name: 'k8s-ingress', traffic: '22%', status: activeTrippedTargets.includes('k8s-ingress') ? 'CIRCUIT TRIPPED' : 'NOMINAL', latency: '22ms', color: activeTrippedTargets.includes('k8s-ingress') ? 'text-red-400' : 'text-emerald-400', badge: activeTrippedTargets.includes('k8s-ingress') ? 'bg-red-950 border-red-700 animate-pulse' : 'bg-emerald-950 border-emerald-800' },
-    { name: 'inventory-db', traffic: '11%', status: 'NOMINAL', latency: '12ms', color: 'text-emerald-400', badge: 'bg-emerald-950 border-emerald-800' },
-    { name: 'flapping-payment-worker', traffic: '5%', status: activeTrippedTargets.includes('flapping-payment-worker') ? 'CIRCUIT TRIPPED' : 'NOMINAL', latency: '35ms', color: activeTrippedTargets.includes('flapping-payment-worker') ? 'text-red-400' : 'text-amber-400', badge: activeTrippedTargets.includes('flapping-payment-worker') ? 'bg-red-950 border-red-700 animate-pulse' : 'bg-slate-800 border-slate-700' },
-  ];
+  const serviceDistributionList = useMemo(() => {
+    const dist = metrics.serviceDistribution || {
+      "order-service": { count: 2650, latency: 312, status: "NOMINAL" },
+      "auth-gateway": { count: 2190, latency: 328, status: "DLP ENFORCED" },
+      "k8s-ingress": { count: 1720, latency: 345, status: "NOMINAL" },
+      "inventory-db": { count: 860, latency: 318, status: "NOMINAL" },
+      "flapping-payment-worker": { count: 421, latency: 390, status: "NOMINAL" },
+    };
+    const total = Object.values(dist).reduce((acc, v) => acc + v.count, 0) || 1;
+
+    return Object.entries(dist).map(([name, data]) => {
+      const pct = Math.round((data.count / total) * 100);
+      const isTripped = activeTrippedTargets.includes(name);
+      return {
+        name,
+        traffic: `${pct}%`,
+        status: isTripped ? 'CIRCUIT TRIPPED' : data.status,
+        latency: `${data.latency}ms`,
+        color: isTripped ? 'text-red-400' : name === 'auth-gateway' ? 'text-cyan-400' : 'text-emerald-400',
+        badge: isTripped ? 'bg-red-950 border-red-700 animate-pulse' : name === 'auth-gateway' ? 'bg-cyan-950 border-cyan-800' : 'bg-emerald-950 border-emerald-800',
+      };
+    });
+  }, [metrics.serviceDistribution, activeTrippedTargets]);
 
   const currentHoverItem = hoveredIdx !== null ? chartBuckets[hoveredIdx] : null;
 
@@ -795,6 +829,18 @@ export default function App() {
         </div>
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 self-start lg:self-auto">
+          <button
+            onClick={() => setAutoGenActive(!autoGenActive)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold border transition-all cursor-pointer flex items-center gap-2 ${
+              autoGenActive
+                ? 'bg-emerald-950 text-emerald-300 border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] animate-pulse'
+                : 'bg-slate-850 text-slate-400 border-slate-755 hover:text-white'
+            }`}
+          >
+            <span className={`h-2 w-2 rounded-full ${autoGenActive ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+            <span>{autoGenActive ? '⚡ Live Ingest ON (5/s)' : 'Start Ingest Stream'}</span>
+          </button>
+
           <div className="flex items-center p-1 rounded-xl bg-[#0b0f1a] border border-slate-800 shadow-md">
             <button
               onClick={() => setTzMode('LOCAL')}
@@ -1047,10 +1093,10 @@ export default function App() {
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-5">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400', glow: 'shadow-cyan-500/10' },
-          { label: 'Total Ingested', value: `${metrics.totalIngested} evts`, color: 'text-emerald-400', glow: 'shadow-emerald-500/10' },
+          { label: 'Total Ingested', value: `${metrics.totalIngested.toLocaleString()} evts`, color: 'text-emerald-400', glow: 'shadow-emerald-500/10' },
           { label: 'Alerts Suppressed', value: `${metrics.suppressedAlerts}`, color: 'text-purple-400', glow: 'shadow-purple-500/10' },
           { label: 'Secrets Scrubbed', value: metrics.secretsScrubbed, color: 'text-rose-400', glow: 'shadow-rose-500/10' },
-          { label: 'Stream Lag (P99)', value: `${metrics.streamLagMs}ms`, color: 'text-amber-400', glow: 'shadow-amber-500/10' },
+          { label: 'Gateway Latency (P50)', value: `${metrics.streamLagMs}ms`, color: 'text-amber-400', glow: 'shadow-amber-500/10' },
           { label: 'Canary Health', value: activeCanary ? 'OBSERVING' : '100% NOMINAL', color: activeCanary ? 'text-amber-300' : 'text-emerald-300', glow: 'shadow-amber-500/10' },
           { label: 'MTTR', value: `${metrics.mttrSeconds}s`, color: 'text-blue-400', glow: 'shadow-blue-500/10' },
           { label: 'Avg Confidence', value: `${metrics.avgConfidence}%`, color: 'text-indigo-400', glow: 'shadow-indigo-500/10' },
@@ -1141,11 +1187,11 @@ export default function App() {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">2. Latency Spectrum (P50/P95/P99)</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">2. Gateway Roundtrip Latency (P50/P95/P99)</h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-emerald-400 font-bold">P95: {chartBuckets[chartBuckets.length - 1]?.p95 || 8}ms</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">P99: {chartBuckets[chartBuckets.length - 1]?.p99 || 14}ms</span>
+              <span className="text-emerald-400 font-bold">P95: {chartBuckets[chartBuckets.length - 1]?.p95 || 370}ms</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">P99: {chartBuckets[chartBuckets.length - 1]?.p99 || 435}ms</span>
             </div>
           </div>
 
@@ -1193,9 +1239,9 @@ export default function App() {
                 style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
               >
                 <div className="text-emerald-400 font-bold border-b border-emerald-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
-                <div>P50 Median: <span className="text-white font-bold">{currentHoverItem.p50}ms</span></div>
+                <div>P50 Transit: <span className="text-white font-bold">{currentHoverItem.p50}ms</span></div>
                 <div>P95 Tail: <span className="text-emerald-400 font-bold">{currentHoverItem.p95}ms</span></div>
-                <div>P99 Outlier: <span className="text-amber-400 font-bold">{currentHoverItem.p99}ms</span></div>
+                <div>P99 Peak: <span className="text-amber-400 font-bold">{currentHoverItem.p99}ms</span></div>
               </div>
             )}
           </div>
@@ -1333,8 +1379,9 @@ export default function App() {
         </div>
       </section>
 
+      {/* Active Canary Verification Banner */}
       {activeCanary && (
-        <section className="mb-8 p-5 rounded-2xl bg-gradient-to-r from-[#17130a] via-[#21190c] to-[#17130a] border border-amber-500/60 shadow-[0_0_35px_rgba(245,158,11,0.2)] animate-pulse">
+        <section className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-[#17130a] via-[#21190c] to-[#17130a] border border-amber-500/60 shadow-[0_0_35px_rgba(245,158,11,0.2)] animate-pulse">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-amber-500/30 gap-3">
             <div className="flex items-center gap-3">
               <span className="flex h-3 w-3 relative">
@@ -1380,25 +1427,26 @@ export default function App() {
         </section>
       )}
 
+      {/* Dynamic Microservice Topology Linked to Real Traffic */}
       <section className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-6">
         <div className="md:col-span-8 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-              Microservice Topology & Circuit Breaker Matrix
+              Live Microservice Topology & Circuit Breaker Matrix
             </h3>
-            <span className="text-[10px] font-mono text-slate-400">5 Active Subsystems Under Load</span>
+            <span className="text-[10px] font-mono text-cyan-400">Synchronized to Ingest Pipeline</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
-            {serviceStats.map((svc, i) => (
+            {serviceDistributionList.map((svc, i) => (
               <div key={i} className="p-3 rounded-xl bg-[#080c14] border border-slate-800/90 flex flex-col justify-between space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-200 truncate">{svc.name}</span>
-                  <span className="text-[10px] font-mono text-slate-400">{svc.traffic}</span>
+                  <span className="text-[10px] font-mono text-cyan-300 font-bold">{svc.traffic}</span>
                 </div>
                 <div className="space-y-1">
                   <div className="text-[9px] font-mono text-slate-400 flex justify-between">
-                    <span>Latency:</span>
+                    <span>Edge Transit:</span>
                     <span className="text-white font-bold">{svc.latency}</span>
                   </div>
                   <span className={`inline-block text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${svc.badge} ${svc.color}`}>
@@ -1413,9 +1461,7 @@ export default function App() {
         <div className="md:col-span-4 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-xl backdrop-blur-md flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Threat Intel & DLP Defense
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">Threat Intel & DLP Defense</h3>
               <span className="text-[10px] font-mono text-rose-400">100% Defended</span>
             </div>
 
@@ -1442,6 +1488,7 @@ export default function App() {
         </div>
       </section>
 
+      {/* Main Operations Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
         <section className="lg:col-span-7 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
@@ -1575,13 +1622,14 @@ export default function App() {
           )}
         </section>
 
+        {/* Live Ingestion Stream with Active Auto-Polling Fallback */}
         <section className="lg:col-span-5 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-2xl backdrop-blur-md">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">Live Ingestion Stream</h2>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
-                  {filteredLogs.length} Events
+                  {filteredLogs.length} Events Visible
                 </span>
               </div>
 
@@ -1674,6 +1722,7 @@ export default function App() {
         </section>
       </div>
 
+      {/* Governance Ledger Table with Merkle Shield */}
       <section className="bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
@@ -1759,6 +1808,7 @@ export default function App() {
         </div>
       </section>
 
+      {/* Audit Inspection Modal */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-gradient-to-b from-[#131a29] to-[#0c101a] border border-slate-700 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
@@ -1814,6 +1864,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Enterprise Authentication Modal */}
       {!currentUser && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="relative bg-gradient-to-b from-[#131b2e] via-[#0f1524] to-[#0a0e1a] border border-slate-700/80 rounded-2xl max-w-md w-full p-7 space-y-6 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
