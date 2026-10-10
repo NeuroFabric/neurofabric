@@ -1,4 +1,5 @@
 ﻿const TARGET_URL = (process.env.API_BASE || "http://127.0.0.1:8080").replace(/\/$/, "");
+const INGESTION_KEY = process.env.INGESTION_KEY || "nf-edge-telemetry-token-2026";
 
 async function req(path: string, options: RequestInit = {}) {
   const res = await fetch(`${TARGET_URL}${path}`, {
@@ -7,6 +8,14 @@ async function req(path: string, options: RequestInit = {}) {
   });
   const data = await res.json().catch(() => ({}));
   return { status: res.status, data };
+}
+
+async function ingest(path: string, body: unknown) {
+  return req(path, {
+    method: "POST",
+    headers: { "x-ingest-key": INGESTION_KEY },
+    body: JSON.stringify(body),
+  });
 }
 
 async function runRegressionSuite() {
@@ -35,13 +44,10 @@ async function runRegressionSuite() {
 
   // Phase 2: Ingestion & Linear DLP Secret Scrubbing
   console.log("\n--> [Phase 2] Edge Telemetry Ingestion & DLP Sanitizer...");
-  const dlpIngest = await req("/api/v1/workspace/ingest", {
-    method: "POST",
-    body: JSON.stringify({
-      service: "auth-gateway",
-      severity: "WARNING",
-      message: "Exfiltration probe with token Bearer sk-ant-live98745 and password=superSecretPassword",
-    }),
+  const dlpIngest = await ingest("/api/v1/workspace/ingest", {
+    service: "auth-gateway",
+    severity: "WARNING",
+    message: "Exfiltration probe with token Bearer sk-ant-live98745 and password=superSecretPassword",
   });
   assert("Telemetry ingested with HTTP 202 Accepted", dlpIngest.status === 202);
 
@@ -52,14 +58,8 @@ async function runRegressionSuite() {
   // Phase 3: Sliding-Window Alert Deduplication
   console.log("\n--> [Phase 3] Sliding-Window Alert Deduplication...");
   const dedupMsg = `Unique duplicate message payload test-${Date.now()}`;
-  await req("/api/v1/workspace/ingest", {
-    method: "POST",
-    body: JSON.stringify({ service: "order-service", severity: "INFO", message: dedupMsg }),
-  });
-  const dedupSecond = await req("/api/v1/workspace/ingest", {
-    method: "POST",
-    body: JSON.stringify({ service: "order-service", severity: "INFO", message: dedupMsg }),
-  });
+  await ingest("/api/v1/workspace/ingest", { service: "order-service", severity: "INFO", message: dedupMsg });
+  const dedupSecond = await ingest("/api/v1/workspace/ingest", { service: "order-service", severity: "INFO", message: dedupMsg });
   assert("Sliding window deduplicator suppressed identical duplicate alert", dedupSecond.data?.suppressed >= 1);
 
   // Phase 4: AST Diff Security Gate (Command Injection Defense)
@@ -79,10 +79,7 @@ async function runRegressionSuite() {
   console.log("\n--> [Phase 5] Anti-Flapping Circuit Breaker Protection...");
   const flapTarget = "flapping-payment-worker";
   for (let i = 0; i < 3; i++) {
-    await req("/api/v1/workspace/ingest", {
-      method: "POST",
-      body: JSON.stringify({ service: flapTarget, severity: "CRITICAL", message: `Flapping regression strike ${i + 1}` }),
-    });
+    await ingest("/api/v1/workspace/ingest", { service: flapTarget, severity: "CRITICAL", message: `Flapping regression strike ${i + 1}` });
   }
   const lockedMutation = await req("/api/v1/embassy/decisions", {
     method: "POST",
@@ -151,6 +148,40 @@ async function runRegressionSuite() {
 
   const metrics = await req("/api/v1/metrics/ingestion");
   assert("Metrics endpoint reports throughput, suppressed alerts, and secrets scrubbed", typeof metrics.data?.suppressedAlerts === "number");
+
+  // Phase 10: Ingestion Token Rejection Test
+  console.log("\n--> [Phase 10] Ingestion Token Rejection Test...");
+  const unauthIngest = await req("/api/v1/workspace/ingest", {
+    method: "POST",
+    body: JSON.stringify({ service: "test-service", severity: "INFO", message: "unauthorized probe" }),
+  });
+  assert("Ingestion without x-ingest-key rejected with HTTP 401", unauthIngest.status === 401);
+
+  const badKeyIngest = await req("/api/v1/workspace/ingest", {
+    method: "POST",
+    headers: { "x-ingest-key": "wrong-key-12345" },
+    body: JSON.stringify({ service: "test-service", severity: "INFO", message: "bad key probe" }),
+  });
+  assert("Ingestion with invalid x-ingest-key rejected with HTTP 401", badKeyIngest.status === 401);
+
+  // Phase 11: Expanded AST Evasion Probe
+  console.log("\n--> [Phase 11] Expanded AST Evasion Probe...");
+  const astEvasionPayloads = [
+    "--- a/deploy.sh\n+++ b/deploy.sh\n@@ -1,1 +1,1 @@\n-echo ok\n+python -c 'import os; os.system(\"id\")'",
+    "--- a/deploy.sh\n+++ b/deploy.sh\n@@ -1,1 +1,1 @@\n-echo ok\n+base64 -d | sh",
+  ];
+  for (let i = 0; i < astEvasionPayloads.length; i++) {
+    const evasion = await req("/api/v1/embassy/decisions", {
+      method: "POST",
+      body: JSON.stringify({
+        taskId: `ast-evasion-${Date.now()}-${i}`,
+        decision: "APPROVED",
+        diff: astEvasionPayloads[i],
+        reviewer: "Adversary",
+      }),
+    });
+    assert(`AST gate rejected evasion payload #${i + 1} with HTTP 422`, evasion.status === 422 && evasion.data?.error === "MALICIOUS_DIFF_REJECTED");
+  }
 
   console.log("\n===================================================================");
   console.log(`   REGRESSION AUDIT SUMMARY: ${passed} PASSED | ${failed} FAILED  `);
