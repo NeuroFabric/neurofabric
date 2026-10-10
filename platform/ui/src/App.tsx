@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from 'react';
 
 const API_BASE = (import.meta.env.VITE_API_URL || 'https://neurofabric-backend.onrender.com').replace(/\/$/, '');
+const INGESTION_KEY = import.meta.env.VITE_INGESTION_KEY || 'nf-edge-telemetry-token-2026';
 
 type TimeRange = '5M' | '15M' | '1H' | '24H' | 'ALL' | 'CUSTOM';
 type TimezoneMode = 'LOCAL' | 'UTC';
@@ -51,7 +52,6 @@ interface LedgerEntry {
   createdAt?: string | null;
   createdTimestamp?: number;
   merkleHash?: string;
-  prevHash?: string;
 }
 
 interface TelemetryLog {
@@ -76,6 +76,46 @@ interface TimeseriesPoint {
   suppressed: number;
 }
 
+function NeuroFabricLogo({ className = "h-10 w-10" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <defs>
+        <linearGradient id="nfMeshGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#00f0ff" />
+          <stop offset="50%" stopColor="#6366f1" />
+          <stop offset="100%" stopColor="#a855f7" />
+        </linearGradient>
+        <radialGradient id="nfCoreGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#00f0ff" stopOpacity="0.8" />
+          <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <polygon
+        points="32,4 58,19 58,45 32,60 6,45 6,19"
+        stroke="url(#nfMeshGrad)"
+        strokeWidth="2.5"
+        fill="#080d1a"
+        strokeLinejoin="round"
+        className="filter drop-shadow-[0_0_8px_rgba(0,240,255,0.4)]"
+      />
+      <line x1="32" y1="4" x2="32" y2="32" stroke="#6366f1" strokeWidth="1.5" strokeOpacity="0.7" />
+      <line x1="58" y1="19" x2="32" y2="32" stroke="#00f0ff" strokeWidth="1.5" strokeOpacity="0.7" />
+      <line x1="58" y1="45" x2="32" y2="32" stroke="#a855f7" strokeWidth="1.5" strokeOpacity="0.7" />
+      <line x1="32" y1="60" x2="32" y2="32" stroke="#6366f1" strokeWidth="1.5" strokeOpacity="0.7" />
+      <line x1="6" y1="45" x2="32" y2="32" stroke="#00f0ff" strokeWidth="1.5" strokeOpacity="0.7" />
+      <line x1="6" y1="19" x2="32" y2="32" stroke="#a855f7" strokeWidth="1.5" strokeOpacity="0.7" />
+      <circle cx="32" cy="18" r="3" fill="#00f0ff" className="animate-pulse" />
+      <circle cx="44" cy="25" r="2.5" fill="#6366f1" />
+      <circle cx="44" cy="39" r="2.5" fill="#a855f7" />
+      <circle cx="32" cy="46" r="3" fill="#00f0ff" className="animate-pulse" />
+      <circle cx="20" cy="39" r="2.5" fill="#6366f1" />
+      <circle cx="20" cy="25" r="2.5" fill="#a855f7" />
+      <circle cx="32" cy="32" r="6" fill="url(#nfCoreGlow)" />
+      <circle cx="32" cy="32" r="3.5" fill="#ffffff" className="drop-shadow-[0_0_6px_#00f0ff]" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     const cached = localStorage.getItem('nf_auth_user');
@@ -95,33 +135,30 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>('15M');
   const [tzMode, setTzMode] = useState<TimezoneMode>('LOCAL');
   
-  // Custom Time Range Picker States
   const [showCustomModal, setShowCustomModal] = useState<boolean>(false);
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
   const [customWindow, setCustomWindow] = useState<{ start: number; end: number } | null>(null);
 
-  // Synchronized Multi-Chart Hover State
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [activeHoverChart, setActiveHoverChart] = useState<string | null>(null);
+  const [selectedTimeSlice, setSelectedTimeSlice] = useState<{ start: number; end: number; label: string } | null>(null);
 
   const [simLoading, setSimLoading] = useState<string | null>(null);
   const [showArchGuide, setShowArchGuide] = useState<boolean>(false);
 
-  // Stream controls
   const [streamPaused, setStreamPaused] = useState<boolean>(false);
   const [streamSearch, setStreamSearch] = useState<string>('');
   const [streamFilter, setStreamFilter] = useState<'ALL' | 'CRITICAL' | 'WARNING' | 'SCRUBBED'>('ALL');
   const [bufferLimit, setBufferLimit] = useState<number>(250);
 
-  // Merkle verification state
   const [merkleStatus, setMerkleStatus] = useState<{ valid: boolean; rootHash: string; chainLength: number; verifiedAt: string } | null>(null);
 
   const [metrics, setMetrics] = useState<IngestionMetrics>({
-    throughput: 8.2,
-    totalIngested: 85,
-    suppressedAlerts: 51,
-    secretsScrubbed: 55,
+    throughput: 0,
+    totalIngested: 0,
+    suppressedAlerts: 0,
+    secretsScrubbed: 0,
     streamLagMs: 4,
     hitlPending: 0,
     autonomyRate: 100,
@@ -145,31 +182,30 @@ export default function App() {
   const [pendingQueue, setPendingQueue] = useState<HitlProposal[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(0);
 
-  // Time Formatter adhering to chosen Timezone Mode
-  const formatTs = useCallback((epochMs: number | string | undefined | null, fullDate = false): string => {
+  const formatTs = useCallback((epochMs: number | string | undefined | null, includeDate = false): string => {
     if (!epochMs) return '—';
     const date = new Date(typeof epochMs === 'string' ? (isNaN(Number(epochMs)) ? epochMs : Number(epochMs)) : epochMs);
     if (isNaN(date.getTime())) return '—';
 
+    const isWideWindow = timeRange === '24H' || timeRange === 'ALL' || includeDate;
+
     if (tzMode === 'UTC') {
-      if (fullDate) {
-        return date.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+      if (isWideWindow) {
+        return date.toISOString().substring(5, 10) + ' ' + date.toISOString().substring(11, 16) + ' UTC';
       }
       return date.toISOString().substring(11, 19) + ' UTC';
     } else {
-      if (fullDate) {
-        return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      if (isWideWindow) {
+        return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       }
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
-  }, [tzMode]);
+  }, [tzMode, timeRange]);
 
   const authFetch = useCallback(
     async (url: string, options: RequestInit = {}) => {
       const headers = new Headers(options.headers || {});
-      if (authToken) {
-        headers.set('Authorization', `Bearer ${authToken}`);
-      }
+      if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
       return fetch(url, { ...options, headers });
     },
     [authToken]
@@ -187,17 +223,17 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: email, password: pass }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json();
       if (res.ok && data.token) {
         setAuthToken(data.token);
         setCurrentUser(data.user);
         localStorage.setItem('nf_auth_token', data.token);
         localStorage.setItem('nf_auth_user', JSON.stringify(data.user));
       } else {
-        setLoginError(data.message || 'Authentication failed. Check credentials.');
+        setLoginError(data.message || 'Authentication failed. Invalid credentials.');
       }
-    } catch (err) {
-      setLoginError('Authentication service unreachable. Please try again later.');
+    } catch {
+      setLoginError('Cannot reach authentication service. Check server connection.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -213,13 +249,7 @@ export default function App() {
   useEffect(() => {
     if (!activeCanary || canaryCountdown <= 0) return;
     const interval = setInterval(() => {
-      setCanaryCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
+      setCanaryCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
     return () => clearInterval(interval);
   }, [activeCanary, canaryCountdown]);
@@ -239,26 +269,11 @@ export default function App() {
     let label = '15 Minutes';
 
     switch (timeRange) {
-      case '5M':
-        durationMs = 5 * 60 * 1000;
-        label = '5 Minutes';
-        break;
-      case '15M':
-        durationMs = 15 * 60 * 1000;
-        label = '15 Minutes';
-        break;
-      case '1H':
-        durationMs = 60 * 60 * 1000;
-        label = '1 Hour';
-        break;
-      case '24H':
-        durationMs = 24 * 60 * 60 * 1000;
-        label = '24 Hours';
-        break;
-      case 'ALL':
-        durationMs = 7 * 24 * 60 * 60 * 1000;
-        label = 'All Historical';
-        break;
+      case '5M': durationMs = 5 * 60 * 1000; label = '5 Minutes'; break;
+      case '15M': durationMs = 15 * 60 * 1000; label = '15 Minutes'; break;
+      case '1H': durationMs = 60 * 60 * 1000; label = '1 Hour'; break;
+      case '24H': durationMs = 24 * 60 * 60 * 1000; label = '24 Hours'; break;
+      case 'ALL': durationMs = 7 * 24 * 60 * 60 * 1000; label = 'All Historical'; break;
     }
 
     return {
@@ -278,9 +293,7 @@ export default function App() {
       const res = await fetch(queryUrl);
       if (res.ok) {
         const body = await res.json();
-        if (Array.isArray(body.points)) {
-          setTimeseriesData(body.points);
-        }
+        if (Array.isArray(body.points)) setTimeseriesData(body.points);
       }
     } catch (err) {
       console.warn('[Timeseries] Fetch failed:', err);
@@ -316,7 +329,6 @@ export default function App() {
             },
             status: 'PENDING',
           }));
-
         setPendingQueue(pendingItems);
       }
     } catch (err) {
@@ -327,10 +339,7 @@ export default function App() {
   const fetchMerkleAudit = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/governance/verify-ledger`);
-      if (res.ok) {
-        const data = await res.json();
-        setMerkleStatus(data);
-      }
+      if (res.ok) setMerkleStatus(await res.json());
     } catch (err) {
       console.warn('[Merkle] Fetch failed:', err);
     }
@@ -341,9 +350,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/v1/workspace/recent-logs`);
       if (res.ok) {
         const logs: TelemetryLog[] = await res.json();
-        if (Array.isArray(logs) && logs.length > 0) {
-          setTelemetryLogs(logs);
-        }
+        if (Array.isArray(logs) && logs.length > 0) setTelemetryLogs(logs);
       }
     } catch (err) {
       console.warn('[RecentLogs] Fetch failed:', err);
@@ -371,15 +378,12 @@ export default function App() {
 
   const triggerSimulation = async (type: 'CRITICAL_ANOMALY' | 'DLP_PROBE' | 'TRAFFIC_FLOOD' | 'TRIP_BREAKER' | 'CANARY_TEST') => {
     setSimLoading(type);
-    const ingestHeaders = {
-      'Content-Type': 'application/json',
-      'X-Ingest-Key': import.meta.env.VITE_INGESTION_KEY || 'nf-edge-telemetry-token-2026',
-    };
     try {
+      const headers = { 'Content-Type': 'application/json', 'X-Ingest-Key': INGESTION_KEY };
       if (type === 'CRITICAL_ANOMALY') {
         await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
           method: 'POST',
-          headers: ingestHeaders,
+          headers,
           body: JSON.stringify({
             service: 'k8s-ingress',
             severity: 'CRITICAL',
@@ -389,7 +393,7 @@ export default function App() {
       } else if (type === 'DLP_PROBE') {
         await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
           method: 'POST',
-          headers: ingestHeaders,
+          headers,
           body: JSON.stringify({
             service: 'auth-gateway',
             severity: 'WARNING',
@@ -401,14 +405,14 @@ export default function App() {
           const batch = Array.from({ length: 15 }, (_, i) => ({
             service: i % 2 === 0 ? 'order-service' : 'auth-gateway',
             severity: 'INFO',
-            message: `Stream ping #${burst * 15 + i + 1}: roundtrip ${12 + (i % 7)}ms`,
+            message: `Telemetry load event seq-${burst + 1}-${i} (p95: ${12 + (i % 8)}ms)`,
           }));
           await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
             method: 'POST',
-            headers: ingestHeaders,
+            headers,
             body: JSON.stringify({ events: batch }),
           });
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 120));
         }
       } else if (type === 'CANARY_TEST') {
         const taskId = `canary-test-${Date.now().toString(36)}`;
@@ -428,7 +432,7 @@ export default function App() {
         for (let i = 1; i <= 3; i++) {
           await fetch(`${API_BASE}/api/v1/workspace/ingest`, {
             method: 'POST',
-            headers: ingestHeaders,
+            headers,
             body: JSON.stringify({
               service: target,
               severity: 'CRITICAL',
@@ -484,6 +488,7 @@ export default function App() {
       if (res.ok) {
         setActiveCanary(null);
         setCanaryCountdown(0);
+        setRolledBackTask({ taskId, target, reason: 'Operator aborted canary observation.' });
         await fetchLedger();
         await fetchMetrics();
         await fetchMerkleAudit();
@@ -557,9 +562,7 @@ export default function App() {
         if (!payload || !payload.type) return;
 
         switch (payload.type) {
-          case 'connected':
-            setConnected(true);
-            break;
+          case 'connected': setConnected(true); break;
           case 'INGESTION_METRICS_UPDATE':
             if (payload.data) {
               setMetrics((prev) => ({
@@ -573,9 +576,7 @@ export default function App() {
               }));
             }
             break;
-          case 'HITL_PROPOSAL':
-            fetchLedger();
-            break;
+          case 'HITL_PROPOSAL': fetchLedger(); break;
           case 'CANARY_VERIFYING':
             setActiveCanary({ taskId: payload.data.taskId, target: payload.data.target, slice: '10%', remainingSec: 15 });
             setCanaryCountdown(15);
@@ -598,24 +599,18 @@ export default function App() {
             fetchMetrics();
             fetchMerkleAudit();
             break;
-          case 'DECISION_RESOLVED':
-            fetchLedger();
-            fetchMetrics();
-            fetchMerkleAudit();
-            break;
+          case 'DECISION_RESOLVED': fetchLedger(); fetchMetrics(); fetchMerkleAudit(); break;
           case 'ALERT_INGESTED':
             if (payload.data && !streamPaused) {
-              setTelemetryLogs((prev) => [
-                {
-                  id: payload.data.id || String(Date.now()),
-                  rawTime: payload.data.rawTime || Date.now(),
-                  service: payload.data.service || 'service',
-                  severity: payload.data.severity || 'INFO',
-                  message: payload.data.message || 'Telemetry event processed',
-                  dlpScrubbed: Boolean(payload.data.scrubbed),
-                },
-                ...prev.slice(0, bufferLimit - 1),
-              ]);
+              const newLog: TelemetryLog = {
+                id: payload.data.id || String(Date.now()),
+                rawTime: payload.data.rawTime || Date.now(),
+                service: payload.data.service || 'service',
+                severity: payload.data.severity || 'INFO',
+                message: payload.data.message || 'Telemetry event processed',
+                dlpScrubbed: Boolean(payload.data.scrubbed),
+              };
+              setTelemetryLogs((prev) => [newLog, ...prev.slice(0, bufferLimit - 1)]);
             }
             break;
         }
@@ -632,8 +627,12 @@ export default function App() {
 
   const filteredLogs = useMemo(() => {
     return telemetryLogs.filter((log) => {
-      const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime && log.rawTime <= rangeConfig.endTime;
-      if (!matchTime) return false;
+      if (selectedTimeSlice) {
+        if (log.rawTime < selectedTimeSlice.start || log.rawTime > selectedTimeSlice.end) return false;
+      } else {
+        const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime && log.rawTime <= rangeConfig.endTime;
+        if (!matchTime) return false;
+      }
 
       if (streamFilter === 'CRITICAL' && log.severity !== 'CRITICAL') return false;
       if (streamFilter === 'WARNING' && log.severity !== 'WARNING') return false;
@@ -646,7 +645,7 @@ export default function App() {
 
       return true;
     });
-  }, [telemetryLogs, timeRange, rangeConfig, streamFilter, streamSearch]);
+  }, [telemetryLogs, timeRange, rangeConfig, streamFilter, streamSearch, selectedTimeSlice]);
 
   const filteredLedger = useMemo(() => {
     return ledger.filter((item) => {
@@ -666,7 +665,6 @@ export default function App() {
     }).length;
   };
 
-  // 18-Bucket Dynamic Timeseries Aggregator
   const chartBuckets = useMemo(() => {
     const bucketCount = 18;
     const duration = rangeConfig.durationMs;
@@ -681,40 +679,40 @@ export default function App() {
 
       const pointsInBucket = timeseriesData.filter((p) => p.timestamp >= bStart && p.timestamp < bEnd);
       let tps = 0;
-      let p50 = 6;
-      let p95 = 14;
-      let p99 = 24;
-      let errRate = 0.2;
-      let supp = 2;
+      let p50 = 4;
+      let p95 = 8;
+      let p99 = 14;
+      let errRate = 0;
+      let supp = 0;
 
       if (pointsInBucket.length > 0) {
         tps = Math.max(...pointsInBucket.map((p) => p.throughput));
-        p50 = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.latencyP50 || 6), 0) / pointsInBucket.length);
-        p95 = Math.max(...pointsInBucket.map((p) => p.latencyP95 || p.latency || 14));
-        p99 = Math.max(...pointsInBucket.map((p) => p.latencyP99 || (p.latencyP95 * 1.4) || 28));
+        p50 = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.latencyP50 || 4), 0) / pointsInBucket.length);
+        p95 = Math.max(...pointsInBucket.map((p) => p.latencyP95 || p.latency || 8));
+        p99 = Math.max(...pointsInBucket.map((p) => p.latencyP99 || 14));
         errRate = Number((pointsInBucket.reduce((acc, p) => acc + (p.errorRate || 0), 0) / pointsInBucket.length).toFixed(2));
         supp = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.suppressed || 0), 0) / pointsInBucket.length);
       } else {
-        tps = Number((1.2 + Math.sin(i / 2) * 0.8).toFixed(1));
-        p50 = Math.round(8 + Math.cos(i / 3) * 3);
-        p95 = Math.round(p50 * 2.2 + 2);
-        p99 = Math.round(p95 * 1.5 + 4);
-        errRate = Number((0.15 + (i % 6 === 0 ? 0.8 : 0.05)).toFixed(2));
-        supp = Math.round(tps * 1.5 + 1);
+        tps = 0;
+        p50 = 4;
+        p95 = 8;
+        p99 = 14;
+        errRate = 0;
+        supp = 0;
       }
 
       if (i === bucketCount - 1 && metrics.throughput > 0) {
         tps = Math.max(tps, metrics.throughput);
       }
 
-      return { label: timeLabel, timestamp: midTime, throughput: tps, p50, p95, p99, errRate, supp };
+      return { label: timeLabel, timestamp: midTime, bStart, bEnd, throughput: tps, p50, p95, p99, errRate, supp };
     });
   }, [timeseriesData, rangeConfig, metrics.throughput, formatTs]);
 
-  const maxTps = Math.max(12, ...chartBuckets.map((b) => b.throughput));
-  const maxP99 = Math.max(50, ...chartBuckets.map((b) => b.p99));
-  const maxErr = Math.max(2.5, ...chartBuckets.map((b) => b.errRate));
-  const maxSupp = Math.max(15, ...chartBuckets.map((b) => b.supp));
+  const maxTps = Math.max(10, ...chartBuckets.map((b) => b.throughput));
+  const maxP99 = Math.max(40, ...chartBuckets.map((b) => b.p99));
+  const maxErr = Math.max(2.0, ...chartBuckets.map((b) => b.errRate));
+  const maxSupp = Math.max(10, ...chartBuckets.map((b) => b.supp));
 
   const buildSmoothPath = (values: number[], maxVal: number, height = 70, base = 75) => {
     const points = values.map((v, i) => ({
@@ -773,24 +771,22 @@ export default function App() {
   const currentHoverItem = hoveredIdx !== null ? chartBuckets[hoveredIdx] : null;
 
   return (
-    <div className="min-h-screen bg-[#06090f] text-slate-100 p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Visual Ambient Background Lights */}
+    <div className="min-h-screen bg-[#06090f] text-slate-100 p-4 md:p-8 font-sans selection:bg-cyan-500 selection:text-black">
       <div className="fixed inset-0 pointer-events-none overflow-hidden -z-10">
-        <div className="absolute -top-32 left-1/4 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[140px]" />
-        <div className="absolute top-1/3 -right-32 w-[500px] h-[500px] bg-cyan-600/10 rounded-full blur-[160px]" />
+        <div className="absolute -top-32 left-1/4 w-[500px] h-[500px] bg-cyan-600/10 rounded-full blur-[140px]" />
+        <div className="absolute top-1/3 -right-32 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-[160px]" />
         <div className="absolute -bottom-32 left-1/3 w-[500px] h-[500px] bg-rose-600/5 rounded-full blur-[160px]" />
       </div>
 
-      {/* Main Header */}
       <header className="flex flex-col lg:flex-row lg:items-center justify-between pb-6 border-b border-slate-800/80 gap-5">
         <div className="flex items-center gap-3.5">
-          <div className="h-11 w-11 rounded-2xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white shadow-[0_0_30px_rgba(99,102,241,0.45)] border border-indigo-400/30">
-            N
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-tr from-[#090d1a] to-[#12192c] p-1 flex items-center justify-center border border-cyan-500/30 shadow-[0_0_25px_rgba(0,240,255,0.25)]">
+            <NeuroFabricLogo className="h-10 w-10" />
           </div>
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-2xl font-black tracking-tight text-white drop-shadow-sm">NeuroFabric Ops</h1>
-              <span className="text-[10px] font-bold tracking-wider uppercase px-2.5 py-0.5 rounded-full bg-gradient-to-r from-indigo-950 to-indigo-900 border border-indigo-500/40 text-indigo-300 shadow-inner">
+              <span className="text-[10px] font-bold tracking-wider uppercase px-2.5 py-0.5 rounded-full bg-gradient-to-r from-cyan-950 to-indigo-950 border border-cyan-500/40 text-cyan-300 shadow-inner">
                 ENTERPRISE 3D
               </span>
             </div>
@@ -798,9 +794,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Header Navigation & Session Strip */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 self-start lg:self-auto">
-          {/* Timezone Switcher Toggle */}
           <div className="flex items-center p-1 rounded-xl bg-[#0b0f1a] border border-slate-800 shadow-md">
             <button
               onClick={() => setTzMode('LOCAL')}
@@ -830,7 +824,7 @@ export default function App() {
 
           {currentUser ? (
             <div className="flex items-center gap-2.5 p-1.5 px-3 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
-              <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-indigo-500 border border-indigo-400/40 flex items-center justify-center font-bold text-xs text-white">
+              <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-cyan-600 to-indigo-600 border border-cyan-400/40 flex items-center justify-center font-bold text-xs text-white">
                 {currentUser.name[0]}
               </div>
               <div className="text-left text-xs font-mono">
@@ -847,7 +841,7 @@ export default function App() {
           ) : (
             <button
               onClick={() => handleLogin('commander@neurofabric.io', 'Commander2026!')}
-              className="px-4 py-1.5 rounded-xl text-xs font-mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg cursor-pointer transition-all"
+              className="px-4 py-1.5 rounded-xl text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg cursor-pointer transition-all"
             >
               Sign In
             </button>
@@ -860,16 +854,15 @@ export default function App() {
             </span>
           </div>
 
-          {/* Time Range Selector Strip */}
           <div className="flex items-center p-1 rounded-xl bg-[#0b0f1a] border border-slate-800 shadow-xl shadow-black/40">
             <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider px-2 font-semibold">RANGE</span>
             {(['5M', '15M', '1H', '24H', 'ALL'] as TimeRange[]).map((r) => (
               <button
                 key={r}
-                onClick={() => setTimeRange(r)}
+                onClick={() => { setTimeRange(r); setSelectedTimeSlice(null); }}
                 className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
                   timeRange === r
-                    ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-[0_2px_12px_rgba(99,102,241,0.45)] border border-indigo-400/40'
+                    ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-[0_2px_12px_rgba(0,240,255,0.35)] border border-cyan-400/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
                 }`}
               >
@@ -890,57 +883,23 @@ export default function App() {
         </div>
       </header>
 
-      {/* Custom Time Range Modal */}
-      {showCustomModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-gradient-to-b from-[#131b2e] to-[#0a0e18] border border-cyan-500/50 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-bold text-white text-sm font-mono flex items-center gap-2">
-                <span>⏱️</span> Select Custom Investigation Window
-              </h3>
-              <button onClick={() => setShowCustomModal(false)} className="text-slate-400 hover:text-white font-mono cursor-pointer">✕</button>
-            </div>
-
-            <div className="space-y-3 text-xs font-mono">
-              <div>
-                <label className="text-slate-400 block mb-1">Window Start Time ({tzMode})</label>
-                <input
-                  type="datetime-local"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-              <div>
-                <label className="text-slate-400 block mb-1">Window End Time ({tzMode})</label>
-                <input
-                  type="datetime-local"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
-              <button
-                onClick={() => setShowCustomModal(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleApplyCustomRange}
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer shadow-lg shadow-cyan-600/40"
-              >
-                Apply Range Filter
-              </button>
-            </div>
+      {selectedTimeSlice && (
+        <div className="my-3 px-4 py-2 rounded-xl bg-cyan-950/80 border border-cyan-500/60 text-cyan-200 text-xs font-mono flex items-center justify-between shadow-lg animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span>
+              <strong>Filtered by Graph Slice:</strong> Inspecting events between {formatTs(selectedTimeSlice.start)} and {formatTs(selectedTimeSlice.end)}
+            </span>
           </div>
+          <button
+            onClick={() => setSelectedTimeSlice(null)}
+            className="text-[10px] font-bold uppercase tracking-wider text-white bg-cyan-800 hover:bg-cyan-700 px-2 py-0.5 rounded cursor-pointer transition-colors"
+          >
+            Clear Filter (Show All Window)
+          </button>
         </div>
       )}
 
-      {/* Architecture & Operational Knowledge HUD */}
       {showArchGuide && (
         <section className="my-5 p-5 rounded-2xl bg-gradient-to-b from-[#111728] via-[#0d1322] to-[#0a0e18] border border-indigo-500/50 shadow-2xl space-y-4 animate-in fade-in duration-300">
           <div className="flex items-center justify-between pb-3 border-b border-indigo-900/50">
@@ -997,16 +956,52 @@ export default function App() {
         </section>
       )}
 
-      {/* Interactive Sim Engine Command Strip */}
-      <div className="my-5 p-3.5 rounded-2xl bg-gradient-to-r from-[#0d1322] via-[#0f172a] to-[#0d1322] border border-indigo-900/40 shadow-xl flex flex-col md:flex-row items-center justify-between gap-3">
+      {showCustomModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gradient-to-b from-[#131b2e] to-[#0a0e18] border border-cyan-500/50 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-bold text-white text-sm font-mono flex items-center gap-2">
+                <span>⏱️</span> Select Custom Investigation Window
+              </h3>
+              <button onClick={() => setShowCustomModal(false)} className="text-slate-400 hover:text-white font-mono cursor-pointer">✕</button>
+            </div>
+
+            <div className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="text-slate-400 block mb-1">Window Start Time ({tzMode})</label>
+                <input
+                  type="datetime-local"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="text-slate-400 block mb-1">Window End Time ({tzMode})</label>
+                <input
+                  type="datetime-local"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button onClick={() => setShowCustomModal(false)} className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer">Cancel</button>
+              <button onClick={handleApplyCustomRange} className="px-5 py-2 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer shadow-lg shadow-cyan-600/40">Apply Range Filter</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="my-5 p-3.5 rounded-2xl bg-gradient-to-r from-[#0d1322] via-[#0f172a] to-[#0d1322] border border-cyan-900/40 shadow-xl flex flex-col md:flex-row items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span className="flex h-2.5 w-2.5 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
           </span>
-          <span className="text-xs font-mono font-bold uppercase text-indigo-300 tracking-wider">
-            Telemetry Simulator:
-          </span>
+          <span className="text-xs font-mono font-bold uppercase text-cyan-300 tracking-wider">Telemetry Simulator:</span>
           <span className="text-xs text-slate-400 hidden sm:inline">Inject live telemetry to observe waveforms & closed-loop circuit actions.</span>
         </div>
 
@@ -1018,7 +1013,6 @@ export default function App() {
           >
             {simLoading === 'TRAFFIC_FLOOD' ? 'Simulating...' : '🌊 Sustained Burst (45x)'}
           </button>
-
           <button
             disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('CANARY_TEST')}
@@ -1026,7 +1020,6 @@ export default function App() {
           >
             {simLoading === 'CANARY_TEST' ? 'Deploying...' : '🧪 Test 15s Canary'}
           </button>
-
           <button
             disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('CRITICAL_ANOMALY')}
@@ -1034,7 +1027,6 @@ export default function App() {
           >
             {simLoading === 'CRITICAL_ANOMALY' ? 'Injecting...' : '⚡ Inject Anomaly'}
           </button>
-
           <button
             disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('DLP_PROBE')}
@@ -1042,7 +1034,6 @@ export default function App() {
           >
             {simLoading === 'DLP_PROBE' ? 'Testing...' : '🛡️ Test DLP Probe'}
           </button>
-
           <button
             disabled={Boolean(simLoading)}
             onClick={() => triggerSimulation('TRIP_BREAKER')}
@@ -1053,12 +1044,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* KPI Metric Strip */}
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-5">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400', glow: 'shadow-cyan-500/10' },
           { label: 'Total Ingested', value: `${metrics.totalIngested} evts`, color: 'text-emerald-400', glow: 'shadow-emerald-500/10' },
-          { label: 'Alerts Suppressed', value: `${metrics.suppressedAlerts} (${Math.round((metrics.suppressedAlerts / Math.max(1, metrics.totalIngested)) * 100)}%)`, color: 'text-purple-400', glow: 'shadow-purple-500/10' },
+          { label: 'Alerts Suppressed', value: `${metrics.suppressedAlerts}`, color: 'text-purple-400', glow: 'shadow-purple-500/10' },
           { label: 'Secrets Scrubbed', value: metrics.secretsScrubbed, color: 'text-rose-400', glow: 'shadow-rose-500/10' },
           { label: 'Stream Lag (P99)', value: `${metrics.streamLagMs}ms`, color: 'text-amber-400', glow: 'shadow-amber-500/10' },
           { label: 'Canary Health', value: activeCanary ? 'OBSERVING' : '100% NOMINAL', color: activeCanary ? 'text-amber-300' : 'text-emerald-300', glow: 'shadow-amber-500/10' },
@@ -1076,24 +1066,18 @@ export default function App() {
         ))}
       </section>
 
-      {/* 4-Chart Synchronized Telemetry HUD Stack */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {/* Chart 1: Ingestion Velocity */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                1. Ingestion Velocity ({rangeConfig.label})
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">1. Ingestion Velocity ({rangeConfig.label})</h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-slate-400">Current:</span>
               <span className="text-cyan-400 font-bold tabular-nums">{metrics.throughput} evt/s</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-800/40 text-cyan-300">
-                Peak: {maxTps} evt/s
-              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-800/40 text-cyan-300">Peak: {maxTps} evt/s</span>
             </div>
           </div>
 
@@ -1126,6 +1110,10 @@ export default function App() {
                   className={`${hoveredIdx === i ? 'fill-white stroke-cyan-400' : 'fill-cyan-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
                   onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('tps'); }}
                   onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
+                  onClick={() => {
+                    const b = chartBuckets[i];
+                    if (b) setSelectedTimeSlice({ start: b.bStart, end: b.bEnd, label: b.label });
+                  }}
                 />
               ))}
             </svg>
@@ -1138,6 +1126,7 @@ export default function App() {
                 <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
                 <div>Velocity: <span className="text-white font-bold">{currentHoverItem.throughput} evt/s</span></div>
                 <div>Tail P95: <span className="text-emerald-400 font-bold">{currentHoverItem.p95}ms</span></div>
+                <div className="text-[9px] text-slate-400 mt-1 italic">Click point to filter stream to this slice</div>
               </div>
             )}
           </div>
@@ -1147,21 +1136,16 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chart 2: Multi-Percentile Latency & Canary Window */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-emerald-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                2. Latency Spectrum (P50/P95/P99)
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">2. Latency Spectrum (P50/P95/P99)</h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-emerald-400 font-bold">P95: {chartBuckets[chartBuckets.length - 1]?.p95 || 12}ms</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
-                P99: {chartBuckets[chartBuckets.length - 1]?.p99 || 24}ms
-              </span>
+              <span className="text-emerald-400 font-bold">P95: {chartBuckets[chartBuckets.length - 1]?.p95 || 8}ms</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">P99: {chartBuckets[chartBuckets.length - 1]?.p99 || 14}ms</span>
             </div>
           </div>
 
@@ -1181,9 +1165,7 @@ export default function App() {
               )}
 
               {p95Path.area && <path d={p95Path.area} fill="url(#emeraldSmoothGrad)" />}
-              {p99Path.line && (
-                <path d={p99Path.line} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="3 3" />
-              )}
+              {p99Path.line && <path d={p99Path.line} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="3 3" />}
               {p95Path.line && (
                 <path d={p95Path.line} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]" />
               )}
@@ -1197,6 +1179,10 @@ export default function App() {
                   className={`${hoveredIdx === i ? 'fill-white stroke-emerald-400' : 'fill-emerald-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
                   onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('latency'); }}
                   onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
+                  onClick={() => {
+                    const b = chartBuckets[i];
+                    if (b) setSelectedTimeSlice({ start: b.bStart, end: b.bEnd, label: b.label });
+                  }}
                 />
               ))}
             </svg>
@@ -1219,22 +1205,17 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chart 3: Error Rate & SLA Reliability Burn Rate */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-rose-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-rose-400 animate-pulse" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                3. Error Rate & SLA Reliability Budget
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">3. Error Rate & SLA Budget</h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-slate-400">Current Err:</span>
               <span className="text-rose-400 font-bold">{chartBuckets[chartBuckets.length - 1]?.errRate || 0}%</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
-                SLA: 99.9% Nominal
-              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">SLA: 99.9% Nominal</span>
             </div>
           </div>
 
@@ -1288,18 +1269,15 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chart 4: Alert Storm Suppression & Cascade Correlation */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-purple-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-purple-400 animate-pulse" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                4. Cascade Suppression & Dedup Storm
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">4. Cascade Suppression & Noise Dedup</h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-slate-400">Total Filtered:</span>
+              <span className="text-slate-400">Total Suppressed:</span>
               <span className="text-purple-400 font-bold">{metrics.suppressedAlerts} Noise Bursts</span>
             </div>
           </div>
@@ -1355,7 +1333,53 @@ export default function App() {
         </div>
       </section>
 
-      {/* Microservice Topology & Threat Defense Matrix */}
+      {activeCanary && (
+        <section className="mb-8 p-5 rounded-2xl bg-gradient-to-r from-[#17130a] via-[#21190c] to-[#17130a] border border-amber-500/60 shadow-[0_0_35px_rgba(245,158,11,0.2)] animate-pulse">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-amber-500/30 gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-3 w-3 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+              </span>
+              <div>
+                <h3 className="text-sm font-bold font-mono text-amber-200 uppercase tracking-wide">
+                  Stage 1 Canary Observation Active: {activeCanary.target}
+                </h3>
+                <p className="text-xs text-amber-400/80 mt-0.5">
+                  Slice: {activeCanary.slice || '10% Traffic'} &bull; Observing for error rate regressions before fleet promotion
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <div className="text-[10px] font-mono text-amber-400 uppercase font-bold">Observation Remaining</div>
+                <div className="text-xl font-black font-mono text-white tabular-nums">{canaryCountdown}s</div>
+              </div>
+              <button
+                onClick={() => handleAbortCanary(activeCanary.taskId, activeCanary.target)}
+                className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/40 cursor-pointer transition-all hover:scale-102"
+              >
+                Abort & Rollback
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3.5 space-y-1.5">
+            <div className="flex justify-between text-[11px] font-mono text-amber-300">
+              <span>Canary Verification Progress</span>
+              <span>{Math.round(((15 - canaryCountdown) / 15) * 100)}% Complete (0 Anomalies Detected)</span>
+            </div>
+            <div className="w-full bg-amber-950/60 rounded-full h-2.5 overflow-hidden border border-amber-600/40">
+              <div
+                className="bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 h-full transition-all duration-1000 ease-linear shadow-[0_0_12px_rgba(245,158,11,0.8)]"
+                style={{ width: `${((15 - canaryCountdown) / 15) * 100}%` }}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-6">
         <div className="md:col-span-8 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
@@ -1418,63 +1442,11 @@ export default function App() {
         </div>
       </section>
 
-      {/* Live Canary Mission Control HUD */}
-      {activeCanary && (
-        <section className="mb-8 p-5 rounded-2xl bg-gradient-to-r from-[#17130a] via-[#21190c] to-[#17130a] border border-amber-500/60 shadow-[0_0_35px_rgba(245,158,11,0.2)] animate-pulse">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-amber-500/30 gap-3">
-            <div className="flex items-center gap-3">
-              <span className="flex h-3 w-3 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
-              </span>
-              <div>
-                <h3 className="text-sm font-bold font-mono text-amber-200 uppercase tracking-wide">
-                  Stage 1 Canary Observation Active: {activeCanary.target}
-                </h3>
-                <p className="text-xs text-amber-400/80 mt-0.5">
-                  Slice: {activeCanary.slice || '10% Traffic'} &bull; Observing for error rate regressions before fleet promotion
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="text-right">
-                <div className="text-[10px] font-mono text-amber-400 uppercase font-bold">Observation Remaining</div>
-                <div className="text-xl font-black font-mono text-white tabular-nums">{canaryCountdown}s</div>
-              </div>
-              <button
-                onClick={() => handleAbortCanary(activeCanary.taskId, activeCanary.target)}
-                className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/40 cursor-pointer transition-all hover:scale-102"
-              >
-                Abort & Rollback
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-3.5 space-y-1.5">
-            <div className="flex justify-between text-[11px] font-mono text-amber-300">
-              <span>Canary Verification Progress</span>
-              <span>{Math.round(((15 - canaryCountdown) / 15) * 100)}% Complete (0 Anomalies Detected)</span>
-            </div>
-            <div className="w-full bg-amber-950/60 rounded-full h-2.5 overflow-hidden border border-amber-600/40">
-              <div
-                className="bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 h-full transition-all duration-1000 ease-linear shadow-[0_0_12px_rgba(245,158,11,0.8)]"
-                style={{ width: `${((15 - canaryCountdown) / 15) * 100}%` }}
-              />
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* Main Operations Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
-        {/* Autonomous Remediation Circuit */}
         <section className="lg:col-span-7 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
             <div className="flex items-center gap-3">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Autonomous Remediation Circuit
-              </h2>
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">Autonomous Remediation Circuit</h2>
               {pendingQueue.length > 0 && (
                 <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-amber-950 border border-amber-700/60 text-amber-300 shadow-md">
                   Task {queueIndex + 1} of {pendingQueue.length}
@@ -1550,9 +1522,7 @@ export default function App() {
               <div className="flex items-start justify-between">
                 <div>
                   <div className="flex items-center gap-2.5">
-                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-rose-950 border border-rose-700 text-rose-300">
-                      {activeProposal.severity}
-                    </span>
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-rose-950 border border-rose-700 text-rose-300">{activeProposal.severity}</span>
                     <h3 className="text-sm font-semibold text-white tracking-wide">{activeProposal.title}</h3>
                   </div>
                   <p className="text-xs text-slate-400 mt-1.5">Target: <code className="text-cyan-400 font-mono font-semibold">{activeProposal.target}</code></p>
@@ -1571,9 +1541,7 @@ export default function App() {
                       const color = line.startsWith('+') ? 'text-emerald-400' : line.startsWith('-') ? 'text-rose-400' : 'text-slate-400';
                       return <div key={idx} className={color}>{line}</div>;
                     })
-                  ) : (
-                    <span className="text-slate-500">No diff preview attached.</span>
-                  )}
+                  ) : (<span className="text-slate-500">No diff preview attached.</span>)}
                 </pre>
               </div>
 
@@ -1599,7 +1567,7 @@ export default function App() {
               <span>Autonomous Embassy is nominal. No pending human-in-the-loop proposals.</span>
               <button
                 onClick={() => triggerSimulation('CRITICAL_ANOMALY')}
-                className="mt-2 text-indigo-400 hover:text-indigo-300 underline underline-offset-4 cursor-pointer text-xs"
+                className="mt-2 text-cyan-400 hover:text-cyan-300 underline underline-offset-4 cursor-pointer text-xs"
               >
                 Click here to inject a test anomaly
               </button>
@@ -1607,14 +1575,11 @@ export default function App() {
           )}
         </section>
 
-        {/* Live Ingestion Stream with Filter, Search, Buffer & JSON Export */}
         <section className="lg:col-span-5 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-2xl backdrop-blur-md">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
-                  Live Ingestion Stream
-                </h2>
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">Live Ingestion Stream</h2>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
                   {filteredLogs.length} Events
                 </span>
@@ -1647,7 +1612,7 @@ export default function App() {
                 placeholder="Filter service or message..."
                 value={streamSearch}
                 onChange={(e) => setStreamSearch(e.target.value)}
-                className="w-full bg-[#080c14] border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                className="w-full bg-[#080c14] border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500"
               />
               <div className="flex items-center gap-1 text-[10px] font-mono">
                 {(['ALL', 'CRITICAL', 'WARNING', 'SCRUBBED'] as const).map((filter) => (
@@ -1655,7 +1620,7 @@ export default function App() {
                     key={filter}
                     onClick={() => setStreamFilter(filter)}
                     className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                      streamFilter === filter ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-850 text-slate-400 hover:text-slate-200'
+                      streamFilter === filter ? 'bg-cyan-600 text-white font-bold' : 'bg-slate-850 text-slate-400 hover:text-slate-200'
                     }`}
                   >
                     {filter}
@@ -1673,9 +1638,7 @@ export default function App() {
                         <span className={`h-1.5 w-1.5 rounded-full ${log.severity === 'CRITICAL' ? 'bg-rose-400' : log.severity === 'WARNING' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
                         <span className="font-mono text-cyan-400 font-bold">{log.service}</span>
                       </div>
-                      <span className="text-[10px] text-slate-500 font-mono">
-                        {formatTs(log.rawTime)}
-                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono">{formatTs(log.rawTime)}</span>
                     </div>
                     <p className="text-slate-300 font-mono text-[11px] truncate">{log.message}</p>
                     {log.dlpScrubbed && (
@@ -1687,7 +1650,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="text-center py-14 text-slate-500 text-xs font-mono">
-                  No events match active filter.
+                  {selectedTimeSlice ? 'No events occurred in this selected graph slice.' : 'No events match active filter.'}
                 </div>
               )}
             </div>
@@ -1700,7 +1663,7 @@ export default function App() {
                 <button
                   key={limit}
                   onClick={() => setBufferLimit(limit)}
-                  className={`px-1.5 py-0.5 rounded text-[10px] ${bufferLimit === limit ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-800 text-slate-400'}`}
+                  className={`px-1.5 py-0.5 rounded text-[10px] ${bufferLimit === limit ? 'bg-cyan-600 text-white font-bold' : 'bg-slate-800 text-slate-400'}`}
                 >
                   {limit}
                 </button>
@@ -1711,15 +1674,11 @@ export default function App() {
         </section>
       </div>
 
-      {/* Governance Ledger Table with Merkle Shield Badge */}
       <section className="bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
             <div className="flex items-center gap-2.5">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Immutable Governance Ledger
-              </h2>
-              {/* Merkle Cryptographic Audit Shield Badge */}
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">Immutable Governance Ledger</h2>
               {merkleStatus && (
                 <span
                   title={`Cryptographic Merkle Root: ${merkleStatus.rootHash}`}
@@ -1742,12 +1701,12 @@ export default function App() {
                   onClick={() => setLedgerFilter(filter)}
                   className={`px-3 py-1.5 rounded-lg text-[11px] font-mono transition-all cursor-pointer flex items-center gap-1.5 ${
                     ledgerFilter === filter
-                      ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold shadow-[0_2px_12px_rgba(99,102,241,0.4)] border border-indigo-400/40'
+                      ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white font-bold shadow-[0_2px_12px_rgba(0,240,255,0.35)] border border-cyan-400/40'
                       : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
                   }`}
                 >
                   <span>{filter}</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${ledgerFilter === filter ? 'bg-indigo-800 text-white' : 'bg-slate-700 text-slate-300'}`}>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${ledgerFilter === filter ? 'bg-cyan-900 text-white' : 'bg-slate-700 text-slate-300'}`}>
                     {count}
                   </span>
                 </button>
@@ -1771,29 +1730,17 @@ export default function App() {
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {filteredLedger.length > 0 ? (
                 filteredLedger.map((row) => (
-                  <tr
-                    key={row.token}
-                    onClick={() => setSelectedTask(row)}
-                    className="hover:bg-slate-850/50 cursor-pointer transition-colors"
-                  >
+                  <tr key={row.token} onClick={() => setSelectedTask(row)} className="hover:bg-slate-850/50 cursor-pointer transition-colors">
                     <td className="py-3 text-slate-200 underline decoration-slate-700 underline-offset-4">{row.token.slice(0, 18)}...</td>
                     <td className="py-3 text-cyan-400 font-bold">{row.target || row.subject?.target || '—'}</td>
                     <td className="py-3">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-md text-[10px] font-semibold border ${
-                          row.status === 'PENDING'
-                            ? 'bg-amber-950/80 text-amber-300 border-amber-800'
-                            : row.status === 'VERIFIED_RESOLVED'
-                            ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
-                            : row.status === 'ROLLED_BACK'
-                            ? 'bg-rose-950/80 text-rose-300 border-rose-800'
-                            : row.status === 'CANARY_VERIFYING'
-                            ? 'bg-amber-950/90 text-amber-300 border-amber-500 animate-pulse'
-                            : row.status === 'CIRCUIT_TRIPPED'
-                            ? 'bg-red-950/90 text-red-200 border-red-500'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
-                        }`}
-                      >
+                      <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-semibold border ${
+                        row.status === 'PENDING' ? 'bg-amber-950/80 text-amber-300 border-amber-800' :
+                        row.status === 'VERIFIED_RESOLVED' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800' :
+                        row.status === 'ROLLED_BACK' ? 'bg-rose-950/80 text-rose-300 border-rose-800' :
+                        row.status === 'CANARY_VERIFYING' ? 'bg-amber-950/90 text-amber-300 border-amber-500 animate-pulse' :
+                        row.status === 'CIRCUIT_TRIPPED' ? 'bg-red-950/90 text-red-200 border-red-500' : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}>
                         {row.status}
                       </span>
                     </td>
@@ -1804,9 +1751,7 @@ export default function App() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="text-center py-10 text-slate-500 font-mono">
-                    No ledger entries match filter "{ledgerFilter}".
-                  </td>
+                  <td colSpan={6} className="text-center py-10 text-slate-500 font-mono">No ledger entries match filter "{ledgerFilter}".</td>
                 </tr>
               )}
             </tbody>
@@ -1814,15 +1759,12 @@ export default function App() {
         </div>
       </section>
 
-      {/* Audit Inspection Modal */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-gradient-to-b from-[#131a29] to-[#0c101a] border border-slate-700 rounded-2xl max-w-xl w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
-                <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-md bg-indigo-950 border border-indigo-700 text-indigo-300">
-                  Audit Record
-                </span>
+                <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-md bg-cyan-950 border border-cyan-700 text-cyan-300">Audit Record</span>
                 <h3 className="font-semibold text-white text-sm font-mono truncate max-w-xs">{selectedTask.token}</h3>
               </div>
               <button onClick={() => setSelectedTask(null)} className="text-slate-400 hover:text-white text-sm font-mono cursor-pointer">✕</button>
@@ -1864,10 +1806,7 @@ export default function App() {
                   ⚡ Reset Breaker & Unlock Target
                 </button>
               )}
-              <button
-                onClick={() => setSelectedTask(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer transition-colors"
-              >
+              <button onClick={() => setSelectedTask(null)} className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer transition-colors">
                 Close
               </button>
             </div>
@@ -1875,13 +1814,12 @@ export default function App() {
         </div>
       )}
 
-      {/* Enterprise Authentication Portal */}
       {!currentUser && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="relative bg-gradient-to-b from-[#131b2e] via-[#0f1524] to-[#0a0e1a] border border-slate-700/80 rounded-2xl max-w-md w-full p-7 space-y-6 shadow-[0_0_50px_rgba(0,0,0,0.8)]">
             <div className="text-center space-y-2">
-              <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-tr from-indigo-700 via-indigo-600 to-cyan-500 flex items-center justify-center font-black text-white text-xl shadow-[0_0_24px_rgba(99,102,241,0.5)] border border-indigo-400/30">
-                N
+              <div className="mx-auto h-12 w-12 rounded-2xl bg-gradient-to-tr from-[#090d1a] to-[#12192c] p-1 flex items-center justify-center border border-cyan-500/30 shadow-[0_0_24px_rgba(0,240,255,0.3)]">
+                <NeuroFabricLogo className="h-10 w-10" />
               </div>
               <h2 className="text-xl font-black text-white tracking-tight">NeuroFabric Ops Access</h2>
               <p className="text-xs text-slate-400">Enterprise Closed-Loop Remediation Security Perimeter</p>
@@ -1897,8 +1835,8 @@ export default function App() {
               <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Quick Persona Access</span>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: 'Incident Commander', email: 'commander@neurofabric.io', pass: 'Commander2026!', color: 'border-indigo-500/50 hover:bg-indigo-950/40 text-indigo-300' },
-                  { label: 'SecOps Lead', email: 'secops@neurofabric.io', pass: 'SecOps2026!', color: 'border-cyan-500/50 hover:bg-cyan-950/40 text-cyan-300' },
+                  { label: 'Incident Commander', email: 'commander@neurofabric.io', pass: 'Commander2026!', color: 'border-cyan-500/50 hover:bg-cyan-950/40 text-cyan-300' },
+                  { label: 'SecOps Lead', email: 'secops@neurofabric.io', pass: 'SecOps2026!', color: 'border-indigo-500/50 hover:bg-indigo-950/40 text-indigo-300' },
                   { label: 'SRE Operator', email: 'sre@neurofabric.io', pass: 'Operator2026!', color: 'border-emerald-500/50 hover:bg-emerald-950/40 text-emerald-300' },
                   { label: 'Auditor (Read-Only)', email: 'auditor@neurofabric.io', pass: 'Audit2026!', color: 'border-slate-600/50 hover:bg-slate-800/40 text-slate-300' },
                 ].map((persona, idx) => (
@@ -1928,7 +1866,7 @@ export default function App() {
                   type="email"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
                   required
                 />
               </div>
@@ -1939,7 +1877,7 @@ export default function App() {
                   type="password"
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-[#090d16] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
                   required
                 />
               </div>
@@ -1947,7 +1885,7 @@ export default function App() {
               <button
                 type="submit"
                 disabled={isLoggingIn}
-                className="w-full py-2.5 rounded-xl font-bold font-sans text-xs bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white shadow-lg shadow-indigo-600/40 cursor-pointer transition-all disabled:opacity-50"
+                className="w-full py-2.5 rounded-xl font-bold font-sans text-xs bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white shadow-lg cursor-pointer transition-all disabled:opacity-50"
               >
                 {isLoggingIn ? 'Authenticating...' : 'Authorize Session'}
               </button>
