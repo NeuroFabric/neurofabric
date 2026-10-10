@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 
-// Explicit backend API base URL - falls back to production Render web service
 const API_BASE = (import.meta.env.VITE_API_URL || 'https://neurofabric-backend.onrender.com').replace(/\/$/, '');
 
 interface IngestionMetrics {
@@ -72,7 +71,6 @@ export default function App() {
   const [isDeciding, setIsDeciding] = useState<boolean>(false);
   const [ledgerFilter, setLedgerFilter] = useState<string>('ALL');
 
-  // Fetch latest governance ledger
   const fetchLedger = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/governance/ledger`);
@@ -85,7 +83,6 @@ export default function App() {
     }
   }, []);
 
-  // Fetch KPI metrics snapshots
   const fetchMetrics = useCallback(async () => {
     try {
       const [opsRes, ingRes] = await Promise.all([
@@ -104,19 +101,22 @@ export default function App() {
     }
   }, []);
 
-  // Handle HITL operator decision
   const handleDecision = async (taskId: string, decision: 'APPROVED' | 'REJECTED') => {
     setIsDeciding(true);
     try {
+      if (decision === 'REJECTED') {
+        setActiveProposal(null);
+        setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
+      } else {
+        setActiveProposal((prev) => (prev ? { ...prev, status: 'CANARY_VERIFYING' } : null));
+      }
+
       const res = await fetch(`${API_BASE}/api/v1/embassy/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, decision, reviewer: 'Incident Commander' }),
       });
       if (res.ok) {
-        if (activeProposal && activeProposal.taskId === taskId) {
-          setActiveProposal((prev) => (prev ? { ...prev, status: decision === 'APPROVED' ? 'CANARY_VERIFYING' : 'REJECTED' } : null));
-        }
         await fetchLedger();
       }
     } catch (err) {
@@ -126,24 +126,18 @@ export default function App() {
     }
   };
 
-  // Setup EventSource (SSE) and polling
   useEffect(() => {
     fetchLedger();
     fetchMetrics();
     const pollTimer = setInterval(() => {
       fetchMetrics();
       fetchLedger();
-    }, 6000);
+    }, 5000);
 
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
 
-    es.onopen = () => {
-      setConnected(true);
-    };
-
-    es.onerror = () => {
-      setConnected(false);
-    };
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
 
     es.onmessage = (event) => {
       try {
@@ -170,15 +164,15 @@ export default function App() {
             if (payload.data) {
               setActiveProposal({
                 taskId: payload.data.taskId || payload.data.taskToken || `task-${Date.now()}`,
-                target: payload.data.target || 'payment-gateway-service',
-                title: payload.data.title || 'Critical Service Anomaly Detected',
-                reason: payload.data.reason || 'High latency spike breaching SLA threshold',
+                target: payload.data.target || 'redis-cluster',
+                title: payload.data.title || `Critical Anomaly on ${payload.data.target || 'service'}`,
+                reason: payload.data.reason || 'SLA latency threshold breached',
                 severity: payload.data.severity || 'CRITICAL',
                 confidence: payload.data.confidence ?? 88,
-                blastRadius: payload.data.blastRadius ?? '18%',
+                blastRadius: payload.data.blastRadius ?? '15%',
                 patch: payload.data.patch || {
                   diff: '--- deployment.yaml\n+++ deployment.yaml\n@@ -12,3 +12,3 @@\n-  replicas: 2\n+  replicas: 5',
-                  target: payload.data.target || 'payment-gateway-service',
+                  target: payload.data.target || 'redis-cluster',
                 },
                 status: 'PENDING',
               });
@@ -200,20 +194,21 @@ export default function App() {
           case 'CANARY_CONFIRMED':
             setActiveCanary(null);
             setVerifiedResolved(payload.data);
-            setActiveProposal((prev) => (prev ? { ...prev, status: 'VERIFIED_RESOLVED' } : null));
+            setActiveProposal(null);
+            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             fetchLedger();
             break;
 
           case 'REMEDIATION_ROLLED_BACK':
             setActiveCanary(null);
             setRolledBackTask(payload.data);
-            setActiveProposal((prev) => (prev ? { ...prev, status: 'ROLLED_BACK' } : null));
+            setActiveProposal(null);
+            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             fetchLedger();
             break;
 
           case 'DECISION_RESOLVED':
             fetchLedger();
-            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             break;
 
           case 'ALERT_INGESTED':
@@ -222,9 +217,9 @@ export default function App() {
                 {
                   id: payload.data.id || String(Date.now()),
                   timestamp: payload.data.timestamp || new Date().toLocaleTimeString(),
-                  service: payload.data.service || 'payment-gateway-service',
-                  severity: payload.data.severity || 'CRITICAL',
-                  message: payload.data.message || payload.data.raw || 'Telemetry breach captured by DLP pipeline',
+                  service: payload.data.service || 'service',
+                  severity: payload.data.severity || 'INFO',
+                  message: payload.data.message || 'Telemetry event processed',
                   dlpScrubbed: Boolean(payload.data.scrubbed),
                 },
                 ...prev.slice(0, 39),
@@ -270,7 +265,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Stream Status Badge */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 self-start md:self-auto">
           <span className={`h-2 w-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
           <span className="text-xs font-mono font-medium text-slate-300">
@@ -298,9 +292,8 @@ export default function App() {
         ))}
       </section>
 
-      {/* Main Grid: Proposals / Canary & Live Telemetry Stream */}
+      {/* Main Grid: Autonomous Remediation Circuit & Live Ingestion Stream */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
-        {/* Left Column: HITL Review & Canary Circuit (7 Cols) */}
         <section className="lg:col-span-7 bg-[#111622] border border-slate-800 rounded-lg p-5">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-200">
@@ -309,7 +302,6 @@ export default function App() {
             <span className="text-xs font-mono text-slate-400">Canary Verification Window: 15s</span>
           </div>
 
-          {/* Canary Status Alert Banners */}
           {activeCanary && (
             <div className="mb-4 p-3.5 rounded-lg bg-amber-950/40 border border-amber-500/50 text-amber-300 flex items-center justify-between animate-pulse">
               <div className="flex items-center gap-2">
@@ -346,7 +338,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Active Proposal Card */}
           {activeProposal ? (
             <div className="bg-[#0e131f] border border-slate-700/60 rounded-lg p-4 space-y-4">
               <div className="flex items-start justify-between">
@@ -365,7 +356,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Unified Diff Patch Preview */}
               <div>
                 <span className="text-[11px] font-medium text-slate-400 block mb-1">Proposed Remediation Patch (Unified Diff)</span>
                 <pre className="bg-black/70 border border-slate-800 rounded p-3 text-xs font-mono overflow-x-auto text-slate-300">
@@ -380,23 +370,29 @@ export default function App() {
                 </pre>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  disabled={isDeciding || activeProposal.status === 'CANARY_VERIFYING'}
-                  onClick={() => handleDecision(activeProposal.taskId, 'REJECTED')}
-                  className="px-3.5 py-1.5 rounded text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-rose-400 border border-rose-900/40 transition-colors disabled:opacity-50"
-                >
-                  Reject
-                </button>
-                <button
-                  disabled={isDeciding || activeProposal.status === 'CANARY_VERIFYING'}
-                  onClick={() => handleDecision(activeProposal.taskId, 'APPROVED')}
-                  className="px-4 py-1.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition-colors disabled:opacity-50"
-                >
-                  {isDeciding ? 'Deploying...' : 'Approve & Canary Deploy'}
-                </button>
-              </div>
+              {activeProposal.status === 'CANARY_VERIFYING' ? (
+                <div className="flex items-center justify-end gap-2 pt-2 text-xs text-amber-400 font-mono">
+                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping inline-block mr-1" />
+                  Canary deployment in-flight... Verification window active.
+                </div>
+              ) : (
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    disabled={isDeciding}
+                    onClick={() => handleDecision(activeProposal.taskId, 'REJECTED')}
+                    className="px-3.5 py-1.5 rounded text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-rose-400 border border-rose-900/40 transition-colors disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    disabled={isDeciding}
+                    onClick={() => handleDecision(activeProposal.taskId, 'APPROVED')}
+                    className="px-4 py-1.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition-colors disabled:opacity-50"
+                  >
+                    {isDeciding ? 'Deploying...' : 'Approve & Canary Deploy'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-center py-12 border border-dashed border-slate-800 rounded-lg text-slate-500 text-xs">
@@ -405,7 +401,6 @@ export default function App() {
           )}
         </section>
 
-        {/* Right Column: Live Telemetry Stream (5 Cols) */}
         <section className="lg:col-span-5 bg-[#111622] border border-slate-800 rounded-lg p-5 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
@@ -455,7 +450,6 @@ export default function App() {
             <p className="text-xs text-slate-400">PostgreSQL Audit Trail with OWASP & NIST Traceability</p>
           </div>
 
-          {/* Filter Pills */}
           <div className="flex flex-wrap gap-1.5 text-xs font-medium">
             {['ALL', 'PENDING', 'CANARY_VERIFYING', 'VERIFIED_RESOLVED', 'ROLLED_BACK', 'APPROVED', 'REJECTED'].map((filter) => (
               <button
@@ -473,7 +467,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Ledger Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
