@@ -8,6 +8,7 @@ import { metricsCollector } from "../ingestion/metrics-collector.ts";
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
 import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
 import { RollbackCircuit } from "../embassy/RollbackCircuit.ts";
+import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
 
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
@@ -140,7 +141,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/stream/alerts - SSE with proxy buffering disabled
         if (request.method === "GET" && url.pathname === "/api/v1/stream/alerts") {
           response.writeHead(200, {
             "Content-Type": "text/event-stream",
@@ -155,7 +155,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/governance/ledger
         if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
           const combined = new Map<string, any>();
 
@@ -230,8 +229,27 @@ export function createWedgeServer(options: { cwd: string }): Server {
           }
 
           const mem = inMemoryLedger.get(taskId);
-          const target = mem?.subject?.target || mem?.target || "payment-gateway-service";
+          const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "payment-gateway-service" : "redis-cluster");
           const diff = mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
+
+          // Check anti-flapping circuit breaker
+          if (decision === "APPROVED" && RollbackCircuit.isTripped(target)) {
+            const reason = "Circuit breaker tripped: Service flapping continuously. Automated actions frozen.";
+            inMemoryLedger.set(taskId, {
+              token: taskId,
+              task_token: taskId,
+              taskId,
+              status: "CIRCUIT_TRIPPED",
+              target,
+              approvedBy: reviewer,
+              reason,
+              createdAt: mem?.createdAt || new Date().toISOString(),
+              decidedAt: new Date().toISOString(),
+            });
+            broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { taskId, target, status: "CIRCUIT_TRIPPED", reason } });
+            sendJson(response, 200, { success: false, taskId, status: "CIRCUIT_TRIPPED", reason });
+            return;
+          }
 
           if (decision === "APPROVED") {
             inMemoryLedger.set(taskId, {
@@ -263,6 +281,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               status: "REJECTED",
               approvedBy: reviewer,
               decidedAt: new Date().toISOString(),
+              createdAt: mem?.createdAt || new Date().toISOString(),
             });
           }
 
@@ -278,7 +297,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/workspace/ingest (Live SSE Ingestion Pipeline + DLP)
+        // POST /api/v1/workspace/ingest
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
           const raw = await readBody(request);
           let parsed: any = null;
@@ -304,7 +323,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
           }
 
           for (const ev of eventList) {
-            // DLP Redaction rules
             const original = ev.message;
             ev.message = ev.message
               .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, "Bearer [REDACTED_SECRET]")
@@ -314,7 +332,6 @@ export function createWedgeServer(options: { cwd: string }): Server {
             const scrubbed = ev.message !== original;
             if (scrubbed) totalScrubbed++;
 
-            // 1. Live stream broadcast to dashboard
             broadcastAlert({
               type: "ALERT_INGESTED",
               data: {
@@ -327,13 +344,12 @@ export function createWedgeServer(options: { cwd: string }): Server {
               },
             });
 
-            // 2. Check active canary regression
             if (ev.severity === "CRITICAL") {
               await RollbackCircuit.onTelemetry(ev.service, ev.severity);
             }
 
-            // 3. Generate HITL proposal on CRITICAL if no active canary was triggered
-            if (ev.severity === "CRITICAL" && !ev.message.includes("Canary regression")) {
+            if (ev.severity === "CRITICAL" && !ev.message.includes("regression")) {
+              const evalScore = PolicyEvaluator.evaluateProposal(ev.service, 20, 0.15);
               const taskId = `hitl-task-${ev.service}-${Date.now().toString(36)}`;
               const proposal = {
                 taskId,
@@ -341,8 +357,8 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 title: `Critical Anomaly on ${ev.service}`,
                 reason: ev.message,
                 severity: "CRITICAL",
-                confidence: 88,
-                blastRadius: "15%",
+                confidence: evalScore.confidence || 88,
+                blastRadius: evalScore.blastRadius || "15%",
                 patch: {
                   diff: `--- ${ev.service}/deployment.yaml\n+++ ${ev.service}/deployment.yaml\n@@ -12,3 +12,3 @@\n-  replicas: 2\n+  replicas: 5`,
                   target: ev.service,
@@ -383,13 +399,11 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/ops/metrics
         if (request.method === "GET" && url.pathname === "/api/v1/ops/metrics") {
           sendJson(response, 200, { suppressedAlerts: 0, streamLagMs: 0 });
           return;
         }
 
-        // GET /api/v1/metrics/ingestion
         if (request.method === "GET" && url.pathname === "/api/v1/metrics/ingestion") {
           sendJson(response, 200, {
             ...metricsCollector.getSnapshot(),
@@ -406,6 +420,10 @@ export function createWedgeServer(options: { cwd: string }): Server {
         });
       }
     })();
+  });
+
+  server.on("connection", (socket) => {
+    socket.setNoDelay(true);
   });
 
   return server;

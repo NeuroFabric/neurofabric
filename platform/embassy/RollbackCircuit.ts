@@ -1,4 +1,4 @@
-﻿import type { Pool } from "pg";
+import type { Pool } from "pg";
 import { AutonomousDeploymentAdapter } from "./AutonomousDeploymentAdapter.ts";
 
 export interface CanaryWatcher {
@@ -13,6 +13,8 @@ export class RollbackCircuit {
   private static activeCanaries = new Map<string, CanaryWatcher>();
   private static memoryLedgerRef: Map<string, any> | null = null;
   private static broadcastFn: ((payload: unknown) => void) | null = null;
+  private static failureCounts = new Map<string, number>();
+  private static trippedCircuits = new Set<string>();
 
   public static setDbPool(pool: Pool | null): void {
     this.dbPool = pool;
@@ -24,6 +26,10 @@ export class RollbackCircuit {
 
   public static setBroadcast(fn: (payload: unknown) => void): void {
     this.broadcastFn = fn;
+  }
+
+  public static isTripped(target: string): boolean {
+    return this.trippedCircuits.has(target);
   }
 
   public static invertDiff(diff: string): string {
@@ -45,7 +51,13 @@ export class RollbackCircuit {
     target: string,
     originalDiff: string,
     durationMs: number = 15000
-  ): void {
+  ): boolean {
+    if (this.isTripped(target)) {
+      console.warn(`[RollbackCircuit] Target ${target} circuit breaker is TRIPPED. Blocking automated mutation.`);
+      void this.updateStatus(taskId, "CIRCUIT_TRIPPED", "Anti-flapping threshold exceeded (3 strikes). Manual intervention required.");
+      return false;
+    }
+
     if (this.activeCanaries.has(target)) {
       clearTimeout(this.activeCanaries.get(target)!.timer);
       this.activeCanaries.delete(target);
@@ -58,6 +70,7 @@ export class RollbackCircuit {
     const timer = setTimeout(async () => {
       this.activeCanaries.delete(target);
       this.activeCanaries.delete(taskId);
+      this.failureCounts.delete(target); // Reset strikes on successful verification
       await this.updateStatus(taskId, "VERIFIED_RESOLVED");
       this.broadcast({
         type: "CANARY_CONFIRMED",
@@ -75,38 +88,39 @@ export class RollbackCircuit {
       type: "CANARY_VERIFYING",
       data: { taskId, target, timeoutMs: durationMs },
     });
+    return true;
   }
 
   public static async onTelemetry(service: string, severity: string): Promise<boolean> {
     const sev = String(severity).toUpperCase();
     if (sev !== "CRITICAL") return false;
 
-    // Match active canary by target or default
     let canary: CanaryWatcher | undefined;
     for (const [key, watcher] of this.activeCanaries.entries()) {
-      if (
-        key === service ||
-        service.includes(key) ||
-        key.includes(service) ||
-        key === "payment-gateway-service" ||
-        service === "payment-gateway-service"
-      ) {
+      if (key === service || service.includes(key) || key.includes(service)) {
         canary = watcher;
         break;
       }
     }
 
-    if (!canary && this.activeCanaries.size > 0) {
-      canary = this.activeCanaries.values().next().value;
-    }
-
     if (!canary) return false;
 
     clearTimeout(canary.timer);
-    this.activeCanaries.clear();
+    this.activeCanaries.delete(service);
+    this.activeCanaries.delete(canary.target);
 
-    const reason = "Canary anomaly detected: Critical telemetry spike post-remediation";
-    await this.updateStatus(canary.taskId, "ROLLED_BACK", reason);
+    // Track strike counts for anti-flapping
+    const strikes = (this.failureCounts.get(canary.target) || 0) + 1;
+    this.failureCounts.set(canary.target, strikes);
+
+    let reason = `Canary anomaly detected: Strike ${strikes}/3`;
+    let status = "ROLLED_BACK";
+
+    if (strikes >= 3) {
+      this.trippedCircuits.add(canary.target);
+      status = "CIRCUIT_TRIPPED";
+      reason = "Circuit breaker tripped: Service flapping continuously. Automated actions frozen.";
+    }
 
     const invertedDiff = this.invertDiff(canary.originalDiff);
     try {
@@ -116,9 +130,11 @@ export class RollbackCircuit {
       console.warn("[RollbackCircuit] Rollback patch execution warning:", err);
     }
 
+    await this.updateStatus(canary.taskId, status, reason);
+
     this.broadcast({
       type: "REMEDIATION_ROLLED_BACK",
-      data: { taskId: canary.taskId, target: canary.target, reason },
+      data: { taskId: canary.taskId, target: canary.target, status, strikes, reason },
     });
 
     return true;
@@ -149,9 +165,7 @@ export class RollbackCircuit {
            WHERE task_token = $3`,
           [status, reason || null, taskId]
         );
-      } catch {
-        // Fallback to in-memory ledger
-      }
+      } catch {}
     }
   }
 
@@ -161,3 +175,5 @@ export class RollbackCircuit {
     }
   }
 }
+
+export default RollbackCircuit;
