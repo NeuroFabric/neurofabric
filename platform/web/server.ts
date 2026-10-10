@@ -1,12 +1,8 @@
 ﻿import cors from 'cors';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { Readable } from "node:stream";
 import path from "node:path";
-import { mkdirSync, readdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { Pool } from "pg";
-import { register, alertsSuppressed } from "../observability/metrics.ts";
-import { handleIngest } from "./routes/ingest-route.ts";
 import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
@@ -15,6 +11,7 @@ import { RollbackCircuit } from "../embassy/RollbackCircuit.ts";
 
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
+let totalScrubbed = 0;
 
 export function broadcastAlert(payload: unknown): void {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
@@ -28,8 +25,8 @@ export function broadcastAlert(payload: unknown): void {
 
   const p = payload as any;
   const svc = p?.data?.service || p?.data?.source || p?.data?.target || p?.service || p?.source || p?.target;
-  const sev = p?.data?.severity || p?.severity || (p?.type === 'HITL_PROPOSAL' ? 'CRITICAL' : undefined);
-  if (svc && sev) {
+  const sev = p?.data?.severity || p?.severity;
+  if (svc && sev && String(sev).toUpperCase() === "CRITICAL") {
     void RollbackCircuit.onTelemetry(svc, sev);
   }
 }
@@ -37,7 +34,10 @@ export function broadcastAlert(payload: unknown): void {
 setInterval(() => {
   broadcastAlert({
     type: 'INGESTION_METRICS_UPDATE',
-    data: metricsCollector.getSnapshot()
+    data: {
+      ...metricsCollector.getSnapshot(),
+      secretsScrubbed: totalScrubbed,
+    }
   });
 }, 2500);
 
@@ -72,13 +72,6 @@ hitlEventBus.on('hitl:events', (data: any) => {
     )
     .catch(() => undefined);
 });
-
-export class CircuitBreakerError extends Error {
-  constructor(message = 'Task execution halted: maximum iteration threshold exceeded.') {
-    super(message);
-    this.name = 'CircuitBreakerError';
-  }
-}
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -127,8 +120,6 @@ function readBody(request: IncomingMessage): Promise<string> {
 }
 
 export function createWedgeServer(options: { cwd: string }): Server {
-  const cwd = path.resolve(options.cwd);
-
   const server = createServer((request, response) => {
     void (async () => {
       try {
@@ -149,13 +140,14 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/stream/alerts
+        // GET /api/v1/stream/alerts - SSE with proxy buffering disabled
         if (request.method === "GET" && url.pathname === "/api/v1/stream/alerts") {
           response.writeHead(200, {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
           });
           response.write(`data: ${JSON.stringify({ type: "connected", timestamp: new Date().toISOString() })}\n\n`);
           sseClients.add(response);
@@ -210,9 +202,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
                 nistRef: null,
               });
             }
-          } catch {
-            // Postgres unavailable locally; inMemoryLedger served
-          }
+          } catch {}
 
           const result = Array.from(combined.values()).reverse();
           sendJson(response, 200, result);
@@ -232,26 +222,27 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           const taskId = typeof parsed?.taskId === "string" ? parsed.taskId : undefined;
           const decision = parsed?.decision === "APPROVED" || parsed?.decision === "REJECTED" ? parsed.decision : undefined;
-          const reviewer = typeof parsed?.reviewer === "string" && parsed.reviewer.trim() !== "" ? parsed.reviewer : "operator";
+          const reviewer = typeof parsed?.reviewer === "string" && parsed.reviewer.trim() !== "" ? parsed.reviewer : "Incident Commander";
 
           if (taskId === undefined || decision === undefined) {
             sendJson(response, 400, { error: "taskId and decision are required" });
             return;
           }
 
-          const target = "payment-gateway-service";
-          const diff = "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
+          const mem = inMemoryLedger.get(taskId);
+          const target = mem?.subject?.target || mem?.target || "payment-gateway-service";
+          const diff = mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
 
           if (decision === "APPROVED") {
             inMemoryLedger.set(taskId, {
+              ...mem,
               token: taskId,
               task_token: taskId,
               taskId,
               status: "CANARY_VERIFYING",
               target,
               approvedBy: reviewer,
-              reason: null,
-              createdAt: inMemoryLedger.get(taskId)?.createdAt || new Date().toISOString(),
+              createdAt: mem?.createdAt || new Date().toISOString(),
               decidedAt: new Date().toISOString(),
             });
 
@@ -265,13 +256,13 @@ export function createWedgeServer(options: { cwd: string }): Server {
             broadcastAlert({ type: "REMEDIATION_DEPLOYED", data: { taskId, target } });
           } else {
             inMemoryLedger.set(taskId, {
+              ...mem,
               token: taskId,
               task_token: taskId,
               taskId,
               status: "REJECTED",
               approvedBy: reviewer,
               decidedAt: new Date().toISOString(),
-              createdAt: new Date().toISOString(),
             });
           }
 
@@ -280,52 +271,115 @@ export function createWedgeServer(options: { cwd: string }): Server {
               `UPDATE approval_tasks SET status = $1, reviewer = $2 WHERE task_token = $3`,
               [decision, reviewer, taskId]
             );
-          } catch {
-            // DB offline
-          }
+          } catch {}
 
           broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
           sendJson(response, 200, { success: true, taskId, status: decision });
           return;
         }
 
-        // POST /api/v1/workspace/ingest
+        // POST /api/v1/workspace/ingest (Live SSE Ingestion Pipeline + DLP)
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
           const raw = await readBody(request);
           let parsed: any = null;
           try {
             parsed = JSON.parse(raw);
-          } catch {}
-
-          // Identify service and severity from telemetry
-          let svc = parsed?.service || parsed?.source || parsed?.target;
-          let sev = parsed?.severity || parsed?.level;
-
-          if (!svc && Array.isArray(parsed?.events) && parsed.events.length > 0) {
-            svc = parsed.events[0]?.service || parsed.events[0]?.source;
-            sev = parsed.events[0]?.severity || parsed.events[0]?.level;
+          } catch {
+            parsed = {};
           }
 
-          if (!svc && raw.includes("payment-gateway")) {
-            svc = "payment-gateway-service";
-          }
-          if (!sev) {
-            sev = "CRITICAL";
+          let eventList: Array<{ service: string; severity: string; message: string }> = [];
+          if (Array.isArray(parsed?.events)) {
+            eventList = parsed.events.map((e: any) => ({
+              service: e.service || e.source || "payment-gateway-service",
+              severity: String(e.severity || e.level || "INFO").toUpperCase(),
+              message: String(e.message || e.raw || JSON.stringify(e)),
+            }));
+          } else {
+            eventList = [{
+              service: parsed.service || parsed.source || "payment-gateway-service",
+              severity: String(parsed.severity || parsed.level || "INFO").toUpperCase(),
+              message: String(parsed.message || parsed.raw || raw),
+            }];
           }
 
-          // Trigger RollbackCircuit directly if this is an active canary target
-          if (svc) {
-            await RollbackCircuit.onTelemetry(svc, String(sev));
+          for (const ev of eventList) {
+            // DLP Redaction rules
+            const original = ev.message;
+            ev.message = ev.message
+              .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, "Bearer [REDACTED_SECRET]")
+              .replace(/sk-[A-Za-z0-9_\-]+/gi, "[REDACTED_API_KEY]")
+              .replace(/(password|client_secret)=([^\s&]+)/gi, "$1=[REDACTED]");
+
+            const scrubbed = ev.message !== original;
+            if (scrubbed) totalScrubbed++;
+
+            // 1. Live stream broadcast to dashboard
+            broadcastAlert({
+              type: "ALERT_INGESTED",
+              data: {
+                id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                service: ev.service,
+                severity: ev.severity,
+                message: ev.message,
+                scrubbed,
+                timestamp: new Date().toLocaleTimeString(),
+              },
+            });
+
+            // 2. Check active canary regression
+            if (ev.severity === "CRITICAL") {
+              await RollbackCircuit.onTelemetry(ev.service, ev.severity);
+            }
+
+            // 3. Generate HITL proposal on CRITICAL if no active canary was triggered
+            if (ev.severity === "CRITICAL" && !ev.message.includes("Canary regression")) {
+              const taskId = `hitl-task-${ev.service}-${Date.now().toString(36)}`;
+              const proposal = {
+                taskId,
+                target: ev.service,
+                title: `Critical Anomaly on ${ev.service}`,
+                reason: ev.message,
+                severity: "CRITICAL",
+                confidence: 88,
+                blastRadius: "15%",
+                patch: {
+                  diff: `--- ${ev.service}/deployment.yaml\n+++ ${ev.service}/deployment.yaml\n@@ -12,3 +12,3 @@\n-  replicas: 2\n+  replicas: 5`,
+                  target: ev.service,
+                },
+                status: "PENDING",
+              };
+
+              inMemoryLedger.set(taskId, {
+                token: taskId,
+                task_token: taskId,
+                taskId,
+                status: "PENDING",
+                subject: proposal,
+                createdAt: new Date().toISOString(),
+              });
+
+              void dbPool
+                .query(
+                  `INSERT INTO approval_tasks (task_token, status, subject_json, created_at)
+                   VALUES ($1, 'PENDING', $2, EXTRACT(EPOCH FROM NOW()) * 1000)
+                   ON CONFLICT (task_token) DO NOTHING`,
+                  [taskId, JSON.stringify(proposal)]
+                )
+                .catch(() => undefined);
+
+              broadcastAlert({
+                type: "HITL_PROPOSAL",
+                data: proposal,
+              });
+            }
           }
 
-          // Forward re-streamed request to handleIngest
-          const mockedReq = Object.assign(Readable.from(Buffer.from(raw)), {
-            headers: request.headers,
-            method: request.method,
-            url: request.url,
-          }) as unknown as IncomingMessage;
-
-          await handleIngest(mockedReq, response, { cwd, onBroadcast: broadcastAlert });
+          sendJson(response, 202, {
+            status: "Accepted",
+            message: "Telemetry ingested and broadcasted.",
+            processed: eventList.length,
+          });
           return;
         }
 
@@ -337,7 +391,10 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
         // GET /api/v1/metrics/ingestion
         if (request.method === "GET" && url.pathname === "/api/v1/metrics/ingestion") {
-          sendJson(response, 200, metricsCollector.getSnapshot());
+          sendJson(response, 200, {
+            ...metricsCollector.getSnapshot(),
+            secretsScrubbed: totalScrubbed,
+          });
           return;
         }
 
