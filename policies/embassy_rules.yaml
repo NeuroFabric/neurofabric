@@ -1,0 +1,10 @@
+policies:
+  auto_remediation:
+    min_confidence: 95
+    max_blast_radius_percent: 10
+    allowed_targets:
+      - "payment-gateway-service"
+      - "auth-session-worker"
+  hitl_escalation:
+    default_gate: "MANUAL_APPROVAL_REQUIRED"
+    anomaly_sensitivity: 0.85

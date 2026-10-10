@@ -10,6 +10,7 @@ import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
 import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
+import { setDbPool, startCanaryObservation } from "../embassy/RollbackCircuit.ts";
 
 const sseClients = new Set<ServerResponse>();
 
@@ -1197,9 +1198,8 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 console.warn('[ledger] canary init columns failed:', err instanceof Error ? err.message : err),
               );
 
-              const { RollbackCircuit } = await import("../embassy/RollbackCircuit.ts");
-              RollbackCircuit.setDbPool(dbPool);
-              RollbackCircuit.startCanaryObservation(taskId, target, patch?.diff ?? '');
+              setDbPool(dbPool);
+              startCanaryObservation(taskId, target, patch?.diff ?? '');
 
               broadcastAlert({ type: 'REMEDIATION_DEPLOYED', data: { taskId, target } });
             } catch (err) {
