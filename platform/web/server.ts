@@ -15,12 +15,33 @@ export const inMemoryLedger = new Map<string, any>();
 let totalScrubbed = 0;
 let totalSuppressed = 0;
 
-// Dynamic Throughput Rolling Counter (Events in past 5s)
 let rollingThroughputWindow: number[] = [];
-
-// 30-Second Sliding Window Deduplication Fingerprint Store
 const alertDedupWindow = new Map<string, number>();
 const DEDUP_TTL_MS = 30000;
+
+// Security Allowlist: Authorized DevSecOps Roles
+const AUTHORIZED_ROLES = new Set([
+  "Incident Commander",
+  "Operator",
+  "SecOps",
+  "DevOps Lead",
+  "SRE Lead",
+  "admin",
+  "Batch Commander",
+]);
+
+// AST Security Gate: Prohibited Diff Primitives
+const DANGEROUS_DIFF_PATTERNS = [
+  /curl\s+/i,
+  /wget\s+/i,
+  /\/bin\/sh/i,
+  /\/bin\/bash/i,
+  /nc\s+-e/i,
+  /rm\s+-rf/i,
+  /eval\(/i,
+  /exec\(/i,
+  /chmod\s+\+x/i,
+];
 
 function isDuplicateAlert(service: string, message: string): boolean {
   const now = Date.now();
@@ -194,7 +215,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // GET /api/v1/governance/ledger - Guaranteed Non-Blocking Resilience Fallback
+        // GET /api/v1/governance/ledger
         if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
           const combined = new Map<string, any>();
 
@@ -258,18 +279,23 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/embassy/reset-breaker - Manual Circuit Breaker Reset
+        // POST /api/v1/embassy/reset-breaker
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/reset-breaker") {
           const raw = await readBody(request);
           let parsed: any = {};
           try { parsed = JSON.parse(raw); } catch {}
           const target = parsed?.target || "flapping-payment-worker";
           RollbackCircuit.resetCircuit(target);
+          for (const [token, item] of inMemoryLedger.entries()) {
+            if (item.status === "CIRCUIT_TRIPPED" && (item.target === target || item.subject?.target === target)) {
+              inMemoryLedger.set(token, { ...item, status: "ROLLED_BACK", reason: "Circuit breaker manually reset by Operator." });
+            }
+          }
           sendJson(response, 200, { success: true, target, message: `Circuit breaker reset for ${target}.` });
           return;
         }
 
-        // POST /api/v1/embassy/batch-decisions - Clear Queue / Batch Dismiss
+        // POST /api/v1/embassy/batch-decisions
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/batch-decisions") {
           const raw = await readBody(request);
           let parsed: any = {};
@@ -291,7 +317,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/embassy/decisions
+        // POST /api/v1/embassy/decisions (Secured with Reviewer Role Allowlist & AST Diff Gate)
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/decisions") {
           const raw = await readBody(request);
           let parsed: any;
@@ -304,18 +330,44 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           const taskId = typeof parsed?.taskId === "string" ? parsed.taskId : undefined;
           const decision = parsed?.decision === "APPROVED" || parsed?.decision === "REJECTED" ? parsed.decision : undefined;
-          const reviewer = typeof parsed?.reviewer === "string" && parsed.reviewer.trim() !== "" ? parsed.reviewer : "Incident Commander";
+          const reviewer = typeof parsed?.reviewer === "string" ? parsed.reviewer.trim() : "";
 
           if (taskId === undefined || decision === undefined) {
             sendJson(response, 400, { error: "taskId and decision are required" });
             return;
           }
 
+          // SECURITY GATE 1: Operator Role Authorization Check
+          if (!reviewer || !AUTHORIZED_ROLES.has(reviewer)) {
+            sendJson(response, 403, {
+              success: false,
+              error: "UNAUTHORIZED_REVIEWER",
+              message: `Reviewer '${reviewer}' is not authorized to sign off on production remediations.`,
+            });
+            return;
+          }
+
           const mem = inMemoryLedger.get(taskId);
           const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "flapping-payment-worker" : "redis-cluster");
-          const diff = mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
+          const diff = parsed?.diff || mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
 
-          if (decision === "APPROVED" && RollbackCircuit.isTripped(target)) {
+          // SECURITY GATE 2: AST Diff Security Scanner
+          const isDangerousDiff = DANGEROUS_DIFF_PATTERNS.some((pat) => pat.test(diff));
+          if (isDangerousDiff) {
+            sendJson(response, 422, {
+              success: false,
+              error: "MALICIOUS_DIFF_REJECTED",
+              message: "AST Security Gate: Patch contains prohibited shell execution or external network primitives.",
+            });
+            return;
+          }
+
+          // SECURITY GATE 3: Tripped Circuit Breaker Lockout Check
+          const isTargetTripped = RollbackCircuit.isTripped(target) || Array.from(inMemoryLedger.values()).some(
+            (item) => item.status === "CIRCUIT_TRIPPED" && (item.target === target || item.subject?.target === target)
+          );
+
+          if (decision === "APPROVED" && isTargetTripped) {
             const reason = "Circuit breaker tripped: Service flapping continuously. Automated actions frozen.";
             inMemoryLedger.set(taskId, {
               token: taskId,
@@ -329,7 +381,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               decidedAt: new Date().toISOString(),
             });
             broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { taskId, target, status: "CIRCUIT_TRIPPED", reason } });
-            sendJson(response, 200, { success: false, taskId, status: "CIRCUIT_TRIPPED", reason });
+            sendJson(response, 423, { success: false, taskId, status: "CIRCUIT_TRIPPED", reason });
             return;
           }
 
@@ -379,7 +431,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           return;
         }
 
-        // POST /api/v1/workspace/ingest (Bounded ReDoS Defense + Exact CPU Profiling)
+        // POST /api/v1/workspace/ingest
         if (request.method === "POST" && url.pathname === "/api/v1/workspace/ingest") {
           const tCpuStart = performance.now();
           const raw = await readBody(request);
@@ -409,13 +461,11 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           let processedCount = 0;
           for (const ev of eventList) {
-            // Deduplication Check
             if (isDuplicateAlert(ev.service, ev.message)) {
               continue;
             }
             processedCount++;
 
-            // Strict Non-Backtracking Linear Token Scrubbing
             const original = ev.message;
             ev.message = ev.message
               .replace(/Bearer\s+[^\s]{1,512}/gi, "Bearer [REDACTED_SECRET]")
@@ -527,6 +577,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
             secretsScrubbed: totalScrubbed,
             suppressedAlerts: totalSuppressed,
             hitlPending: pendingCount,
+            trippedCircuits: RollbackCircuit.getTrippedCircuits(),
           });
           return;
         }
