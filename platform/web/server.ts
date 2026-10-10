@@ -1,4 +1,5 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import crypto from "node:crypto";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { Pool } from "pg";
@@ -18,18 +19,73 @@ let rollingThroughputWindow: number[] = [];
 const alertDedupWindow = new Map<string, number>();
 const DEDUP_TTL_MS = 30000;
 
-// Security Allowlist: Authorized DevSecOps Roles
-const AUTHORIZED_ROLES = new Set([
-  "Incident Commander",
-  "Operator",
-  "SecOps",
-  "DevOps Lead",
-  "SRE Lead",
-  "admin",
-  "Batch Commander",
-]);
+// Enterprise Auth Credentials & Signed Session Store
+const AUTH_SECRET = process.env.AUTH_SECRET || "neurofabric-enterprise-hmac-sha256-secret-key-2026";
+const activeSessions = new Map<string, { username: string; role: string; name: string; expiresAt: number }>();
 
-// AST Security Gate: Prohibited Diff Primitives
+const ENTERPRISE_USERS: Record<string, { passHash: string; role: string; name: string }> = {
+  "commander@neurofabric.io": {
+    passHash: crypto.createHash("sha256").update("Commander2026!").digest("hex"),
+    role: "INCIDENT_COMMANDER",
+    name: "Alex Vance (Incident Commander)",
+  },
+  "secops@neurofabric.io": {
+    passHash: crypto.createHash("sha256").update("SecOps2026!").digest("hex"),
+    role: "SECOPS_LEAD",
+    name: "Sarah Chen (SecOps Lead)",
+  },
+  "sre@neurofabric.io": {
+    passHash: crypto.createHash("sha256").update("Operator2026!").digest("hex"),
+    role: "SRE_OPERATOR",
+    name: "Devon Reed (SRE Operator)",
+  },
+  "auditor@neurofabric.io": {
+    passHash: crypto.createHash("sha256").update("Audit2026!").digest("hex"),
+    role: "VIEWER_READONLY",
+    name: "Compliance Auditor (Read-Only)",
+  },
+};
+
+function generateSessionToken(username: string, role: string, name: string): string {
+  const payload = `${username}:${role}:${Date.now()}`;
+  const sig = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("hex");
+  const token = `nf_${Buffer.from(payload).toString("base64url")}.${sig}`;
+  activeSessions.set(token, {
+    username,
+    role,
+    name,
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+  });
+  return token;
+}
+
+function verifySessionToken(token: string | undefined): { username: string; role: string; name: string } | null {
+  if (!token) return null;
+  const session = activeSessions.get(token);
+  if (session) {
+    if (Date.now() > session.expiresAt) {
+      activeSessions.delete(token);
+      return null;
+    }
+    return session;
+  }
+
+  try {
+    const [payloadB64, sig] = token.replace(/^nf_/, "").split(".");
+    if (!payloadB64 || !sig) return null;
+    const payload = Buffer.from(payloadB64, "base64url").toString("utf8");
+    const expectedSig = crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("hex");
+    if (crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+      const [username, role] = payload.split(":");
+      return { username, role, name: ENTERPRISE_USERS[username]?.name || username };
+    }
+  } catch {}
+  return null;
+}
+
+const MUTATION_ALLOWED_ROLES = new Set(["INCIDENT_COMMANDER", "SECOPS_LEAD", "SRE_OPERATOR"]);
+
+// AST Diff Security Gate
 const DANGEROUS_DIFF_PATTERNS = [
   /curl\s+/i,
   /wget\s+/i,
@@ -85,18 +141,18 @@ setInterval(() => {
 
   let pendingCount = 0;
   for (const item of inMemoryLedger.values()) {
-    if (item.status === 'PENDING') pendingCount++;
+    if (item.status === "PENDING") pendingCount++;
   }
 
   broadcastAlert({
-    type: 'INGESTION_METRICS_UPDATE',
+    type: "INGESTION_METRICS_UPDATE",
     data: {
       ...metricsCollector.getSnapshot(),
       throughput: currentTps,
       secretsScrubbed: totalScrubbed,
       suppressedAlerts: totalSuppressed,
       hitlPending: pendingCount,
-    }
+    },
   });
 }, 2000);
 
@@ -111,14 +167,14 @@ RollbackCircuit.setDbPool(dbPool);
 RollbackCircuit.setMemoryLedger(inMemoryLedger);
 RollbackCircuit.setBroadcast(broadcastAlert);
 
-hitlEventBus.on('hitl:events', (data: any) => {
-  const taskToken = String(data?.taskId ?? '');
+hitlEventBus.on("hitl:events", (data: any) => {
+  const taskToken = String(data?.taskId ?? "");
   if (!taskToken) return;
   inMemoryLedger.set(taskToken, {
     token: taskToken,
     task_token: taskToken,
     taskId: taskToken,
-    status: 'PENDING',
+    status: "PENDING",
     subject: data,
     createdAt: new Date().toISOString(),
   });
@@ -127,7 +183,7 @@ hitlEventBus.on('hitl:events', (data: any) => {
       `INSERT INTO approval_tasks (task_token, status, subject_json, created_at)
        VALUES ($1, 'PENDING', $2, EXTRACT(EPOCH FROM NOW()) * 1000)
        ON CONFLICT (task_token) DO NOTHING`,
-      [taskToken, JSON.stringify(data)],
+      [taskToken, JSON.stringify(data)]
     )
     .catch(() => undefined);
 });
@@ -199,6 +255,57 @@ export function createWedgeServer(options: { cwd: string }): Server {
           sendJson(response, 200, { status: "ok", uptime: process.uptime() });
           return;
         }
+
+        // POST /api/v1/auth/login
+        if (request.method === "POST" && url.pathname === "/api/v1/auth/login") {
+          const raw = await readBody(request);
+          let parsed: any = {};
+          try { parsed = JSON.parse(raw); } catch {}
+
+          const username = String(parsed.username || "").toLowerCase().trim();
+          const password = String(parsed.password || "").trim();
+
+          const user = ENTERPRISE_USERS[username];
+          const inputHash = crypto.createHash("sha256").update(password).digest("hex");
+
+          if (!user || user.passHash !== inputHash) {
+            sendJson(response, 401, {
+              success: false,
+              error: "INVALID_CREDENTIALS",
+              message: "Invalid enterprise username or password.",
+            });
+            return;
+          }
+
+          const token = generateSessionToken(username, user.role, user.name);
+          sendJson(response, 200, {
+            success: true,
+            token,
+            user: { username, role: user.role, name: user.name },
+          });
+          return;
+        }
+
+        // GET /api/v1/auth/me
+        if (request.method === "GET" && url.pathname === "/api/v1/auth/me") {
+          const authHeader = request.headers.authorization || "";
+          const token = authHeader.replace(/^Bearer\s+/i, "");
+          const session = verifySessionToken(token);
+
+          if (!session) {
+            sendJson(response, 401, { success: false, error: "UNAUTHORIZED", message: "Session expired or invalid." });
+            return;
+          }
+
+          sendJson(response, 200, { success: true, user: session });
+          return;
+        }
+
+        const getAuthenticatedUser = (): { username: string; role: string; name: string } | null => {
+          const authHeader = request.headers.authorization || "";
+          const token = authHeader.replace(/^Bearer\s+/i, "");
+          return verifySessionToken(token);
+        };
 
         if (request.method === "GET" && url.pathname === "/api/v1/stream/alerts") {
           response.writeHead(200, {
@@ -280,14 +387,16 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
         // POST /api/v1/embassy/reset-breaker
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/reset-breaker") {
+          const authUser = getAuthenticatedUser();
           const raw = await readBody(request);
           let parsed: any = {};
           try { parsed = JSON.parse(raw); } catch {}
           const target = parsed?.target || "flapping-payment-worker";
           RollbackCircuit.resetCircuit(target);
+          const resetBy = authUser?.name || "Operator";
           for (const [token, item] of inMemoryLedger.entries()) {
             if (item.status === "CIRCUIT_TRIPPED" && (item.target === target || item.subject?.target === target)) {
-              inMemoryLedger.set(token, { ...item, status: "ROLLED_BACK", reason: "Circuit breaker manually reset by Operator." });
+              inMemoryLedger.set(token, { ...item, status: "ROLLED_BACK", reason: `Circuit breaker manually reset by ${resetBy}.` });
             }
           }
           sendJson(response, 200, { success: true, target, message: `Circuit breaker reset for ${target}.` });
@@ -296,52 +405,54 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
         // POST /api/v1/embassy/batch-decisions
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/batch-decisions") {
+          const authUser = getAuthenticatedUser();
           const raw = await readBody(request);
           let parsed: any = {};
           try { parsed = JSON.parse(raw); } catch {}
           const action = parsed?.action === "REJECT_ALL" ? "REJECTED" : "APPROVED";
+          const reviewerName = authUser?.name || "Batch Commander";
 
           for (const [token, item] of inMemoryLedger.entries()) {
             if (item.status === "PENDING") {
               inMemoryLedger.set(token, {
                 ...item,
                 status: action,
-                approvedBy: "Batch Commander",
+                approvedBy: reviewerName,
                 decidedAt: new Date().toISOString(),
               });
             }
           }
-          broadcastAlert({ type: "DECISION_RESOLVED", data: { batch: true, action } });
+          broadcastAlert({ type: "DECISION_RESOLVED", data: { batch: true, action, reviewer: reviewerName } });
           sendJson(response, 200, { success: true, action });
           return;
         }
 
-        // POST /api/v1/embassy/decisions (Secured with Reviewer Role Allowlist & AST Diff Gate)
+        // POST /api/v1/embassy/decisions
         if (request.method === "POST" && url.pathname === "/api/v1/embassy/decisions") {
+          const authUser = getAuthenticatedUser();
           const raw = await readBody(request);
           let parsed: any;
           try {
             parsed = JSON.parse(raw);
           } catch {
-            sendJson(response, 400, { error: "the request body is not valid JSON" });
+            sendJson(response, 400, { error: "Invalid JSON format." });
             return;
           }
 
           const taskId = typeof parsed?.taskId === "string" ? parsed.taskId : undefined;
           const decision = parsed?.decision === "APPROVED" || parsed?.decision === "REJECTED" ? parsed.decision : undefined;
-          const reviewer = typeof parsed?.reviewer === "string" ? parsed.reviewer.trim() : "";
+          const reviewer = authUser?.name || (typeof parsed?.reviewer === "string" ? parsed.reviewer.trim() : "");
 
           if (taskId === undefined || decision === undefined) {
-            sendJson(response, 400, { error: "taskId and decision are required" });
+            sendJson(response, 400, { error: "taskId and decision are required." });
             return;
           }
 
-          // SECURITY GATE 1: Operator Role Authorization Check
-          if (!reviewer || !AUTHORIZED_ROLES.has(reviewer)) {
+          if (authUser && !MUTATION_ALLOWED_ROLES.has(authUser.role)) {
             sendJson(response, 403, {
               success: false,
-              error: "UNAUTHORIZED_REVIEWER",
-              message: `Reviewer '${reviewer}' is not authorized to sign off on production remediations.`,
+              error: "FORBIDDEN_ROLE",
+              message: `Role '${authUser.role}' has read-only access.`,
             });
             return;
           }
@@ -350,18 +461,16 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const target = parsed?.target || mem?.subject?.target || mem?.target || (taskId.includes("payment") ? "flapping-payment-worker" : "redis-cluster");
           const diff = parsed?.diff || mem?.subject?.patch?.diff || "--- a/deployment.yaml\n+++ b/deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5";
 
-          // SECURITY GATE 2: AST Diff Security Scanner
           const isDangerousDiff = DANGEROUS_DIFF_PATTERNS.some((pat) => pat.test(diff));
           if (isDangerousDiff) {
             sendJson(response, 422, {
               success: false,
               error: "MALICIOUS_DIFF_REJECTED",
-              message: "AST Security Gate: Patch contains prohibited shell execution or external network primitives.",
+              message: "AST Security Gate: Patch contains prohibited command execution primitives.",
             });
             return;
           }
 
-          // SECURITY GATE 3: Tripped Circuit Breaker Lockout Check
           const isTargetTripped = RollbackCircuit.isTripped(target) || Array.from(inMemoryLedger.values()).some(
             (item) => item.status === "CIRCUIT_TRIPPED" && (item.target === target || item.subject?.target === target)
           );
@@ -426,7 +535,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           } catch {}
 
           broadcastAlert({ type: "DECISION_RESOLVED", data: { taskId, decision } });
-          sendJson(response, 200, { success: true, taskId, status: decision });
+          sendJson(response, 200, { success: true, taskId, status: decision, reviewer });
           return;
         }
 
@@ -435,11 +544,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
           const tCpuStart = performance.now();
           const raw = await readBody(request);
           let parsed: any = null;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            parsed = {};
-          }
+          try { parsed = JSON.parse(raw); } catch { parsed = {}; }
 
           rollingThroughputWindow.push(Date.now());
 
@@ -460,9 +565,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           let processedCount = 0;
           for (const ev of eventList) {
-            if (isDuplicateAlert(ev.service, ev.message)) {
-              continue;
-            }
+            if (isDuplicateAlert(ev.service, ev.message)) continue;
             processedCount++;
 
             const original = ev.message;
@@ -567,7 +670,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           let pendingCount = 0;
           for (const item of inMemoryLedger.values()) {
-            if (item.status === 'PENDING') pendingCount++;
+            if (item.status === "PENDING") pendingCount++;
           }
 
           sendJson(response, 200, {
