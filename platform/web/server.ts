@@ -1,4 +1,3 @@
-﻿import cors from 'cors';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { mkdirSync } from "node:fs";

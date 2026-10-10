@@ -18,7 +18,7 @@
                     "archify":  "depcruise --include-only \"^platform|^scripts\" --output-type html --output-to architecture.html platform scripts",
                     "typecheck":  "tsc --noEmit \u0026\u0026 tsc -p tsconfig.entries.json",
                     "build":  "echo \u0027Backend build successful\u0027",
-                    "start":  "npx tsx platform/web/server.ts"
+                    "start":  "tsx platform/web/server.ts"
                 },
     "devDependencies":  {
                             "@types/node":  "22.7.5",
