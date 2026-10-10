@@ -86,10 +86,20 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [connected, setConnected] = useState<boolean>(true);
-  const [timeRange, setTimeRange] = useState<TimeRange>('1H');
-  const [hoveredPoint, setHoveredPoint] = useState<{ time: string; throughput: number; latency: number; x: number } | null>(null);
+  const [timeRange, setTimeRange] = useState<TimeRange>('15M');
+  
+  // Independent chart hover states
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [hoveredChart, setHoveredChart] = useState<'throughput' | 'latency' | null>(null);
+
   const [simLoading, setSimLoading] = useState<string | null>(null);
   const [showArchGuide, setShowArchGuide] = useState<boolean>(false);
+
+  // Ingestion Stream Controls
+  const [streamPaused, setStreamPaused] = useState<boolean>(false);
+  const [streamSearch, setStreamSearch] = useState<string>('');
+  const [streamFilter, setStreamFilter] = useState<'ALL' | 'CRITICAL' | 'WARNING' | 'SCRUBBED'>('ALL');
+  const [bufferLimit, setBufferLimit] = useState<number>(250);
 
   const [metrics, setMetrics] = useState<IngestionMetrics>({
     throughput: 8.2,
@@ -204,8 +214,8 @@ export default function App() {
 
   const rangeConfig = useMemo(() => {
     const now = Date.now();
-    let durationMs = 60 * 60 * 1000;
-    let label = '1 Hour';
+    let durationMs = 15 * 60 * 1000;
+    let label = '15 Minutes';
 
     switch (timeRange) {
       case '5M':
@@ -456,6 +466,15 @@ export default function App() {
     }
   };
 
+  // Export Filtered Telemetry Logs as JSON
+  const handleExportLogs = () => {
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(filteredLogs, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute('href', dataStr);
+    dlAnchor.setAttribute('download', `neurofabric-telemetry-${Date.now()}.json`);
+    dlAnchor.click();
+  };
+
   useEffect(() => {
     fetchLedger();
     fetchMetrics();
@@ -523,7 +542,7 @@ export default function App() {
             fetchMetrics();
             break;
           case 'ALERT_INGESTED':
-            if (payload.data) {
+            if (payload.data && !streamPaused) {
               setTelemetryLogs((prev) => [
                 {
                   id: payload.data.id || String(Date.now()),
@@ -533,7 +552,7 @@ export default function App() {
                   message: payload.data.message || 'Telemetry event processed',
                   dlpScrubbed: Boolean(payload.data.scrubbed),
                 },
-                ...prev.slice(0, 99),
+                ...prev.slice(0, bufferLimit - 1),
               ]);
             }
             break;
@@ -547,12 +566,25 @@ export default function App() {
       clearInterval(pollTimer);
       es.close();
     };
-  }, [fetchLedger, fetchMetrics, fetchRecentLogs, fetchTimeseries]);
+  }, [fetchLedger, fetchMetrics, fetchRecentLogs, fetchTimeseries, streamPaused, bufferLimit]);
 
   const filteredLogs = useMemo(() => {
-    if (timeRange === 'ALL') return telemetryLogs;
-    return telemetryLogs.filter((log) => log.rawTime >= rangeConfig.startTime);
-  }, [telemetryLogs, timeRange, rangeConfig.startTime]);
+    return telemetryLogs.filter((log) => {
+      const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime;
+      if (!matchTime) return false;
+
+      if (streamFilter === 'CRITICAL' && log.severity !== 'CRITICAL') return false;
+      if (streamFilter === 'WARNING' && log.severity !== 'WARNING') return false;
+      if (streamFilter === 'SCRUBBED' && !log.dlpScrubbed) return false;
+
+      if (streamSearch.trim()) {
+        const query = streamSearch.toLowerCase();
+        return log.service.toLowerCase().includes(query) || log.message.toLowerCase().includes(query);
+      }
+
+      return true;
+    });
+  }, [telemetryLogs, timeRange, rangeConfig.startTime, streamFilter, streamSearch]);
 
   const filteredLedger = useMemo(() => {
     return ledger.filter((item) => {
@@ -586,7 +618,6 @@ export default function App() {
       const midTime = new Date(bStart + stepMs / 2);
       const timeLabel = midTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-      // Match backend timeseries points falling in this historical bucket
       const pointsInBucket = timeseriesData.filter((p) => p.timestamp >= bStart && p.timestamp < bEnd);
       let tps = 0;
       let latency = 8;
@@ -595,7 +626,6 @@ export default function App() {
         tps = Math.max(...pointsInBucket.map((p) => p.throughput));
         latency = Math.max(...pointsInBucket.map((p) => p.latency));
       } else {
-        // Natural telemetry baseline ripple
         tps = Number((1.2 + Math.sin(i / 2) * 0.8).toFixed(1));
         latency = Math.round(10 + Math.cos(i / 3) * 4);
       }
@@ -617,7 +647,7 @@ export default function App() {
       y: Math.max(10, base - (v / maxVal) * (height - 10)),
     }));
 
-    if (points.length === 0) return { line: '', area: '' };
+    if (points.length === 0) return { line: '', area: '', points: [] };
 
     let d = `M ${points[0].x},${points[0].y}`;
     for (let i = 0; i < points.length - 1; i++) {
@@ -652,7 +682,6 @@ export default function App() {
     ])
   ) as string[];
 
-  // Microservice Health Topology Statistics
   const serviceStats = [
     { name: 'order-service', traffic: '34%', status: 'NOMINAL', latency: '9ms', color: 'text-emerald-400', badge: 'bg-emerald-950 border-emerald-800' },
     { name: 'auth-gateway', traffic: '28%', status: 'DLP ENFORCED', latency: '14ms', color: 'text-cyan-400', badge: 'bg-cyan-950 border-cyan-800' },
@@ -660,6 +689,8 @@ export default function App() {
     { name: 'inventory-db', traffic: '11%', status: 'NOMINAL', latency: '12ms', color: 'text-emerald-400', badge: 'bg-emerald-950 border-emerald-800' },
     { name: 'flapping-payment-worker', traffic: '5%', status: activeTrippedTargets.includes('flapping-payment-worker') ? 'CIRCUIT TRIPPED' : 'NOMINAL', latency: '35ms', color: activeTrippedTargets.includes('flapping-payment-worker') ? 'text-red-400' : 'text-amber-400', badge: activeTrippedTargets.includes('flapping-payment-worker') ? 'bg-red-950 border-red-700 animate-pulse' : 'bg-slate-800 border-slate-700' },
   ];
+
+  const currentHoverItem = hoveredIdx !== null ? chartBuckets[hoveredIdx] : null;
 
   return (
     <div className="min-h-screen bg-[#06090f] text-slate-100 p-4 md:p-8 font-sans selection:bg-indigo-500 selection:text-white">
@@ -884,9 +915,9 @@ export default function App() {
         ))}
       </section>
 
-      {/* Live Telemetry Visualizer: Dynamic Continuous Waveforms */}
+      {/* Live Telemetry Visualizer: Synchronized Dynamic Dual Charts */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {/* Chart 1: Ingestion Throughput Waveform */}
+        {/* Chart 1: Ingestion Throughput Velocity */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
@@ -915,6 +946,21 @@ export default function App() {
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              
+              {/* Synchronized Vertical Cursor Guideline */}
+              {hoveredIdx !== null && (
+                <line
+                  x1={(hoveredIdx / 17) * 360}
+                  y1="0"
+                  x2={(hoveredIdx / 17) * 360}
+                  y2="80"
+                  stroke="#06b6d4"
+                  strokeWidth="1.5"
+                  strokeDasharray="2 2"
+                  className="opacity-70"
+                />
+              )}
+
               {throughputPath.area && <path d={throughputPath.area} fill="url(#cyanSmoothGrad)" />}
               {throughputPath.line && (
                 <path
@@ -933,22 +979,29 @@ export default function App() {
                   key={i}
                   cx={pt.x}
                   cy={pt.y}
-                  r={3.5}
-                  className="fill-cyan-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
-                  onMouseEnter={() => setHoveredPoint({ time: chartBuckets[i]?.label || '', throughput: chartBuckets[i]?.throughput || 0, latency: chartBuckets[i]?.latency || 0, x: pt.x })}
-                  onMouseLeave={() => setHoveredPoint(null)}
+                  r={hoveredIdx === i ? 5 : 3.5}
+                  className={`${hoveredIdx === i ? 'fill-white stroke-cyan-400' : 'fill-cyan-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
+                  onMouseEnter={() => {
+                    setHoveredIdx(i);
+                    setHoveredChart('throughput');
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredIdx(null);
+                    setHoveredChart(null);
+                  }}
                 />
               ))}
             </svg>
 
-            {hoveredPoint && (
+            {/* Dedicated Tooltip rendered strictly inside Chart 1 */}
+            {hoveredChart === 'throughput' && currentHoverItem && hoveredIdx !== null && (
               <div
                 className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-cyan-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
-                style={{ left: `${(hoveredPoint.x / 360) * 100}%`, top: '40%' }}
+                style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
               >
-                <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">{hoveredPoint.time}</div>
-                <div>Velocity: <span className="text-white font-bold">{hoveredPoint.throughput} evt/s</span></div>
-                <div>Latency: <span className="text-emerald-400 font-bold">{hoveredPoint.latency}ms</span></div>
+                <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
+                <div>Velocity: <span className="text-white font-bold">{currentHoverItem.throughput} evt/s</span></div>
+                <div>Relative Lag: <span className="text-emerald-400 font-bold">{currentHoverItem.latency}ms</span></div>
               </div>
             )}
           </div>
@@ -991,6 +1044,21 @@ export default function App() {
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+
+              {/* Synchronized Vertical Cursor Guideline */}
+              {hoveredIdx !== null && (
+                <line
+                  x1={(hoveredIdx / 17) * 360}
+                  y1="0"
+                  x2={(hoveredIdx / 17) * 360}
+                  y2="80"
+                  stroke="#10b981"
+                  strokeWidth="1.5"
+                  strokeDasharray="2 2"
+                  className="opacity-70"
+                />
+              )}
+
               {latencyPath.area && <path d={latencyPath.area} fill="url(#emeraldSmoothGrad)" />}
               {latencyPath.line && (
                 <path
@@ -1009,13 +1077,31 @@ export default function App() {
                   key={i}
                   cx={pt.x}
                   cy={pt.y}
-                  r={3.5}
-                  className="fill-emerald-400 stroke-[#080c14] stroke-2 hover:r-5 cursor-pointer transition-all"
-                  onMouseEnter={() => setHoveredPoint({ time: chartBuckets[i]?.label || '', throughput: chartBuckets[i]?.throughput || 0, latency: chartBuckets[i]?.latency || 0, x: pt.x })}
-                  onMouseLeave={() => setHoveredPoint(null)}
+                  r={hoveredIdx === i ? 5 : 3.5}
+                  className={`${hoveredIdx === i ? 'fill-white stroke-emerald-400' : 'fill-emerald-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
+                  onMouseEnter={() => {
+                    setHoveredIdx(i);
+                    setHoveredChart('latency');
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredIdx(null);
+                    setHoveredChart(null);
+                  }}
                 />
               ))}
             </svg>
+
+            {/* Dedicated Tooltip rendered strictly inside Chart 2 */}
+            {hoveredChart === 'latency' && currentHoverItem && hoveredIdx !== null && (
+              <div
+                className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-emerald-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
+                style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
+              >
+                <div className="text-emerald-400 font-bold border-b border-emerald-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
+                <div>Stream P99 Lag: <span className="text-white font-bold">{currentHoverItem.latency}ms</span></div>
+                <div>Throughput Load: <span className="text-cyan-400 font-bold">{currentHoverItem.throughput} evt/s</span></div>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
@@ -1030,7 +1116,6 @@ export default function App() {
 
       {/* Microservice Topology & Threat Defense Matrix */}
       <section className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-6">
-        {/* Subsystem Topology Health */}
         <div className="md:col-span-8 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-xl backdrop-blur-md">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
@@ -1060,7 +1145,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Security & DLP Threat Radar */}
         <div className="md:col-span-4 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-xl backdrop-blur-md flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
@@ -1282,22 +1366,75 @@ export default function App() {
           )}
         </section>
 
-        {/* Live Ingestion Stream */}
+        {/* Live Ingestion Stream with Pause, Filter, Search & Buffer Depth */}
         <section className="lg:col-span-5 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-2xl backdrop-blur-md">
           <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Live Ingestion Stream
-              </h2>
-              <span className="text-xs font-mono text-cyan-400 font-bold">{filteredLogs.length} Events ({rangeConfig.label})</span>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
+                  Live Ingestion Stream
+                </h2>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  {filteredLogs.length} Events
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setStreamPaused(!streamPaused)}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold transition-all cursor-pointer border ${
+                    streamPaused
+                      ? 'bg-amber-950 text-amber-300 border-amber-600 animate-pulse'
+                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-750'
+                  }`}
+                >
+                  {streamPaused ? '▶ Resume' : '⏸ Pause'}
+                </button>
+                <button
+                  onClick={handleExportLogs}
+                  className="px-2 py-1 rounded-lg text-[10px] font-mono bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 cursor-pointer"
+                  title="Export to JSON"
+                >
+                  📥 Export
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+            {/* Ingestion Stream Search & Filter Control Bar */}
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="Filter service or message..."
+                value={streamSearch}
+                onChange={(e) => setStreamSearch(e.target.value)}
+                className="w-full bg-[#080c14] border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+              />
+              <div className="flex items-center gap-1 text-[10px] font-mono">
+                {(['ALL', 'CRITICAL', 'WARNING', 'SCRUBBED'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setStreamFilter(filter)}
+                    className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
+                      streamFilter === filter
+                        ? 'bg-indigo-600 text-white font-bold'
+                        : 'bg-slate-850 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
               {filteredLogs.length > 0 ? (
                 filteredLogs.map((log) => (
                   <div key={log.id} className="p-3 rounded-xl bg-[#090d16] border border-slate-800/90 text-xs space-y-1 hover:border-slate-700 transition-colors">
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-cyan-400 font-bold">{log.service}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`h-1.5 w-1.5 rounded-full ${log.severity === 'CRITICAL' ? 'bg-rose-400' : log.severity === 'WARNING' ? 'bg-amber-400' : 'bg-cyan-400'}`} />
+                        <span className="font-mono text-cyan-400 font-bold">{log.service}</span>
+                      </div>
                       <span className="text-[10px] text-slate-500 font-mono">
                         {new Date(log.rawTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </span>
@@ -1312,14 +1449,26 @@ export default function App() {
                 ))
               ) : (
                 <div className="text-center py-14 text-slate-500 text-xs font-mono">
-                  No events found in this window. Click "Sustained Burst" above to generate live logs.
+                  No events match active filter. Click "Sustained Burst" to generate stream traffic.
                 </div>
               )}
             </div>
           </div>
-          <div className="pt-4 border-t border-slate-800 mt-4 text-[11px] text-slate-400 flex justify-between font-mono">
+
+          <div className="pt-3 border-t border-slate-800 mt-3 text-[11px] text-slate-400 flex items-center justify-between font-mono">
+            <div className="flex items-center gap-1.5">
+              <span>Buffer Limit:</span>
+              {[100, 250, 500, 1000].map((limit) => (
+                <button
+                  key={limit}
+                  onClick={() => setBufferLimit(limit)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] ${bufferLimit === limit ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-800 text-slate-400'}`}
+                >
+                  {limit}
+                </button>
+              ))}
+            </div>
             <span>DLP Scrubber: Active</span>
-            <span>Target Allowlist: Enforced</span>
           </div>
         </section>
       </div>
