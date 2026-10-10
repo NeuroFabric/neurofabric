@@ -1,3 +1,4 @@
+import cors from 'cors';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { mkdirSync, readdirSync } from "node:fs";
@@ -429,11 +430,22 @@ export function createWedgeServer(options: WedgeOptions): Server {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
-        /*
-        if (isProtectedUiPath(url.pathname)) {
-          if (enforceIncidentCommander(request, response)) return;
+        // Handle CORS Preflight & Global Headers
+        response.setHeader("Access-Control-Allow-Origin", "*");
+        response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+
+        if (request.method === "OPTIONS") {
+          response.writeHead(204);
+          response.end();
+          return;
         }
-        */
+
+        // Render Health Check Endpoint
+        if (url.pathname === "/health") {
+          sendJson(response, 200, { status: "ok", uptime: process.uptime() });
+          return;
+        }
 
         if (memoryRoutes !== undefined && url.pathname === MEMORY_ALERTS_PATH) {
           const streamHeaders: Record<string, string | undefined> = {};
@@ -882,7 +894,6 @@ export function createWedgeServer(options: WedgeOptions): Server {
         // GET /api/v1/governance/ledger
         if (request.method === "GET" && url.pathname === "/api/v1/governance/ledger") {
           try {
-            // Ensure table exists - Postgres compatible
             await dbPool.query(`
               CREATE TABLE IF NOT EXISTS approval_tasks (
                 task_token TEXT PRIMARY KEY,
@@ -936,8 +947,6 @@ export function createWedgeServer(options: WedgeOptions): Server {
             sendJson(response, 200, ledger);
             return;
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            // Return empty ledger on any DB error to avoid 500
             sendJson(response, 200, []);
             return;
           }
@@ -1161,9 +1170,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
             console.warn('[ledger] decision persist failed:', err instanceof Error ? err.message : err);
           }
 
-          broadcastAlert({ type: 'DECISION_RESOLVED', data: { taskId, decision } });
-
-          // CLOSED-LOOP: on approval, execute the patch and record the outcome.
+          // CLOSED-LOOP: on approval, execute remediation and start canary observation.
           if (decision === 'APPROVED') {
             try {
               let patch: any = undefined;
@@ -1172,28 +1179,52 @@ export function createWedgeServer(options: WedgeOptions): Server {
                 const subjectJson = rowRes.rows[0]?.subject_json;
                 const subject = typeof subjectJson === 'string' ? JSON.parse(subjectJson) : subjectJson;
                 patch = subject?.patch;
-              } catch { /* subject lookup failed — proceed with minimal patch */ }
+              } catch { /* subject lookup failed */ }
 
               const execution = await new AutonomousDeploymentAdapter().applyRemediation(patch ?? {});
               const output = execution.output as { target?: string; executedAt?: string };
 
-              await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS executed_at BIGINT").catch(() => undefined);
-              await dbPool.query("ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS execution_output TEXT").catch(() => undefined);
+              const target = output?.target ?? 'unknown';
               await dbPool.query(
-                `UPDATE approval_tasks
-                 SET executed_at = EXTRACT(EPOCH FROM NOW()) * 1000, execution_output = $1
-                 WHERE task_token = $2`,
-                [JSON.stringify(output), taskId],
-              ).catch(() => undefined);
+                `ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS target TEXT;
+                 ALTER TABLE approval_tasks ADD COLUMN IF NOT EXISTS patchDiff TEXT;
+                 UPDATE approval_tasks
+                   SET target = $1, patchDiff = $2, status = 'CANARY_VERIFYING',
+                       resolved_at = EXTRACT(EPOCH FROM NOW()) * 1000, decided_at = EXTRACT(EPOCH FROM NOW())
+                 WHERE task_token = $3`,
+                [target, patch?.diff ?? '', taskId],
+              ).catch((err) =>
+                console.warn('[ledger] canary init columns failed:', err instanceof Error ? err.message : err),
+              );
 
-              broadcastAlert({
-                type: 'REMEDIATION_EXECUTED',
-                data: { taskId, target: output?.target ?? 'unknown', timestamp: output?.executedAt ?? new Date().toISOString() },
-              });
+              const { RollbackCircuit } = await import("../embassy/RollbackCircuit.ts");
+              RollbackCircuit.setDbPool(dbPool);
+              RollbackCircuit.startCanaryObservation(taskId, target, patch?.diff ?? '');
+
+              broadcastAlert({ type: 'REMEDIATION_DEPLOYED', data: { taskId, target } });
             } catch (err) {
               console.warn('[execution] closed-loop remediation failed:', err instanceof Error ? err.message : err);
+              void dbPool.query(
+                `UPDATE approval_tasks SET status = 'ROLLED_BACK', reason = $1 WHERE task_token = $2`,
+                [err instanceof Error ? err.message : String(err), taskId],
+              ).catch(() => undefined);
+            }
+          } else {
+            try {
+              await dbPool.query(
+                `UPDATE approval_tasks
+                 SET status = 'REJECTED', resolved_at = EXTRACT(EPOCH FROM NOW()) * 1000, decided_at = EXTRACT(EPOCH FROM NOW())
+                 WHERE task_token = $1`,
+                [taskId],
+              ).catch((err) =>
+                console.warn('[ledger] decision reject persist failed:', err instanceof Error ? err.message : err),
+              );
+            } catch (err) {
+              console.warn('[ledger] decision reject persist failed:', err instanceof Error ? err.message : err);
             }
           }
+
+          broadcastAlert({ type: 'DECISION_RESOLVED', data: { taskId, decision } });
 
           sendJson(response, 200, { success: true, taskId, status: decision });
           return;
@@ -1260,12 +1291,11 @@ export function createWedgeServer(options: WedgeOptions): Server {
             const info = await redis.xinfo('GROUPS', 'telemetry_stream');
             const groups = info as any[];
             const g = groups.find((grp: any) => (grp[1] ?? grp?.name) === 'telemetry_workers');
-            // lag field (Redis 7+) or entries-read difference
             if (g) {
               const lagIdx = g.indexOf('lag');
               streamLagMs = lagIdx >= 0 ? Number(g[lagIdx + 1]) ?? 0 : 0;
             }
-          } catch { /* redis unavailable — report 0 */ }
+          } catch { /* redis unavailable */ }
           sendJson(response, 200, { suppressedAlerts: suppressed, streamLagMs });
           return;
         }
@@ -1299,14 +1329,17 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
 export async function startWedgeServer(options: WedgeOptions): Promise<RunningWedge> {
   const server = createWedgeServer(options);
-  const port = options.port ?? 0;
-  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? (Number(process.env.PORT) || 10000);
+  const host = options.host ?? "0.0.0.0";
+
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => resolve());
   });
+
   const address = server.address();
   const bound = typeof address === "object" && address !== null ? address.port : port;
+
   return {
     url: `http://${host}:${bound}`,
     port: bound,
@@ -1315,12 +1348,15 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
       server.closeAllConnections();
     }),
   };
-
-// Start the server if this file is executed directly from the terminal
-if (process.argv[1] && process.argv[1].endsWith('server.ts')) {
-  startWedgeServer({ cwd: process.cwd(), port: 8080 })
-    .then(wedge => console.log(`🚀 NeuroFabric Backend running at http://127.0.0.1:8080`))
-    .catch(console.error);
 }
 
-}
+// Top-level entrypoint execution
+const PORT = Number(process.env.PORT) || 10000;
+const HOST = "0.0.0.0";
+
+startWedgeServer({ cwd: process.cwd(), port: PORT, host: HOST })
+  .then((wedge) => console.log(`🚀 [NeuroFabric] Backend actively listening on http://${HOST}:${PORT}`))
+  .catch((err) => {
+    console.error("❌ [NeuroFabric] Failed to start server:", err);
+    process.exit(1);
+  });
