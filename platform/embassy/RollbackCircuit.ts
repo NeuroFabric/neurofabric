@@ -32,6 +32,19 @@ export class RollbackCircuit {
     return this.trippedCircuits.has(target);
   }
 
+  public static getTrippedCircuits(): string[] {
+    return Array.from(this.trippedCircuits);
+  }
+
+  public static resetCircuit(target: string): void {
+    this.trippedCircuits.delete(target);
+    this.failureCounts.delete(target);
+    this.broadcast({
+      type: "CIRCUIT_RESET",
+      data: { target },
+    });
+  }
+
   public static invertDiff(diff: string): string {
     if (!diff) return "";
     return diff
@@ -70,7 +83,7 @@ export class RollbackCircuit {
     const timer = setTimeout(async () => {
       this.activeCanaries.delete(target);
       this.activeCanaries.delete(taskId);
-      this.failureCounts.delete(target); // Reset strikes on successful verification
+      this.failureCounts.delete(target);
       await this.updateStatus(taskId, "VERIFIED_RESOLVED");
       this.broadcast({
         type: "CANARY_CONFIRMED",
@@ -109,7 +122,6 @@ export class RollbackCircuit {
     this.activeCanaries.delete(service);
     this.activeCanaries.delete(canary.target);
 
-    // Track strike counts for anti-flapping
     const strikes = (this.failureCounts.get(canary.target) || 0) + 1;
     this.failureCounts.set(canary.target, strikes);
 
