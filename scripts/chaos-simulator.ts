@@ -1,5 +1,5 @@
-const INGEST_URL = 'http://127.0.0.1:8080/api/v1/workspace/ingest';
-const EMBASSY_DECISIONS_URL = 'http://127.0.0.1:8080/api/v1/embassy/decisions';
+const INGEST_URL = 'https://neurofabric-backend.onrender.com/api/v1/workspace/ingest';
+const EMBASSY_DECISIONS_URL = 'https://neurofabric-backend.onrender.com/api/v1/embassy/decisions';
 
 async function ingestPayload(payload: any) {
   const start = Date.now();
@@ -93,7 +93,7 @@ async function runChaos() {
       // Step 4: Assert rollback occurred by checking the ledger
       setTimeout(async () => {
         try {
-          const ledgerRes = await fetch('http://127.0.0.1:8080/api/v1/governance/ledger');
+          const ledgerRes = await fetch('https://neurofabric-backend.onrender.com/api/v1/governance/ledger');
           const ledger = await ledgerRes.json();
           const rolledBackTask = ledger.find((t: any) => t.status === 'ROLLED_BACK');
           if (rolledBackTask) {
