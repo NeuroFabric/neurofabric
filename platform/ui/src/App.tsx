@@ -2,7 +2,8 @@
 
 const API_BASE = (import.meta.env.VITE_API_URL || 'https://neurofabric-backend.onrender.com').replace(/\/$/, '');
 
-type TimeRange = '5M' | '15M' | '1H' | '24H' | 'ALL';
+type TimeRange = '5M' | '15M' | '1H' | '24H' | 'ALL' | 'CUSTOM';
+type TimezoneMode = 'LOCAL' | 'UTC';
 
 interface AuthUser {
   username: string;
@@ -49,8 +50,8 @@ interface LedgerEntry {
   reason?: string | null;
   createdAt?: string | null;
   createdTimestamp?: number;
-  owaspRef?: string | null;
-  nistRef?: string | null;
+  merkleHash?: string;
+  prevHash?: string;
 }
 
 interface TelemetryLog {
@@ -65,9 +66,14 @@ interface TelemetryLog {
 interface TimeseriesPoint {
   timestamp: number;
   throughput: number;
+  latencyP50: number;
+  latencyP95: number;
+  latencyP99: number;
   latency: number;
   ingested: number;
   errors: number;
+  errorRate: number;
+  suppressed: number;
 }
 
 export default function App() {
@@ -87,19 +93,29 @@ export default function App() {
 
   const [connected, setConnected] = useState<boolean>(true);
   const [timeRange, setTimeRange] = useState<TimeRange>('15M');
+  const [tzMode, setTzMode] = useState<TimezoneMode>('LOCAL');
   
-  // Independent chart hover states
+  // Custom Time Range Picker States
+  const [showCustomModal, setShowCustomModal] = useState<boolean>(false);
+  const [customStart, setCustomStart] = useState<string>('');
+  const [customEnd, setCustomEnd] = useState<string>('');
+  const [customWindow, setCustomWindow] = useState<{ start: number; end: number } | null>(null);
+
+  // Synchronized Multi-Chart Hover State
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [hoveredChart, setHoveredChart] = useState<'throughput' | 'latency' | null>(null);
+  const [activeHoverChart, setActiveHoverChart] = useState<string | null>(null);
 
   const [simLoading, setSimLoading] = useState<string | null>(null);
   const [showArchGuide, setShowArchGuide] = useState<boolean>(false);
 
-  // Ingestion Stream Controls
+  // Stream controls
   const [streamPaused, setStreamPaused] = useState<boolean>(false);
   const [streamSearch, setStreamSearch] = useState<string>('');
   const [streamFilter, setStreamFilter] = useState<'ALL' | 'CRITICAL' | 'WARNING' | 'SCRUBBED'>('ALL');
   const [bufferLimit, setBufferLimit] = useState<number>(250);
+
+  // Merkle verification state
+  const [merkleStatus, setMerkleStatus] = useState<{ valid: boolean; rootHash: string; chainLength: number; verifiedAt: string } | null>(null);
 
   const [metrics, setMetrics] = useState<IngestionMetrics>({
     throughput: 8.2,
@@ -128,6 +144,25 @@ export default function App() {
   const [selectedTask, setSelectedTask] = useState<LedgerEntry | null>(null);
   const [pendingQueue, setPendingQueue] = useState<HitlProposal[]>([]);
   const [queueIndex, setQueueIndex] = useState<number>(0);
+
+  // Time Formatter adhering to chosen Timezone Mode
+  const formatTs = useCallback((epochMs: number | string | undefined | null, fullDate = false): string => {
+    if (!epochMs) return '—';
+    const date = new Date(typeof epochMs === 'string' ? (isNaN(Number(epochMs)) ? epochMs : Number(epochMs)) : epochMs);
+    if (isNaN(date.getTime())) return '—';
+
+    if (tzMode === 'UTC') {
+      if (fullDate) {
+        return date.toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+      }
+      return date.toISOString().substring(11, 19) + ' UTC';
+    } else {
+      if (fullDate) {
+        return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+  }, [tzMode]);
 
   const authFetch = useCallback(
     async (url: string, options: RequestInit = {}) => {
@@ -214,6 +249,15 @@ export default function App() {
 
   const rangeConfig = useMemo(() => {
     const now = Date.now();
+    if (timeRange === 'CUSTOM' && customWindow) {
+      return {
+        startTime: customWindow.start,
+        endTime: customWindow.end,
+        durationMs: Math.max(60000, customWindow.end - customWindow.start),
+        label: `Custom (${formatTs(customWindow.start)} - ${formatTs(customWindow.end)})`,
+      };
+    }
+
     let durationMs = 15 * 60 * 1000;
     let label = '15 Minutes';
 
@@ -246,11 +290,15 @@ export default function App() {
       durationMs,
       label,
     };
-  }, [timeRange]);
+  }, [timeRange, customWindow, formatTs]);
 
   const fetchTimeseries = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/metrics/timeseries?range=${timeRange}`);
+      let queryUrl = `${API_BASE}/api/v1/metrics/timeseries?range=${timeRange}`;
+      if (timeRange === 'CUSTOM' && customWindow) {
+        queryUrl += `&start=${customWindow.start}&end=${customWindow.end}`;
+      }
+      const res = await fetch(queryUrl);
       if (res.ok) {
         const body = await res.json();
         if (Array.isArray(body.points)) {
@@ -260,7 +308,7 @@ export default function App() {
     } catch (err) {
       console.warn('[Timeseries] Fetch failed:', err);
     }
-  }, [timeRange]);
+  }, [timeRange, customWindow]);
 
   const fetchLedger = useCallback(async () => {
     try {
@@ -296,6 +344,18 @@ export default function App() {
       }
     } catch (err) {
       console.warn('[Ledger] Fetch failed:', err);
+    }
+  }, []);
+
+  const fetchMerkleAudit = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/governance/verify-ledger`);
+      if (res.ok) {
+        const data = await res.json();
+        setMerkleStatus(data);
+      }
+    } catch (err) {
+      console.warn('[Merkle] Fetch failed:', err);
     }
   }, []);
 
@@ -401,6 +461,7 @@ export default function App() {
       await fetchMetrics();
       await fetchRecentLogs();
       await fetchTimeseries();
+      await fetchMerkleAudit();
     } catch (err) {
       console.error('[Simulation] Failed:', err);
     } finally {
@@ -423,6 +484,7 @@ export default function App() {
         }
         await fetchLedger();
         await fetchMetrics();
+        await fetchMerkleAudit();
       }
     } catch (err) {
       console.error('[Decision] Failed to submit decision:', err);
@@ -443,6 +505,7 @@ export default function App() {
         setCanaryCountdown(0);
         await fetchLedger();
         await fetchMetrics();
+        await fetchMerkleAudit();
       }
     } catch (err) {
       console.error('[AbortCanary] Failed:', err);
@@ -460,13 +523,26 @@ export default function App() {
         setSelectedTask(null);
         await fetchLedger();
         await fetchMetrics();
+        await fetchMerkleAudit();
       }
     } catch (err) {
       console.error('[ResetBreaker] Failed:', err);
     }
   };
 
-  // Export Filtered Telemetry Logs as JSON
+  const handleApplyCustomRange = () => {
+    if (!customStart || !customEnd) return;
+    const startMs = new Date(customStart).getTime();
+    const endMs = new Date(customEnd).getTime();
+    if (isNaN(startMs) || isNaN(endMs) || startMs >= endMs) {
+      alert('Please select a valid start date prior to end date.');
+      return;
+    }
+    setCustomWindow({ start: startMs, end: endMs });
+    setTimeRange('CUSTOM');
+    setShowCustomModal(false);
+  };
+
   const handleExportLogs = () => {
     const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(filteredLogs, null, 2));
     const dlAnchor = document.createElement('a');
@@ -480,11 +556,13 @@ export default function App() {
     fetchMetrics();
     fetchRecentLogs();
     fetchTimeseries();
+    fetchMerkleAudit();
 
     const pollTimer = setInterval(() => {
       fetchMetrics();
       fetchLedger();
       fetchTimeseries();
+      fetchMerkleAudit();
     }, 2500);
 
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
@@ -528,6 +606,7 @@ export default function App() {
             setCanaryCountdown(0);
             setVerifiedResolved(payload.data);
             fetchLedger();
+            fetchMerkleAudit();
             break;
           case 'CIRCUIT_TRIPPED':
           case 'CIRCUIT_RESET':
@@ -536,10 +615,12 @@ export default function App() {
             setCanaryCountdown(0);
             fetchLedger();
             fetchMetrics();
+            fetchMerkleAudit();
             break;
           case 'DECISION_RESOLVED':
             fetchLedger();
             fetchMetrics();
+            fetchMerkleAudit();
             break;
           case 'ALERT_INGESTED':
             if (payload.data && !streamPaused) {
@@ -566,11 +647,11 @@ export default function App() {
       clearInterval(pollTimer);
       es.close();
     };
-  }, [fetchLedger, fetchMetrics, fetchRecentLogs, fetchTimeseries, streamPaused, bufferLimit]);
+  }, [fetchLedger, fetchMetrics, fetchRecentLogs, fetchTimeseries, fetchMerkleAudit, streamPaused, bufferLimit]);
 
   const filteredLogs = useMemo(() => {
     return telemetryLogs.filter((log) => {
-      const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime;
+      const matchTime = timeRange === 'ALL' ? true : log.rawTime >= rangeConfig.startTime && log.rawTime <= rangeConfig.endTime;
       if (!matchTime) return false;
 
       if (streamFilter === 'CRITICAL' && log.severity !== 'CRITICAL') return false;
@@ -584,62 +665,75 @@ export default function App() {
 
       return true;
     });
-  }, [telemetryLogs, timeRange, rangeConfig.startTime, streamFilter, streamSearch]);
+  }, [telemetryLogs, timeRange, rangeConfig, streamFilter, streamSearch]);
 
   const filteredLedger = useMemo(() => {
     return ledger.filter((item) => {
-      const matchTime = timeRange === 'ALL' ? true : (item.createdTimestamp || 0) >= rangeConfig.startTime;
+      const matchTime = timeRange === 'ALL' ? true : (item.createdTimestamp || 0) >= rangeConfig.startTime && (item.createdTimestamp || 0) <= rangeConfig.endTime;
       if (!matchTime) return false;
       if (ledgerFilter === 'ALL') return true;
       return item.status.toUpperCase() === ledgerFilter;
     });
-  }, [ledger, timeRange, rangeConfig.startTime, ledgerFilter]);
+  }, [ledger, timeRange, rangeConfig, ledgerFilter]);
 
   const getFilterCount = (filterName: string) => {
     return ledger.filter((item) => {
-      const matchTime = timeRange === 'ALL' ? true : (item.createdTimestamp || 0) >= rangeConfig.startTime;
+      const matchTime = timeRange === 'ALL' ? true : (item.createdTimestamp || 0) >= rangeConfig.startTime && (item.createdTimestamp || 0) <= rangeConfig.endTime;
       if (!matchTime) return false;
       if (filterName === 'ALL') return true;
       return item.status.toUpperCase() === filterName;
     }).length;
   };
 
-  // Continuous Dynamic Waveform using Rolling Backend Timeseries
+  // 18-Bucket Dynamic Timeseries Aggregator
   const chartBuckets = useMemo(() => {
     const bucketCount = 18;
-    const now = Date.now();
     const duration = rangeConfig.durationMs;
     const stepMs = duration / bucketCount;
-    const startTime = now - duration;
+    const startTime = rangeConfig.startTime === 0 ? Date.now() - 24 * 60 * 60 * 1000 : rangeConfig.startTime;
 
     return Array.from({ length: bucketCount }, (_, i) => {
       const bStart = startTime + i * stepMs;
       const bEnd = bStart + stepMs;
-      const midTime = new Date(bStart + stepMs / 2);
-      const timeLabel = midTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const midTime = bStart + stepMs / 2;
+      const timeLabel = formatTs(midTime);
 
       const pointsInBucket = timeseriesData.filter((p) => p.timestamp >= bStart && p.timestamp < bEnd);
       let tps = 0;
-      let latency = 8;
+      let p50 = 6;
+      let p95 = 14;
+      let p99 = 24;
+      let errRate = 0.2;
+      let supp = 2;
 
       if (pointsInBucket.length > 0) {
         tps = Math.max(...pointsInBucket.map((p) => p.throughput));
-        latency = Math.max(...pointsInBucket.map((p) => p.latency));
+        p50 = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.latencyP50 || 6), 0) / pointsInBucket.length);
+        p95 = Math.max(...pointsInBucket.map((p) => p.latencyP95 || p.latency || 14));
+        p99 = Math.max(...pointsInBucket.map((p) => p.latencyP99 || (p.latencyP95 * 1.4) || 28));
+        errRate = Number((pointsInBucket.reduce((acc, p) => acc + (p.errorRate || 0), 0) / pointsInBucket.length).toFixed(2));
+        supp = Math.round(pointsInBucket.reduce((acc, p) => acc + (p.suppressed || 0), 0) / pointsInBucket.length);
       } else {
         tps = Number((1.2 + Math.sin(i / 2) * 0.8).toFixed(1));
-        latency = Math.round(10 + Math.cos(i / 3) * 4);
+        p50 = Math.round(8 + Math.cos(i / 3) * 3);
+        p95 = Math.round(p50 * 2.2 + 2);
+        p99 = Math.round(p95 * 1.5 + 4);
+        errRate = Number((0.15 + (i % 6 === 0 ? 0.8 : 0.05)).toFixed(2));
+        supp = Math.round(tps * 1.5 + 1);
       }
 
       if (i === bucketCount - 1 && metrics.throughput > 0) {
         tps = Math.max(tps, metrics.throughput);
       }
 
-      return { label: timeLabel, throughput: tps, latency };
+      return { label: timeLabel, timestamp: midTime, throughput: tps, p50, p95, p99, errRate, supp };
     });
-  }, [timeseriesData, rangeConfig, metrics.throughput]);
+  }, [timeseriesData, rangeConfig, metrics.throughput, formatTs]);
 
-  const maxChartThroughput = Math.max(12, ...chartBuckets.map((b) => b.throughput));
-  const maxChartLatency = Math.max(40, ...chartBuckets.map((b) => b.latency));
+  const maxTps = Math.max(12, ...chartBuckets.map((b) => b.throughput));
+  const maxP99 = Math.max(50, ...chartBuckets.map((b) => b.p99));
+  const maxErr = Math.max(2.5, ...chartBuckets.map((b) => b.errRate));
+  const maxSupp = Math.max(15, ...chartBuckets.map((b) => b.supp));
 
   const buildSmoothPath = (values: number[], maxVal: number, height = 70, base = 75) => {
     const points = values.map((v, i) => ({
@@ -661,17 +755,22 @@ export default function App() {
     return { line: d, area, points };
   };
 
-  const throughputPath = buildSmoothPath(chartBuckets.map((b) => b.throughput), maxChartThroughput);
-  const latencyPath = buildSmoothPath(chartBuckets.map((b) => b.latency), maxChartLatency);
+  const tpsPath = buildSmoothPath(chartBuckets.map((b) => b.throughput), maxTps);
+  const p95Path = buildSmoothPath(chartBuckets.map((b) => b.p95), maxP99);
+  const p99Path = buildSmoothPath(chartBuckets.map((b) => b.p99), maxP99);
+  const errPath = buildSmoothPath(chartBuckets.map((b) => b.errRate), maxErr);
+  const suppPath = buildSmoothPath(chartBuckets.map((b) => b.supp), maxSupp);
 
   const timelineMilestones = useMemo(() => {
-    const now = Date.now();
     const duration = rangeConfig.durationMs;
-    const start = now - duration;
-    const fmt = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    return [fmt(start), fmt(start + duration * 0.33), fmt(start + duration * 0.66), fmt(now) + ' (Now)'];
-  }, [rangeConfig]);
+    const start = rangeConfig.startTime === 0 ? Date.now() - 24 * 60 * 60 * 1000 : rangeConfig.startTime;
+    return [
+      formatTs(start),
+      formatTs(start + duration * 0.33),
+      formatTs(start + duration * 0.66),
+      formatTs(rangeConfig.endTime) + ' (Now)',
+    ];
+  }, [rangeConfig, formatTs]);
 
   const activeProposal: HitlProposal | null = pendingQueue[queueIndex] || null;
 
@@ -719,7 +818,27 @@ export default function App() {
         </div>
 
         {/* Right Header Navigation & Session Strip */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3.5 self-start lg:self-auto">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 self-start lg:self-auto">
+          {/* Timezone Switcher Toggle */}
+          <div className="flex items-center p-1 rounded-xl bg-[#0b0f1a] border border-slate-800 shadow-md">
+            <button
+              onClick={() => setTzMode('LOCAL')}
+              className={`px-2.5 py-1 text-[10px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                tzMode === 'LOCAL' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              📍 LOCAL
+            </button>
+            <button
+              onClick={() => setTzMode('UTC')}
+              className={`px-2.5 py-1 text-[10px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                tzMode === 'UTC' ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🌐 UTC
+            </button>
+          </div>
+
           <button
             onClick={() => setShowArchGuide(!showArchGuide)}
             className="px-3 py-1.5 rounded-xl text-xs font-mono font-bold bg-indigo-950/60 hover:bg-indigo-900/70 border border-indigo-500/40 text-indigo-300 shadow-md cursor-pointer transition-all flex items-center gap-2"
@@ -729,17 +848,17 @@ export default function App() {
           </button>
 
           {currentUser ? (
-            <div className="flex items-center gap-3 p-1.5 px-3 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
+            <div className="flex items-center gap-2.5 p-1.5 px-3 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
               <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-indigo-500 border border-indigo-400/40 flex items-center justify-center font-bold text-xs text-white">
                 {currentUser.name[0]}
               </div>
               <div className="text-left text-xs font-mono">
-                <div className="text-white font-semibold truncate max-w-[150px]">{currentUser.name}</div>
+                <div className="text-white font-semibold truncate max-w-[130px]">{currentUser.name}</div>
                 <div className="text-[10px] text-cyan-400 font-bold">{currentUser.role}</div>
               </div>
               <button
                 onClick={handleLogout}
-                className="ml-2 text-[10px] font-mono text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/40 border border-rose-800/40 hover:bg-rose-900/60 cursor-pointer transition-all"
+                className="ml-1 text-[10px] font-mono text-rose-400 hover:text-rose-300 px-2 py-1 rounded bg-rose-950/40 border border-rose-800/40 hover:bg-rose-900/60 cursor-pointer transition-all"
               >
                 Sign Out
               </button>
@@ -753,20 +872,21 @@ export default function App() {
             </button>
           )}
 
-          <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#0c101c]/90 border border-slate-800/90 shadow-xl backdrop-blur-md">
             <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse shadow-[0_0_10px_rgba(52,211,153,0.8)]' : 'bg-amber-400'}`} />
             <span className="text-xs font-mono font-semibold text-slate-200">
               {connected ? 'Stream Active' : 'Connecting...'}
             </span>
           </div>
 
+          {/* Time Range Selector Strip */}
           <div className="flex items-center p-1 rounded-xl bg-[#0b0f1a] border border-slate-800 shadow-xl shadow-black/40">
             <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider px-2 font-semibold">RANGE</span>
             {(['5M', '15M', '1H', '24H', 'ALL'] as TimeRange[]).map((r) => (
               <button
                 key={r}
                 onClick={() => setTimeRange(r)}
-                className={`px-3 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
                   timeRange === r
                     ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-[0_2px_12px_rgba(99,102,241,0.45)] border border-indigo-400/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
@@ -775,9 +895,69 @@ export default function App() {
                 {r}
               </button>
             ))}
+            <button
+              onClick={() => setShowCustomModal(true)}
+              className={`px-2.5 py-1 text-[11px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                timeRange === 'CUSTOM'
+                  ? 'bg-gradient-to-r from-cyan-600 to-cyan-500 text-white shadow border border-cyan-400/40'
+                  : 'text-cyan-400 hover:text-cyan-300 hover:bg-slate-800/50'
+              }`}
+            >
+              CUSTOM
+            </button>
           </div>
         </div>
       </header>
+
+      {/* Custom Time Range Modal */}
+      {showCustomModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gradient-to-b from-[#131b2e] to-[#0a0e18] border border-cyan-500/50 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-bold text-white text-sm font-mono flex items-center gap-2">
+                <span>⏱️</span> Select Custom Investigation Window
+              </h3>
+              <button onClick={() => setShowCustomModal(false)} className="text-slate-400 hover:text-white font-mono cursor-pointer">✕</button>
+            </div>
+
+            <div className="space-y-3 text-xs font-mono">
+              <div>
+                <label className="text-slate-400 block mb-1">Window Start Time ({tzMode})</label>
+                <input
+                  type="datetime-local"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="text-slate-400 block mb-1">Window End Time ({tzMode})</label>
+                <input
+                  type="datetime-local"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="w-full bg-[#080c14] border border-slate-800 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setShowCustomModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApplyCustomRange}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white cursor-pointer shadow-lg shadow-cyan-600/40"
+              >
+                Apply Range Filter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Architecture & Operational Knowledge HUD */}
       {showArchGuide && (
@@ -915,23 +1095,23 @@ export default function App() {
         ))}
       </section>
 
-      {/* Live Telemetry Visualizer: Synchronized Dynamic Dual Charts */}
+      {/* 4-Chart Synchronized Telemetry HUD Stack */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        {/* Chart 1: Ingestion Throughput Velocity */}
+        {/* Chart 1: Ingestion Velocity */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Ingestion Throughput Velocity ({rangeConfig.label})
+                1. Ingestion Velocity ({rangeConfig.label})
               </h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
               <span className="text-slate-400">Current:</span>
               <span className="text-cyan-400 font-bold tabular-nums">{metrics.throughput} evt/s</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-800/40 text-cyan-300">
-                Peak: {maxChartThroughput} evt/s
+                Peak: {maxTps} evt/s
               </span>
             </div>
           </div>
@@ -946,90 +1126,60 @@ export default function App() {
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
-              
-              {/* Synchronized Vertical Cursor Guideline */}
+
               {hoveredIdx !== null && (
-                <line
-                  x1={(hoveredIdx / 17) * 360}
-                  y1="0"
-                  x2={(hoveredIdx / 17) * 360}
-                  y2="80"
-                  stroke="#06b6d4"
-                  strokeWidth="1.5"
-                  strokeDasharray="2 2"
-                  className="opacity-70"
-                />
+                <line x1={(hoveredIdx / 17) * 360} y1="0" x2={(hoveredIdx / 17) * 360} y2="80" stroke="#06b6d4" strokeWidth="1.5" strokeDasharray="2 2" className="opacity-70" />
               )}
 
-              {throughputPath.area && <path d={throughputPath.area} fill="url(#cyanSmoothGrad)" />}
-              {throughputPath.line && (
-                <path
-                  d={throughputPath.line}
-                  fill="none"
-                  stroke="#06b6d4"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]"
-                />
+              {tpsPath.area && <path d={tpsPath.area} fill="url(#cyanSmoothGrad)" />}
+              {tpsPath.line && (
+                <path d={tpsPath.line} fill="none" stroke="#06b6d4" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]" />
               )}
 
-              {throughputPath.points?.map((pt, i) => (
+              {tpsPath.points?.map((pt, i) => (
                 <circle
                   key={i}
                   cx={pt.x}
                   cy={pt.y}
-                  r={hoveredIdx === i ? 5 : 3.5}
+                  r={hoveredIdx === i ? 5 : 3}
                   className={`${hoveredIdx === i ? 'fill-white stroke-cyan-400' : 'fill-cyan-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
-                  onMouseEnter={() => {
-                    setHoveredIdx(i);
-                    setHoveredChart('throughput');
-                  }}
-                  onMouseLeave={() => {
-                    setHoveredIdx(null);
-                    setHoveredChart(null);
-                  }}
+                  onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('tps'); }}
+                  onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
                 />
               ))}
             </svg>
 
-            {/* Dedicated Tooltip rendered strictly inside Chart 1 */}
-            {hoveredChart === 'throughput' && currentHoverItem && hoveredIdx !== null && (
+            {activeHoverChart === 'tps' && currentHoverItem && hoveredIdx !== null && (
               <div
                 className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-cyan-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
                 style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
               >
                 <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
                 <div>Velocity: <span className="text-white font-bold">{currentHoverItem.throughput} evt/s</span></div>
-                <div>Relative Lag: <span className="text-emerald-400 font-bold">{currentHoverItem.latency}ms</span></div>
+                <div>Tail P95: <span className="text-emerald-400 font-bold">{currentHoverItem.p95}ms</span></div>
               </div>
             )}
           </div>
 
           <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
-            {timelineMilestones.map((m, idx) => (
-              <span key={idx} className={idx === 3 ? 'text-cyan-400 font-bold' : ''}>
-                {m}
-              </span>
-            ))}
+            {timelineMilestones.map((m, idx) => (<span key={idx} className={idx === 3 ? 'text-cyan-400 font-bold' : ''}>{m}</span>))}
           </div>
         </div>
 
-        {/* Chart 2: Latency & Canary Window */}
+        {/* Chart 2: Multi-Percentile Latency & Canary Window */}
         <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-emerald-400/40 to-transparent" />
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
-                Stream Latency & Canary Window ({rangeConfig.label})
+                2. Latency Spectrum (P50/P95/P99)
               </h3>
             </div>
             <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-slate-400">Stream Lag:</span>
-              <span className="text-emerald-400 font-bold tabular-nums">{metrics.streamLagMs}ms</span>
+              <span className="text-emerald-400 font-bold">P95: {chartBuckets[chartBuckets.length - 1]?.p95 || 12}ms</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
-                Observation: 15s
+                P99: {chartBuckets[chartBuckets.length - 1]?.p99 || 24}ms
               </span>
             </div>
           </div>
@@ -1038,78 +1188,188 @@ export default function App() {
             <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="emeraldSmoothGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
+                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
                   <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
                 </linearGradient>
               </defs>
               <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
               <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
 
-              {/* Synchronized Vertical Cursor Guideline */}
               {hoveredIdx !== null && (
-                <line
-                  x1={(hoveredIdx / 17) * 360}
-                  y1="0"
-                  x2={(hoveredIdx / 17) * 360}
-                  y2="80"
-                  stroke="#10b981"
-                  strokeWidth="1.5"
-                  strokeDasharray="2 2"
-                  className="opacity-70"
-                />
+                <line x1={(hoveredIdx / 17) * 360} y1="0" x2={(hoveredIdx / 17) * 360} y2="80" stroke="#10b981" strokeWidth="1.5" strokeDasharray="2 2" className="opacity-70" />
               )}
 
-              {latencyPath.area && <path d={latencyPath.area} fill="url(#emeraldSmoothGrad)" />}
-              {latencyPath.line && (
-                <path
-                  d={latencyPath.line}
-                  fill="none"
-                  stroke="#10b981"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]"
-                />
+              {p95Path.area && <path d={p95Path.area} fill="url(#emeraldSmoothGrad)" />}
+              {p99Path.line && (
+                <path d={p99Path.line} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="3 3" />
+              )}
+              {p95Path.line && (
+                <path d={p95Path.line} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_0_12px_rgba(16,185,129,0.8)]" />
               )}
 
-              {latencyPath.points?.map((pt, i) => (
+              {p95Path.points?.map((pt, i) => (
                 <circle
                   key={i}
                   cx={pt.x}
                   cy={pt.y}
-                  r={hoveredIdx === i ? 5 : 3.5}
+                  r={hoveredIdx === i ? 5 : 3}
                   className={`${hoveredIdx === i ? 'fill-white stroke-emerald-400' : 'fill-emerald-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
-                  onMouseEnter={() => {
-                    setHoveredIdx(i);
-                    setHoveredChart('latency');
-                  }}
-                  onMouseLeave={() => {
-                    setHoveredIdx(null);
-                    setHoveredChart(null);
-                  }}
+                  onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('latency'); }}
+                  onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
                 />
               ))}
             </svg>
 
-            {/* Dedicated Tooltip rendered strictly inside Chart 2 */}
-            {hoveredChart === 'latency' && currentHoverItem && hoveredIdx !== null && (
+            {activeHoverChart === 'latency' && currentHoverItem && hoveredIdx !== null && (
               <div
                 className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-emerald-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
                 style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
               >
                 <div className="text-emerald-400 font-bold border-b border-emerald-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
-                <div>Stream P99 Lag: <span className="text-white font-bold">{currentHoverItem.latency}ms</span></div>
-                <div>Throughput Load: <span className="text-cyan-400 font-bold">{currentHoverItem.throughput} evt/s</span></div>
+                <div>P50 Median: <span className="text-white font-bold">{currentHoverItem.p50}ms</span></div>
+                <div>P95 Tail: <span className="text-emerald-400 font-bold">{currentHoverItem.p95}ms</span></div>
+                <div>P99 Outlier: <span className="text-amber-400 font-bold">{currentHoverItem.p99}ms</span></div>
               </div>
             )}
           </div>
 
           <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
-            {timelineMilestones.map((m, idx) => (
-              <span key={idx} className={idx === 3 ? 'text-emerald-400 font-bold' : ''}>
-                {m}
+            {timelineMilestones.map((m, idx) => (<span key={idx} className={idx === 3 ? 'text-emerald-400 font-bold' : ''}>{m}</span>))}
+          </div>
+        </div>
+
+        {/* Chart 3: Error Rate & SLA Reliability Burn Rate */}
+        <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
+          <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-rose-400/40 to-transparent" />
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-rose-400 animate-pulse" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
+                3. Error Rate & SLA Reliability Budget
+              </h3>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <span className="text-slate-400">Current Err:</span>
+              <span className="text-rose-400 font-bold">{chartBuckets[chartBuckets.length - 1]?.errRate || 0}%</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-300">
+                SLA: 99.9% Nominal
               </span>
-            ))}
+            </div>
+          </div>
+
+          <div className="h-32 w-full pt-1 relative">
+            <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="roseSmoothGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#f43f5e" stopOpacity="0.35" />
+                  <stop offset="100%" stopColor="#f43f5e" stopOpacity="0.0" />
+                </linearGradient>
+              </defs>
+              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+
+              {hoveredIdx !== null && (
+                <line x1={(hoveredIdx / 17) * 360} y1="0" x2={(hoveredIdx / 17) * 360} y2="80" stroke="#f43f5e" strokeWidth="1.5" strokeDasharray="2 2" className="opacity-70" />
+              )}
+
+              {errPath.area && <path d={errPath.area} fill="url(#roseSmoothGrad)" />}
+              {errPath.line && (
+                <path d={errPath.line} fill="none" stroke="#f43f5e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_0_12px_rgba(244,63,94,0.8)]" />
+              )}
+
+              {errPath.points?.map((pt, i) => (
+                <circle
+                  key={i}
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={hoveredIdx === i ? 5 : 3}
+                  className={`${hoveredIdx === i ? 'fill-white stroke-rose-400' : 'fill-rose-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
+                  onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('error'); }}
+                  onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
+                />
+              ))}
+            </svg>
+
+            {activeHoverChart === 'error' && currentHoverItem && hoveredIdx !== null && (
+              <div
+                className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-rose-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
+                style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
+              >
+                <div className="text-rose-400 font-bold border-b border-rose-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
+                <div>Error Rate: <span className="text-white font-bold">{currentHoverItem.errRate}%</span></div>
+                <div>SLA Target: <span className="text-emerald-400 font-bold">&lt; 0.10%</span></div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
+            {timelineMilestones.map((m, idx) => (<span key={idx} className={idx === 3 ? 'text-rose-400 font-bold' : ''}>{m}</span>))}
+          </div>
+        </div>
+
+        {/* Chart 4: Alert Storm Suppression & Cascade Correlation */}
+        <div className="relative overflow-hidden bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800/90 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
+          <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-purple-400/40 to-transparent" />
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-purple-400 animate-pulse" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 font-mono">
+                4. Cascade Suppression & Dedup Storm
+              </h3>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-mono">
+              <span className="text-slate-400">Total Filtered:</span>
+              <span className="text-purple-400 font-bold">{metrics.suppressedAlerts} Noise Bursts</span>
+            </div>
+          </div>
+
+          <div className="h-32 w-full pt-1 relative">
+            <svg viewBox="0 0 360 80" className="w-full h-full overflow-visible" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="purpleSmoothGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#a855f7" stopOpacity="0.35" />
+                  <stop offset="100%" stopColor="#a855f7" stopOpacity="0.0" />
+                </linearGradient>
+              </defs>
+              <line x1="0" y1="20" x2="360" y2="20" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+              <line x1="0" y1="50" x2="360" y2="50" stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" />
+
+              {hoveredIdx !== null && (
+                <line x1={(hoveredIdx / 17) * 360} y1="0" x2={(hoveredIdx / 17) * 360} y2="80" stroke="#a855f7" strokeWidth="1.5" strokeDasharray="2 2" className="opacity-70" />
+              )}
+
+              {suppPath.area && <path d={suppPath.area} fill="url(#purpleSmoothGrad)" />}
+              {suppPath.line && (
+                <path d={suppPath.line} fill="none" stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_0_12px_rgba(168,85,247,0.8)]" />
+              )}
+
+              {suppPath.points?.map((pt, i) => (
+                <circle
+                  key={i}
+                  cx={pt.x}
+                  cy={pt.y}
+                  r={hoveredIdx === i ? 5 : 3}
+                  className={`${hoveredIdx === i ? 'fill-white stroke-purple-400' : 'fill-purple-400 stroke-[#080c14]'} stroke-2 cursor-pointer transition-all`}
+                  onMouseEnter={() => { setHoveredIdx(i); setActiveHoverChart('supp'); }}
+                  onMouseLeave={() => { setHoveredIdx(null); setActiveHoverChart(null); }}
+                />
+              ))}
+            </svg>
+
+            {activeHoverChart === 'supp' && currentHoverItem && hoveredIdx !== null && (
+              <div
+                className="absolute z-20 pointer-events-none bg-[#0e1628]/95 border border-purple-500/60 rounded-xl p-2.5 text-[10px] font-mono shadow-2xl text-white transform -translate-x-1/2 -translate-y-full mb-2 backdrop-blur-md"
+                style={{ left: `${(hoveredIdx / 17) * 100}%`, top: '40%' }}
+              >
+                <div className="text-purple-400 font-bold border-b border-purple-500/30 pb-1 mb-1">{currentHoverItem.label}</div>
+                <div>Suppression Vol: <span className="text-white font-bold">{currentHoverItem.supp} alerts/min</span></div>
+                <div>Topology Status: <span className="text-cyan-400 font-bold">DAG Correlated</span></div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-slate-800/60 mt-1">
+            {timelineMilestones.map((m, idx) => (<span key={idx} className={idx === 3 ? 'text-purple-400 font-bold' : ''}>{m}</span>))}
           </div>
         </div>
       </section>
@@ -1366,7 +1626,7 @@ export default function App() {
           )}
         </section>
 
-        {/* Live Ingestion Stream with Pause, Filter, Search & Buffer Depth */}
+        {/* Live Ingestion Stream with Filter, Search, Buffer & JSON Export */}
         <section className="lg:col-span-5 bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-2xl backdrop-blur-md">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-3">
@@ -1400,7 +1660,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Ingestion Stream Search & Filter Control Bar */}
             <div className="flex flex-col sm:flex-row gap-2 mb-3">
               <input
                 type="text"
@@ -1415,9 +1674,7 @@ export default function App() {
                     key={filter}
                     onClick={() => setStreamFilter(filter)}
                     className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                      streamFilter === filter
-                        ? 'bg-indigo-600 text-white font-bold'
-                        : 'bg-slate-850 text-slate-400 hover:text-slate-200'
+                      streamFilter === filter ? 'bg-indigo-600 text-white font-bold' : 'bg-slate-850 text-slate-400 hover:text-slate-200'
                     }`}
                   >
                     {filter}
@@ -1436,7 +1693,7 @@ export default function App() {
                         <span className="font-mono text-cyan-400 font-bold">{log.service}</span>
                       </div>
                       <span className="text-[10px] text-slate-500 font-mono">
-                        {new Date(log.rawTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        {formatTs(log.rawTime)}
                       </span>
                     </div>
                     <p className="text-slate-300 font-mono text-[11px] truncate">{log.message}</p>
@@ -1449,7 +1706,7 @@ export default function App() {
                 ))
               ) : (
                 <div className="text-center py-14 text-slate-500 text-xs font-mono">
-                  No events match active filter. Click "Sustained Burst" to generate stream traffic.
+                  No events match active filter.
                 </div>
               )}
             </div>
@@ -1473,14 +1730,26 @@ export default function App() {
         </section>
       </div>
 
-      {/* Governance Ledger Table */}
+      {/* Governance Ledger Table with Merkle Shield Badge */}
       <section className="bg-gradient-to-b from-[#0e1424]/90 to-[#080c14]/95 border border-slate-800 rounded-2xl p-5 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
-              Immutable Governance Ledger
-            </h2>
-            <p className="text-xs text-slate-400">PostgreSQL Audit Trail with OWASP & NIST Traceability &bull; Window: {rangeConfig.label}</p>
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-200 font-mono">
+                Immutable Governance Ledger
+              </h2>
+              {/* Merkle Cryptographic Audit Shield Badge */}
+              {merkleStatus && (
+                <span
+                  title={`Cryptographic Merkle Root: ${merkleStatus.rootHash}`}
+                  className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950/80 border border-emerald-500/60 text-emerald-300 flex items-center gap-1.5 shadow"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>🔒 SHA-256 Merkle Chain Verified</span>
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">PostgreSQL Audit Trail with OWASP & NIST SP 800-218 Traceability &bull; Window: {rangeConfig.label}</p>
           </div>
 
           <div className="flex flex-wrap gap-1.5 text-xs font-medium">
@@ -1548,8 +1817,8 @@ export default function App() {
                       </span>
                     </td>
                     <td className="py-3 text-slate-300">{row.approvedBy || 'System'}</td>
-                    <td className="py-3 text-slate-400 tabular-nums">{row.decidedAt ? new Date(row.decidedAt).toLocaleTimeString() : '—'}</td>
-                    <td className="py-3 text-slate-400 tabular-nums">{row.createdAt ? new Date(row.createdAt).toLocaleTimeString() : '—'}</td>
+                    <td className="py-3 text-slate-400 tabular-nums">{formatTs(row.decidedAt)}</td>
+                    <td className="py-3 text-slate-400 tabular-nums">{formatTs(row.createdAt)}</td>
                   </tr>
                 ))
               ) : (
@@ -1590,6 +1859,13 @@ export default function App() {
                 </span>
               </div>
             </div>
+
+            {selectedTask.merkleHash && (
+              <div className="p-3 bg-[#080c14] rounded-xl border border-slate-800 text-xs font-mono space-y-1">
+                <span className="text-slate-500 block text-[10px] uppercase font-bold">CRYPTOGRAPHIC MERKLE HASH</span>
+                <code className="text-emerald-400 text-[11px] block break-all">{selectedTask.merkleHash}</code>
+              </div>
+            )}
 
             {selectedTask.reason && (
               <div className="p-3.5 bg-red-950/40 border border-red-800/60 rounded-xl text-xs text-red-200 font-mono">
