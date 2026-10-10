@@ -21,6 +21,7 @@ interface HitlProposal {
   severity?: string;
   confidence?: number;
   blastRadius?: number | string;
+  isTripped?: boolean;
   patch?: {
     diff?: string;
     target?: string;
@@ -31,6 +32,7 @@ interface HitlProposal {
 interface LedgerEntry {
   token: string;
   status: string;
+  target?: string | null;
   subject?: any;
   decidedAt?: string | null;
   approvedBy?: string | null;
@@ -62,7 +64,6 @@ export default function App() {
     avgConfidence: 88,
   });
 
-  const [activeProposal, setActiveProposal] = useState<HitlProposal | null>(null);
   const [activeCanary, setActiveCanary] = useState<{ taskId: string; target: string; timeoutMs?: number } | null>(null);
   const [rolledBackTask, setRolledBackTask] = useState<{ taskId: string; target: string; reason?: string } | null>(null);
   const [trippedCircuit, setTrippedCircuit] = useState<{ target: string; reason?: string } | null>(null);
@@ -72,35 +73,38 @@ export default function App() {
   const [isDeciding, setIsDeciding] = useState<boolean>(false);
   const [ledgerFilter, setLedgerFilter] = useState<string>('ALL');
 
+  // Queue State
+  const [pendingQueue, setPendingQueue] = useState<HitlProposal[]>([]);
+  const [queueIndex, setQueueIndex] = useState<number>(0);
+
   const fetchLedger = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/governance/ledger`);
       if (res.ok) {
         const data: LedgerEntry[] = await res.json();
-        setLedger(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setLedger(list);
 
-        // Embassy Queue Drainage: If no proposal is currently active, pull the oldest pending task
-        setActiveProposal((current) => {
-          if (current) return current;
-          const pending = (Array.isArray(data) ? data : []).find((t) => t.status === 'PENDING');
-          if (pending && pending.subject) {
-            return {
-              taskId: pending.token,
-              target: pending.subject.target || 'service',
-              title: pending.subject.title || `Critical Anomaly on ${pending.subject.target}`,
-              reason: pending.subject.reason || 'Pending verification',
-              severity: pending.subject.severity || 'CRITICAL',
-              confidence: pending.subject.confidence ?? 88,
-              blastRadius: pending.subject.blastRadius ?? '15%',
-              patch: pending.subject.patch || {
-                diff: '--- deployment.yaml\n+++ deployment.yaml\n@@ -1 +1 @@\n-replicas: 2\n+replicas: 5',
-                target: pending.subject.target,
-              },
-              status: 'PENDING',
-            };
-          }
-          return null;
-        });
+        // Derive pending queue from ledger items
+        const pendingItems: HitlProposal[] = list
+          .filter((t) => t.status === 'PENDING')
+          .map((t) => ({
+            taskId: t.token,
+            target: t.target || t.subject?.target || 'service',
+            title: t.subject?.title || `Critical Anomaly on ${t.target || t.subject?.target || 'service'}`,
+            reason: t.subject?.reason || t.reason || 'SLA threshold breached',
+            severity: t.subject?.severity || 'CRITICAL',
+            confidence: t.subject?.confidence ?? 88,
+            blastRadius: t.subject?.blastRadius ?? '15%',
+            isTripped: Boolean(t.subject?.isTripped),
+            patch: t.subject?.patch || {
+              diff: '--- deployment.yaml\n+++ deployment.yaml\n@@ -12,3 +12,3 @@\n-  replicas: 2\n+  replicas: 5',
+              target: t.target || t.subject?.target || 'service',
+            },
+            status: 'PENDING',
+          }));
+
+        setPendingQueue(pendingItems);
       }
     } catch (err) {
       console.warn('[Ledger] Fetch failed:', err);
@@ -109,33 +113,26 @@ export default function App() {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const [opsRes, ingRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/ops/metrics`).then((r) => (r.ok ? r.json() : null)),
-        fetch(`${API_BASE}/api/v1/metrics/ingestion`).then((r) => (r.ok ? r.json() : null)),
-      ]);
-      setMetrics((prev) => ({
-        ...prev,
-        suppressedAlerts: opsRes?.suppressedAlerts ?? ingRes?.suppressedAlerts ?? prev.suppressedAlerts,
-        streamLagMs: opsRes?.streamLagMs ?? prev.streamLagMs,
-        throughput: ingRes?.throughput ?? prev.throughput,
-        secretsScrubbed: ingRes?.secretsScrubbed ?? prev.secretsScrubbed,
-        hitlPending: ingRes?.hitlPending ?? prev.hitlPending,
-      }));
+      const ingRes = await fetch(`${API_BASE}/api/v1/metrics/ingestion`).then((r) => (r.ok ? r.json() : null));
+      if (ingRes) {
+        setMetrics((prev) => ({
+          ...prev,
+          throughput: ingRes.throughput ?? prev.throughput,
+          secretsScrubbed: ingRes.secretsScrubbed ?? prev.secretsScrubbed,
+          suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
+          hitlPending: ingRes.hitlPending ?? prev.hitlPending,
+        }));
+      }
     } catch (err) {
       console.warn('[Metrics] Fetch failed:', err);
     }
   }, []);
 
+  const activeProposal: HitlProposal | null = pendingQueue[queueIndex] || null;
+
   const handleDecision = async (taskId: string, decision: 'APPROVED' | 'REJECTED') => {
     setIsDeciding(true);
     try {
-      if (decision === 'REJECTED') {
-        setActiveProposal(null);
-        setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
-      } else {
-        setActiveProposal((prev) => (prev ? { ...prev, status: 'CANARY_VERIFYING' } : null));
-      }
-
       const res = await fetch(`${API_BASE}/api/v1/embassy/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,14 +142,42 @@ export default function App() {
         const body = await res.json();
         if (body.status === 'CIRCUIT_TRIPPED') {
           setTrippedCircuit({ target: activeProposal?.target || 'service', reason: body.reason });
-          setActiveProposal(null);
         }
         await fetchLedger();
+        await fetchMetrics();
       }
     } catch (err) {
       console.error('[Decision] Failed to submit decision:', err);
     } finally {
       setIsDeciding(false);
+    }
+  };
+
+  const handleResetBreaker = async (target: string) => {
+    try {
+      await fetch(`${API_BASE}/api/v1/embassy/reset-breaker`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      });
+      setTrippedCircuit(null);
+      await fetchLedger();
+    } catch (err) {
+      console.error('[ResetBreaker] Failed:', err);
+    }
+  };
+
+  const handleBatchReject = async () => {
+    try {
+      await fetch(`${API_BASE}/api/v1/embassy/batch-decisions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'REJECT_ALL' }),
+      });
+      await fetchLedger();
+      await fetchMetrics();
+    } catch (err) {
+      console.error('[BatchReject] Failed:', err);
     }
   };
 
@@ -162,7 +187,7 @@ export default function App() {
     const pollTimer = setInterval(() => {
       fetchMetrics();
       fetchLedger();
-    }, 4000);
+    }, 3000);
 
     const es = new EventSource(`${API_BASE}/api/v1/stream/alerts`);
 
@@ -192,20 +217,7 @@ export default function App() {
             break;
 
           case 'HITL_PROPOSAL':
-            if (payload.data) {
-              setActiveProposal((current) => current || {
-                taskId: payload.data.taskId || `task-${Date.now()}`,
-                target: payload.data.target || 'redis-cluster',
-                title: payload.data.title || `Critical Anomaly on ${payload.data.target}`,
-                reason: payload.data.reason || 'SLA threshold breached',
-                severity: payload.data.severity || 'CRITICAL',
-                confidence: payload.data.confidence ?? 88,
-                blastRadius: payload.data.blastRadius ?? '15%',
-                patch: payload.data.patch,
-                status: 'PENDING',
-              });
-              setMetrics((m) => ({ ...m, hitlPending: m.hitlPending + 1 }));
-            }
+            fetchLedger();
             break;
 
           case 'CANARY_VERIFYING':
@@ -213,21 +225,22 @@ export default function App() {
             setRolledBackTask(null);
             setVerifiedResolved(null);
             setTrippedCircuit(null);
-            setActiveProposal((prev) => (prev ? { ...prev, status: 'CANARY_VERIFYING' } : null));
             break;
 
           case 'CANARY_CONFIRMED':
             setActiveCanary(null);
             setVerifiedResolved(payload.data);
-            setActiveProposal(null);
-            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
             fetchLedger();
             break;
 
           case 'CIRCUIT_TRIPPED':
             setActiveCanary(null);
             setTrippedCircuit(payload.data);
-            setActiveProposal(null);
+            fetchLedger();
+            break;
+
+          case 'CIRCUIT_RESET':
+            setTrippedCircuit(null);
             fetchLedger();
             break;
 
@@ -238,8 +251,10 @@ export default function App() {
             } else {
               setRolledBackTask(payload.data);
             }
-            setActiveProposal(null);
-            setMetrics((m) => ({ ...m, hitlPending: Math.max(0, m.hitlPending - 1) }));
+            fetchLedger();
+            break;
+
+          case 'DECISION_RESOLVED':
             fetchLedger();
             break;
 
@@ -254,7 +269,7 @@ export default function App() {
                   message: payload.data.message || 'Telemetry event processed',
                   dlpScrubbed: Boolean(payload.data.scrubbed),
                 },
-                ...prev.slice(0, 39),
+                ...prev.slice(0, 49),
               ]);
             }
             break;
@@ -263,7 +278,7 @@ export default function App() {
             break;
         }
       } catch (err) {
-        console.error('[SSE] Failed to parse message event:', err);
+        console.error('[SSE] Message parsing error:', err);
       }
     };
 
@@ -304,6 +319,7 @@ export default function App() {
         </div>
       </header>
 
+      {/* KPI Metric Strip */}
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 my-6">
         {[
           { label: 'Throughput', value: `${metrics.throughput} evt/s`, color: 'text-cyan-400' },
@@ -322,13 +338,47 @@ export default function App() {
         ))}
       </section>
 
+      {/* Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
         <section className="lg:col-span-7 bg-[#111622] border border-slate-800 rounded-lg p-5">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-200">
-              Autonomous Remediation Circuit
-            </h2>
-            <span className="text-xs font-mono text-slate-400">Canary Verification Window: 15s</span>
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-200">
+                Autonomous Remediation Circuit
+              </h2>
+              {pendingQueue.length > 0 && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-950 border border-amber-700/60 text-amber-300">
+                  Task {queueIndex + 1} of {pendingQueue.length}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {pendingQueue.length > 1 && (
+                <div className="flex items-center gap-1 mr-2">
+                  <button
+                    disabled={queueIndex === 0}
+                    onClick={() => setQueueIndex((i) => Math.max(0, i - 1))}
+                    className="px-2 py-0.5 rounded text-[11px] bg-slate-800 hover:bg-slate-700 disabled:opacity-30"
+                  >
+                    &larr; Prev
+                  </button>
+                  <button
+                    disabled={queueIndex >= pendingQueue.length - 1}
+                    onClick={() => setQueueIndex((i) => Math.min(pendingQueue.length - 1, i + 1))}
+                    className="px-2 py-0.5 rounded text-[11px] bg-slate-800 hover:bg-slate-700 disabled:opacity-30"
+                  >
+                    Next &rarr;
+                  </button>
+                  <button
+                    onClick={handleBatchReject}
+                    className="px-2 py-0.5 rounded text-[10px] bg-rose-950/60 hover:bg-rose-900 border border-rose-800/40 text-rose-300 ml-1"
+                  >
+                    Dismiss All
+                  </button>
+                </div>
+              )}
+              <span className="text-xs font-mono text-slate-400">Window: 15s</span>
+            </div>
           </div>
 
           {trippedCircuit && (
@@ -339,9 +389,12 @@ export default function App() {
                   <strong>Circuit Breaker Tripped on {trippedCircuit.target}:</strong> Flapping oscillation halted. Automated actions frozen.
                 </span>
               </div>
-              <span className="text-[10px] font-mono uppercase bg-red-900 border border-red-600 px-2 py-0.5 rounded font-bold">
-                Lockout Active
-              </span>
+              <button
+                onClick={() => handleResetBreaker(trippedCircuit.target)}
+                className="text-[10px] font-mono uppercase bg-red-900 hover:bg-red-800 border border-red-600 px-2 py-1 rounded font-bold text-white transition-colors"
+              >
+                Reset Breaker
+              </button>
             </div>
           )}
 
@@ -357,7 +410,7 @@ export default function App() {
             </div>
           )}
 
-          {rolledBackTask && (
+          {rolledBackTask && !trippedCircuit && (
             <div className="mb-4 p-3.5 rounded-lg bg-rose-950/40 border border-rose-500/50 text-rose-300 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-rose-400" />
@@ -413,7 +466,19 @@ export default function App() {
                 </pre>
               </div>
 
-              {activeProposal.status === 'CANARY_VERIFYING' ? (
+              {trippedCircuit?.target === activeProposal.target || activeProposal.isTripped ? (
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                  <span className="text-xs text-red-400 font-mono font-semibold">
+                    Target service circuit breaker is tripped. Automated mutation locked.
+                  </span>
+                  <button
+                    onClick={() => handleResetBreaker(activeProposal.target)}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-red-900 hover:bg-red-800 text-white transition-colors"
+                  >
+                    Reset & Unlock Service
+                  </button>
+                </div>
+              ) : activeProposal.status === 'CANARY_VERIFYING' ? (
                 <div className="flex items-center justify-end gap-2 pt-2 text-xs text-amber-400 font-mono">
                   <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping inline-block mr-1" />
                   Canary deployment in-flight... Verification window active.
@@ -444,6 +509,7 @@ export default function App() {
           )}
         </section>
 
+        {/* Live Ingestion Stream */}
         <section className="lg:col-span-5 bg-[#111622] border border-slate-800 rounded-lg p-5 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
@@ -483,6 +549,7 @@ export default function App() {
         </section>
       </div>
 
+      {/* Governance Ledger */}
       <section className="bg-[#111622] border border-slate-800 rounded-lg p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 mb-4 gap-3">
           <div>
@@ -514,9 +581,9 @@ export default function App() {
             <thead>
               <tr className="border-b border-slate-800 text-slate-400 font-mono uppercase text-[10px]">
                 <th className="pb-2">Task Token</th>
+                <th className="pb-2">Target</th>
                 <th className="pb-2">Status</th>
                 <th className="pb-2">Reviewed By</th>
-                <th className="pb-2">Compliance Ref</th>
                 <th className="pb-2">Decided At</th>
                 <th className="pb-2">Created At</th>
               </tr>
@@ -536,22 +603,13 @@ export default function App() {
                   return (
                     <tr key={row.token} className="hover:bg-slate-900/40">
                       <td className="py-2.5 text-slate-200">{row.token.slice(0, 16)}...</td>
+                      <td className="py-2.5 text-cyan-400">{row.target || '—'}</td>
                       <td className="py-2.5">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${statusColors[row.status] || 'bg-slate-800 text-slate-400'}`}>
                           {row.status}
                         </span>
                       </td>
                       <td className="py-2.5 text-slate-300">{row.approvedBy || 'System'}</td>
-                      <td className="py-2.5 text-slate-400">
-                        {row.owaspRef || row.nistRef ? (
-                          <div className="space-y-0.5">
-                            {row.owaspRef && <span className="block text-[10px] text-indigo-400">{row.owaspRef}</span>}
-                            {row.nistRef && <span className="block text-[10px] text-cyan-400">{row.nistRef}</span>}
-                          </div>
-                        ) : (
-                          <span className="text-slate-600">—</span>
-                        )}
-                      </td>
                       <td className="py-2.5 text-slate-400">{row.decidedAt ? new Date(row.decidedAt).toLocaleTimeString() : '—'}</td>
                       <td className="py-2.5 text-slate-400">{row.createdAt ? new Date(row.createdAt).toLocaleTimeString() : '—'}</td>
                     </tr>
