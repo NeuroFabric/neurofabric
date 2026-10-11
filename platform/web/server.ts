@@ -1,7 +1,7 @@
 ﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import crypto from "node:crypto";
 import path from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
@@ -12,6 +12,44 @@ import { PolicyEvaluator } from "../embassy/PolicyEvaluator.ts";
 import { merkleAuditLedger, type LedgerEntry } from "../core/MerkleAuditLedger.ts";
 import { agenticDiagnosticAdapter } from "../embassy/AgenticDiagnosticAdapter.ts";
 import { gitHubGitOpsAdapter } from "../embassy/GitHubGitOpsAdapter.ts";
+
+// Native zero-dependency .env loader (Node.js 22 built-in)
+function loadEnvSafe(filepath: string) {
+  if (typeof (process as any).loadEnvFile === "function") {
+    try {
+      (process as any).loadEnvFile(filepath);
+      return;
+    } catch {}
+  }
+  try {
+    if (existsSync(filepath)) {
+      const content = readFileSync(filepath, "utf8");
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx > 0) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          let val = trimmed.slice(eqIdx + 1).trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (!process.env[key]) {
+            process.env[key] = val;
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+const parentEnv = path.resolve(process.cwd(), "../.env");
+const localEnv = path.resolve(process.cwd(), ".env");
+if (existsSync(parentEnv)) {
+  loadEnvSafe(parentEnv);
+} else if (existsSync(localEnv)) {
+  loadEnvSafe(localEnv);
+}
 
 const sseClients = new Set<ServerResponse>();
 export const inMemoryLedger = new Map<string, any>();
@@ -359,10 +397,11 @@ setInterval(() => {
 }, 2000);
 
 const dbPool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 1000,
+  connectionTimeoutMillis: 15000,
+  ssl: { rejectUnauthorized: false },
 });
 
 RollbackCircuit.setDbPool(dbPool);
