@@ -1,3 +1,4 @@
+﻿import type { AlertHub } from "../memory/alert-hub.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
 import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
@@ -89,6 +90,8 @@ const UNKNOWN_PURPOSE: Purpose = {
 };
 
 export interface WedgeOptions {
+  hub?: AlertHub;
+  [key: string]: any;
   /** The data workspace. This is the ONLY place a file may be read from. */
   cwd: string;
   /** Where `configs/default-schemas.json` lives. Defaults to the install root. */
@@ -173,7 +176,7 @@ export interface WedgeOptions {
      * WHICH TENANT THE LIVE PATH BELONGS TO.
      *
      * **REQUIRED to record a decision, and absent means decisions are not
-     * recorded.** A verdict is namespaced by `tokenId` (ADR-005 §10.1), the live
+     * recorded.** A verdict is namespaced by `tokenId` (ADR-005 Â§10.1), the live
      * gateway carries no tenant of its own, and the boot process has no
      * credential. So somebody has to say which tenant a breach belongs to, and
      * every alternative was rejected:
@@ -488,11 +491,11 @@ hitlEventBus.on('hitl:events', (data: any) => {
     createdAt: new Date().toISOString()
   });
   merkleAuditLedger.append({
-    action: "HITL_TASK_CREATED",
+    type: "HITL_TASK_CREATED",
     taskId: taskToken,
     subject: data,
     timestamp: new Date().toISOString()
-  });
+  } as any);
   broadcastAlert({ type: 'HITL_PROPOSAL', data });
 });
 
@@ -588,7 +591,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
   const gateway = new OmniRouteGateway({
     /**
      * THE DECISION PATH. The verdict, the alert and the audit trace, in ONE
-     * transaction, before anyone is told -- which is the whole of ADR-005 §7.1
+     * transaction, before anyone is told -- which is the whole of ADR-005 Â§7.1
      * expressed as a call.
      *
      * Attached only when both a record AND a tenant exist. `node:sqlite` is
@@ -647,13 +650,13 @@ export function createWedgeServer(options: WedgeOptions): Server {
             });
 
             /**
-             * AND ONLY NOW, THE NOTIFICATION. This is ADR-005 §5 rule 3 in one
+             * AND ONLY NOW, THE NOTIFICATION. This is ADR-005 Â§5 rule 3 in one
              * ordering: the alert is durable before anybody is told.
              *
              * **STRICTLY AFTER `recordDecision`, AND THE THROW PROPAGATES.** If
              * the write above throws, this line is never reached -- which is the
              * whole point. A subscriber that pushed first and wrote afterwards
-             * would put an alert on a screen with nothing behind it, which §7.3
+             * would put an alert on a screen with nothing behind it, which Â§7.3
              * classifies as corruption rather than as a difference.
              *
              * The frame carries the SAME id the record stored, so a consumer that
@@ -741,7 +744,7 @@ export function createWedgeServer(options: WedgeOptions): Server {
      *
      * This is the only path by which the durable record gains content in this
      * process, and it is deliberately narrow: schemas and nothing else. A verdict
-     * is written at decision time by the alert path (ADR-005 §7.1), NOT here --
+     * is written at decision time by the alert path (ADR-005 Â§7.1), NOT here --
      * a portal read must never block on a synchronous write, because the record's
      * cost model only pays for facts that change what a person does next, and an
      * agent appearing on a screen is not one of them.
@@ -1616,3 +1619,5 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
     }),
   };
 }
+
+
