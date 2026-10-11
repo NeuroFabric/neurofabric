@@ -6,7 +6,6 @@ import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
 import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
 import { open, readFile } from "node:fs/promises";
 import type { Pool } from "pg";
-import { PDFParse } from "pdf-parse";
 
 /**
  * The Stage 1 capability set: exactly two, because the acceptance scenario needs
@@ -579,7 +578,9 @@ export async function pdfRead(
     const verdict = boundary.boundary.check(target);
     if (!verdict.allowed) throw new Error(`pdf_read: the path is outside the workspace boundary (refused)`);
   }
-
+  const pdfMod = "pdf-parse";
+  const { PDFParse }: any = await import(pdfMod).catch(() => ({ PDFParse: null }));
+  if (!PDFParse) throw new Error("pdf-parse module is not installed");
   const parser = new PDFParse({ data: await readFile(target) });
   try {
     const result = await parser.getText();
@@ -1035,4 +1036,5 @@ export async function validateInfrastructurePatch(
   const { ExecutionSandbox } = await import("./sandbox.ts");
   return ExecutionSandbox.validateManifest(input.manifest, input.format);
 }
+
 
