@@ -1,11 +1,11 @@
-import { writeFile, mkdir } from "node:fs/promises";
+﻿import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolDescriptor } from "../core/types.ts";
 import { FileProfile, MAX_PROBLEMS, resolveOutliers, streamCsvRecords, streamCsvRecordsSync } from "./stream-profile.ts";
 import { readJsonl, looksLikeJsonl } from "../ingestion/jsonl-tokenizer.ts";
 import { readLog, looksLikeLog } from "../ingestion/log-tokenizer.ts";
 import { open, readFile } from "node:fs/promises";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { PDFParse } from "pdf-parse";
 
 /**
@@ -14,7 +14,7 @@ import { PDFParse } from "pdf-parse";
  *
  * Both are ordinary kernel tools. A capability is a descriptor (which is what
  * policy evaluates) plus a function. Nothing here touches recovery, limits or
- * policy — a third capability would be a third descriptor, not a kernel change.
+ * policy â€” a third capability would be a third descriptor, not a kernel change.
  */
 
 /** Parsed rows plus the shape the acceptance run asserts on. */
@@ -662,8 +662,11 @@ export async function sqliteRead(
     if (!verdict.allowed) throw new Error(`postgres_read: the path is outside the workspace boundary (${verdict.allowed ? "" : "refused"})`);
   }
 
-  // Enforce read-only at the transaction level
-  const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+ const pgMod = "pg";
+const { Pool }: any = await import(pgMod).catch(() => ({ Pool: null }));
+if (!Pool) throw new Error("pg module is not installed");
+  const dbUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+  const dbPool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
   const client = await dbPool.connect();
 
   try {
@@ -677,7 +680,7 @@ export async function sqliteRead(
       for (const tableRow of tableRows.rows) {
         const tableName = tableRow.tablename;
         const columnRows = await client.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1", [tableName]);
-        const columns = columnRows.rows.map(col => col.column_name);
+        const columns = columnRows.rows.map((col: any) => col.column_name);
         tables.push({ name: tableName, columns });
       }
 
@@ -1032,3 +1035,4 @@ export async function validateInfrastructurePatch(
   const { ExecutionSandbox } = await import("./sandbox.ts");
   return ExecutionSandbox.validateManifest(input.manifest, input.format);
 }
+
