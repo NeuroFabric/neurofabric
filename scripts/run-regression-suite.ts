@@ -183,6 +183,58 @@ async function runRegressionSuite() {
     assert(`AST gate rejected evasion payload #${i + 1} with HTTP 422`, evasion.status === 422 && evasion.data?.error === "MALICIOUS_DIFF_REJECTED");
   }
 
+  // Phase 12: Agentic LLM RCA Output Schema Validation
+  console.log("\n--> [Phase 12] Agentic LLM RCA Output Schema Validation...");
+  const diagnoseRes = await req("/api/v1/embassy/diagnose", {
+    method: "POST",
+    body: JSON.stringify({
+      service: "payment-gateway",
+      stackTrace: "Error: connection timeout at pool.connect() -> downstream auth-gateway refused",
+      context: {
+        topology: "payment-gateway -> auth-gateway -> postgres",
+        blastRadius: "high",
+        recentDiffs: "--- a/pool.yaml\n+++ b/pool.yaml\n@@ -1 +1 @@\n-size: 50\n+size: 100",
+        recentCommits: "abc123 feat: tune connection pool",
+      },
+    }),
+  });
+  const rcaReport = diagnoseRes.data?.report;
+  const hasValidRcaSchema =
+    rcaReport != null &&
+    typeof rcaReport.rootCause === "string" &&
+    typeof rcaReport.explanation === "string" &&
+    typeof rcaReport.blastRadius === "string" &&
+    typeof rcaReport.confidence === "number" &&
+    typeof rcaReport.diff === "string";
+  assert("Agentic RCA endpoint returns HTTP 200 with a report", diagnoseRes.status === 200 && Boolean(rcaReport));
+  assert("RCA report schema contains rootCause/explanation/blastRadius/confidence/diff", Boolean(hasValidRcaSchema));
+  assert("RCA confidence is a number within 0-100", typeof rcaReport?.confidence === "number" && rcaReport.confidence >= 0 && rcaReport.confidence <= 100);
+
+  // Phase 13: GitHub GitOps PR Dispatch Structure Validation
+  console.log("\n--> [Phase 13] GitHub GitOps PR Dispatch Structure Validation...");
+  const gitOpsApproval = await req("/api/v1/embassy/decisions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${commanderToken}` },
+    body: JSON.stringify({
+      taskId: `gitops-task-${Date.now().toString(36)}`,
+      target: "order-service",
+      decision: "APPROVED",
+      diff: "--- a/order.conf\n+++ b/order.conf\n@@ -1 +1 @@\n-workers: 8\n+workers: 16",
+    }),
+  });
+  const gitops = gitOpsApproval.data?.gitops;
+  const hasValidGitOps =
+    gitops != null &&
+    typeof gitops.mode === "string" &&
+    typeof gitops.branch === "string" &&
+    gitops.branch.startsWith("neurofabric/remediation-") &&
+    typeof gitops.title === "string" &&
+    typeof gitops.committed === "boolean";
+  assert("GitOps PR dispatch structure present in approval response", gitOpsApproval.status === 200 && Boolean(gitops));
+  assert("GitOps branch follows neurofabric/remediation-<taskToken> convention", Boolean(gitops && gitops.branch.startsWith("neurofabric/remediation-")));
+  assert("GitOps dispatch includes mode/branch/title/committed fields", Boolean(hasValidGitOps));
+  assert("GitOps dispatch records an RCA report with confidence + blast radius", Boolean(gitOpsApproval.data?.rca && typeof gitOpsApproval.data.rca.confidence === "number" && typeof gitOpsApproval.data.rca.blastRadius === "string"));
+
   console.log("\n===================================================================");
   console.log(`   REGRESSION AUDIT SUMMARY: ${passed} PASSED | ${failed} FAILED  `);
   console.log("===================================================================\n");

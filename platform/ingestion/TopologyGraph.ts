@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TOPOLOGY CAUSAL GRAPH & CASCADE SUPPRESSOR.
  *
  * Defines a directed dependency map for services and, when a parent/upstream
@@ -9,36 +9,28 @@
  *   order-service    -> [ inventory-db, payment-service ]
  *   auth-gateway     -> [ redis-cluster ]
  *   k8s-ingress      -> [ order-service, auth-gateway ]
- *
- * The graph is immutable after init and used by the ingestion pipeline to
- * annotate alerts and adjust dedup suppression counts.
  */
 
 // ---------------------------------------------------------------------------
 // Dependency map: service -> downstream services
 // ---------------------------------------------------------------------------
-
 const dependencyMap: Record<string, string[]> = {
   "order-service": ["inventory-db", "payment-service"],
   "auth-gateway": ["redis-cluster"],
   "k8s-ingress": ["order-service", "auth-gateway"],
-  // Extend as the domain grows; unknown services get an empty array.
 };
 
 // Reverse map: downstream -> list of upstream services (computed on demand)
 function computeReverseMap(): Record<string, string[]> {
   const reverse: Record<string, string[]> = {};
-  for (const [upstream, downstreams] of Object.entries(dependencyMap)) {
-    for (const downstream of downstreams) {
-      if (!reverse[downstream]) reverse[downstream] = [];
-      reverse[downstream].push(upstream);
+  for (const [source, targets] of Object.entries(dependencyMap)) {
+    for (const target of targets) {
+      if (!reverse[target]) reverse[target] = [];
+      reverse[target].push(source);
     }
+  }
   return reverse;
 }
-
-// ---------------------------------------------------------------------------
-// TopologyGraph class
-// ---------------------------------------------------------------------------
 
 export class TopologyGraph {
   private readonly forwardMap: Record<string, string[]>;
@@ -69,10 +61,6 @@ export class TopologyGraph {
    * Tag an alert as CASCADING_CORRELATED if the alert's service is a downstream
    * dependency of a service that already has an ongoing root cause.
    * Increments the internal cascade counter.
-   *
-   * @param service          The service the alert belongs to.
-   * @param upstreamService  The service that is the perceived root cause / parent.
-   * @returns { tagged, cascadeCounter }
    */
   tagCascadingCorrelated(service: string, upstreamService: string): {
     tagged: boolean;
@@ -85,7 +73,7 @@ export class TopologyGraph {
       this.cascadeCounter++;
     }
 
-    return { tagged, cascadeCounter };
+    return { tagged, cascadeCounter: this.cascadeCounter };
   }
 
   /**
@@ -106,7 +94,6 @@ export class TopologyGraph {
 // ---------------------------------------------------------------------------
 // Export a singleton instance for immediate use by the ingestion pipeline
 // ---------------------------------------------------------------------------
-
 export const topologyGraph = new TopologyGraph();
 
 // ---------------------------------------------------------------------------
@@ -124,10 +111,3 @@ export function annotateAlert(
   const status = tagged ? "CASCADING_CORRELATED" : "normal";
   return { status, cascadeCounter };
 }
-
-// ---------------------------------------------------------------------------
-// Example usage (for the ingestion pipeline):
-//   const { status, cascadeCounter } = annotateAlert(ev.service, ev.upstream);
-//   if (status === "CASCADING_CORRELATED") {
-//     totalSuppressed += cascadeCounter; // or adjust dup‑window logic
-//   }

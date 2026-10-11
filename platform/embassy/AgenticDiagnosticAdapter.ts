@@ -1,12 +1,12 @@
-/**
- * AGENTIC DIAGNOSTIC ADAPTER — LLM-driven root-cause analysis.
+﻿/**
+ * AGENTIC DIAGNOSTIC ADAPTER â€” LLM-driven root-cause analysis.
  *
  * Responsibilities:
  * 1. Accept a diagnostic payload { service, stackTrace, context }.
  * 2. When a critical anomaly occurs, construct a system prompt that includes:
- *      • Runtime stack traces & error signatures.
- *      • Affected microservice topology context & blast radius.
- *      • Recent configuration commits or deployment diffs.
+ *      â€¢ Runtime stack traces & error signatures.
+ *      â€¢ Affected microservice topology context & blast radius.
+ *      â€¢ Recent configuration commits or deployment diffs.
  * 3. Prompt the model for STRICT JSON output matching:
  *      {
  *        "rootCause": string,
@@ -18,18 +18,18 @@
  * 4. Maintain a deterministic heuristic fallback when no API key is present.
  *
  * Provider support:
- *   • GEMINI_API_KEY  -> Google Gemini generateContent endpoint.
- *   • LLM_API_KEY     -> OpenAI-compatible chat completions endpoint
+ *   â€¢ GEMINI_API_KEY  -> Google Gemini generateContent endpoint.
+ *   â€¢ LLM_API_KEY     -> OpenAI-compatible chat completions endpoint
  *                        (override base with LLM_API_BASE, default
  *                        https://api.openai.com/v1).
  *
  * Design notes:
- *   • Every network call is bounded by a short timeout so a slow or
+ *   â€¢ Every network call is bounded by a short timeout so a slow or
  *     unreachable model never blocks the remediation pipeline.
- *   • On any failure (missing key, HTTP error, malformed JSON) the
+ *   â€¢ On any failure (missing key, HTTP error, malformed JSON) the
  *     adapter transparently falls back to rule-based heuristics, so the
  *     caller always receives a well-formed IncidentReport.
- *   • The adapter is side-effect free: it returns the report and lets the
+ *   â€¢ The adapter is side-effect free: it returns the report and lets the
  *     caller decide how to broadcast / actuate it.
  */
 
@@ -42,9 +42,13 @@ export interface DiagnosticContext {
 }
 
 export interface DiagnosticPayload {
-  service: string;
-  stackTrace: string;
-  context?: DiagnosticContext;
+  service?: string;
+  target?: string;
+  diff?: string;
+  taskId?: string;
+  stackTrace?: string;
+  context?: any;
+  [key: string]: any;
 }
 
 export interface IncidentReport {
@@ -150,11 +154,11 @@ export class AgenticDiagnosticAdapter {
       "MUST match this schema exactly:",
       JSON.stringify(
         {
-          rootCause: "string — concise root cause",
-          explanation: "string — reasoning + recommended remediation steps",
-          blastRadius: "string — low | medium | high with % estimate",
-          confidence: "number — integer 0..100",
-          diff: "string — unified diff patch that remediates the root cause",
+          rootCause: "string â€” concise root cause",
+          explanation: "string â€” reasoning + recommended remediation steps",
+          blastRadius: "string â€” low | medium | high with % estimate",
+          confidence: "number â€” integer 0..100",
+          diff: "string â€” unified diff patch that remediates the root cause",
         },
         null,
         2
@@ -181,7 +185,7 @@ export class AgenticDiagnosticAdapter {
 
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Gemini returned an empty response");
-    return this.normalizeReport(JSON.parse(this.extractJson(text)), payload.service);
+    return this.normalizeReport(JSON.parse(this.extractJson(text)), payload.service || payload.target || "unknown");
   }
 
   private async callOpenAiCompatible(payload: DiagnosticPayload): Promise<IncidentReport> {
@@ -207,7 +211,7 @@ export class AgenticDiagnosticAdapter {
 
     const text = data?.choices?.[0]?.message?.content;
     if (!text) throw new Error("LLM returned an empty response");
-    return this.normalizeReport(JSON.parse(this.extractJson(text)), payload.service);
+    return this.normalizeReport(JSON.parse(this.extractJson(text)), payload.service || payload.target || "unknown");
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<any> {
@@ -271,28 +275,28 @@ export class AgenticDiagnosticAdapter {
     let confidence: number;
 
     if (lowerStack.includes("deadlock")) {
-      rootCause = `Deadlock on shared resource — ${service}`;
+      rootCause = `Deadlock on shared resource â€” ${service}`;
       explanation =
         "Thread contention on a shared lock is stalling request processing. Increase lock timeout, implement try-lock with exponential back-off, and review resource acquisition ordering.";
       diff = `-- a/${service}.yaml\n+++ b/${service}.yaml\n@@ -10,3 +10,3 @@\n- lock_timeout: 5s\n+ lock_timeout: 30s`;
       blastRadius = "high";
       confidence = 88;
     } else if (lowerStack.includes("timeout") || lowerStack.includes("connect")) {
-      rootCause = `Connection/timeout failure — ${service}`;
+      rootCause = `Connection/timeout failure â€” ${service}`;
       explanation =
         "Downstream connectivity is degraded. Verify downstream service health, increase the connection pool, and confirm network policies allow traffic.";
       diff = `-- a/${service}.yaml\n+++ b/${service}.yaml\n@@ -10,3 +10,3 @@\n- pool_size: 50\n+ pool_size: 100`;
       blastRadius = "medium";
       confidence = 72;
     } else if (lowerStack.includes("memory") || lowerStack.includes("oom")) {
-      rootCause = `Out-of-memory error — ${service}`;
+      rootCause = `Out-of-memory error â€” ${service}`;
       explanation =
         "Container exceeded its memory cgroup limit. Raise the memory limit, audit for leaks, and add OOM-kill monitoring.";
       diff = `-- a/${service}.yaml\n+++ b/${service}.yaml\n@@ -10,3 +10,3 @@\n- memory_limit: 512Mi\n+ memory_limit: 1Gi`;
       blastRadius = "high";
       confidence = 81;
     } else if (lowerStack.includes("auth") || lowerStack.includes("token")) {
-      rootCause = `Authentication/authorization failure — ${service}`;
+      rootCause = `Authentication/authorization failure â€” ${service}`;
       explanation =
         "Credential or token validation is failing. Rotate credentials, verify the JWT secret, and check OAuth scopes.";
       diff = `-- a/${service}.yaml\n+++ b/${service}.yaml\n@@ -10,3 +10,3 @@\n- secret_ref: old\n+ secret_ref: new`;
@@ -316,3 +320,7 @@ export class AgenticDiagnosticAdapter {
 // ---------------------------------------------------------------------------
 
 export const agenticDiagnosticAdapter = new AgenticDiagnosticAdapter();
+
+
+
+

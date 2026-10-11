@@ -1,24 +1,26 @@
-/**
- * CACHE ADAPTER — Unified distributed caching layer with auto-detecting backend.
+﻿/**
+ * CACHE ADAPTER â€” Unified distributed caching layer with auto-detecting backend.
  *
  * Responsibilities:
  * 1. Auto-detect Redis availability via process.env.REDIS_URL.
- * 2. If REDIS_URL present → use ioredis with retry backoff, error listeners,
+ * 2. If REDIS_URL present â†’ use ioredis with retry backoff, error listeners,
  *    and process-lifecycle management (connect on first use, graceful shutdown).
- * 3. If REDIS_URL absent or unreachable → fall back to an in-memory Map store
+ * 3. If REDIS_URL absent or unreachable â†’ fall back to an in-memory Map store
  *    with identical async signatures (get, set, setNx, hSet, publish, subscribe).
  * 4. Expose a consistent API surface so callers never need to feature-detect.
  *
  * Design notes:
- *   • The adapter is a singleton so all modules share the same Redis/Map instance.
- *   • Fallback is seamless: get/set/setNx/hSet/publish/subscribe all work the
+ *   â€¢ The adapter is a singleton so all modules share the same Redis/Map instance.
+ *   â€¢ Fallback is seamless: get/set/setNx/hSet/publish/subscribe all work the
  *     same whether backed by Redis or in-memory.
- *   • Error events from ioredis are captured and logged, never thrown at callers.
- *   • TTL support is available on set/setNx; the Map fallback uses a simple
+ *   â€¢ Error events from ioredis are captured and logged, never thrown at callers.
+ *   â€¢ TTL support is available on set/setNx; the Map fallback uses a simple
  *     timestamp-based expiry check on get.
  */
 
-import { createClient, RedisClientType } from "ioredis";
+import IORedis from "ioredis";
+type RedisClientType = any;
+const createClient = (opts?: any): any => new ((IORedis as any).default || IORedis)(opts);
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -159,7 +161,7 @@ export async function ensureInitialized(): Promise<CacheAdapter> {
       });
 
       // Track startup errors (never throw at the API level)
-      client.on("error", (err) => {
+      client.on("error", (err: any) => {
         console.warn(
           "[CacheAdapter] Redis error event:",
           err instanceof Error ? err.message : String(err),
@@ -188,7 +190,7 @@ export async function ensureInitialized(): Promise<CacheAdapter> {
     }
   } else {
     console.warn(
-      "[CacheAdapter] REDIS_URL not set — using in-memory fallback.",
+      "[CacheAdapter] REDIS_URL not set â€” using in-memory fallback.",
     );
     adapter = new CacheAdapter(null, false);
   }
@@ -207,15 +209,15 @@ export function getStartupError(): Error | null {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — CacheAdapter class
+// Public API â€” CacheAdapter class
 // ---------------------------------------------------------------------------
 
 export class CacheAdapter {
   private readonly redis: typeof redisClient | null;
-  private readonly isRedis: boolean;
+  public readonly isRedis: boolean;
   private readonly ttlMs: number;
 
-  constructor(redisClient: typeof redisClient | null, isRedis: boolean) {
+  constructor(redisClient: any, isRedis: boolean) {
     this.redis = redisClient;
     this.isRedis = isRedis;
     this.ttlMs = 24 * 60 * 60 * 1000; // 24 hours default TTL
@@ -281,7 +283,7 @@ export class CacheAdapter {
   }
 
   /** Subscribe to a channel. Returns an async iterable of messages. */
-  async subscribe(
+  async *subscribe(
     channel: string,
   ): AsyncGenerator<string, void, unknown> {
     if (this.isRedis && this.redis) {
@@ -299,11 +301,11 @@ export class CacheAdapter {
     }
     // In-memory fallback: yield any pending messages then return async iterable
     // that checks for new subscriptions on each iteration.
-    return this.memorySubscribeInfinite(channel);
+    yield* this.memorySubscribeInfinite(channel);
   }
 
   // Helper for in-memory subscribe
-  private async memorySubscribeInfinite(
+  private async *memorySubscribeInfinite(
     channel: string,
   ): AsyncGenerator<string, void, unknown> {
     // Ensure subscriber registry exists
@@ -321,7 +323,7 @@ export class CacheAdapter {
           delete (global as any)._memoryQueued![channel];
           yield queued;
         } else {
-          // No queued message — yield control and check again
+          // No queued message â€” yield control and check again
           await new Promise((r) => setTimeout(r, 100));
         }
       } else {
@@ -335,7 +337,7 @@ export class CacheAdapter {
 // Convenience re-exports
 // ---------------------------------------------------------------------------
 
-export { ensureInitialized, isRedisAvailableFn, getStartupError };
+// exports declared inline above
 
 // ---------------------------------------------------------------------------
 // Integrate into server.ts: replace activeSessions Map + isDuplicateAlert
@@ -380,7 +382,7 @@ export function integrateDuplicateAlert(cache: CacheAdapter): (
 export function integrateRollbackCircuitSync(cache: CacheAdapter): void {
   if (!cache.isRedis) {
     console.warn(
-      "[RollbackCircuitSync] Redis not available — skipping cross-process sync.",
+      "[RollbackCircuitSync] Redis not available â€” skipping cross-process sync.",
     );
     return;
   }
@@ -393,3 +395,9 @@ export function integrateRollbackCircuitSync(cache: CacheAdapter): void {
   // NOTE: A full implementation would create a dedicated Redis client or
   // use the same adapter's publish/subscribe for cross-process coordination.
 }
+
+
+
+
+
+

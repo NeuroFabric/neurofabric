@@ -137,3 +137,14 @@ roster-backups/
 *.js
 *.orig.ts
 debug-*/
+.neon
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Environment files (kept outside repo root)
+.env
+.env.*
+*.env
