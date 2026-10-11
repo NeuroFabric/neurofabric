@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { Pool } from "pg";
 import { metricsCollector } from "../ingestion/metrics-collector.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
@@ -396,15 +395,26 @@ setInterval(() => {
   });
 }, 2000);
 
-const dbPool = new Pool({
-  connectionString: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 15000,
-  ssl: { rejectUnauthorized: false },
-});
-
-RollbackCircuit.setDbPool(dbPool);
+let dbPool: any = null;
+const dbUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+if (dbUrl) {
+try {
+const pgMod = "pg";
+const { Pool }: any = await import(pgMod).catch(() => ({ Pool: null }));
+if (Pool) {
+  dbPool = new Pool({
+    connectionString: dbUrl,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 15000,
+    ssl: { rejectUnauthorized: false },
+  });
+  RollbackCircuit.setDbPool(dbPool);
+}
+} catch (err) {
+console.warn("[NeuroFabric] Database pool driver unavailable, continuing in-memory:", err);
+}
+}
 RollbackCircuit.setMemoryLedger(inMemoryLedger);
 RollbackCircuit.setBroadcast(broadcastAlert);
 
@@ -1100,3 +1110,4 @@ export async function startWedgeServer(
     },
   });
 }
+
