@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+﻿import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { CoreError } from "./errors.ts";
 import { createRedactingSink, redactPreview } from "./redaction.ts";
@@ -7,8 +7,8 @@ import { createRedactingSink, redactPreview } from "./redaction.ts";
  * The credentials vault.
  *
  * This module is the ONE sanctioned unredacted store in the harness (D-016,
- * A6). Everything else that records anything about the vault — the event, the
- * log, the trace — goes out through `createRedactingSink`, so the value has
+ * A6). Everything else that records anything about the vault â€” the event, the
+ * log, the trace â€” goes out through `createRedactingSink`, so the value has
  * exactly one home on disk and nowhere else it could be persisted.
  *
  * Two properties are load-bearing and are the reason the rest of the design is
@@ -24,11 +24,11 @@ import { createRedactingSink, redactPreview } from "./redaction.ts";
  * There is no encryption and no key-management primitive, because the measured
  * surface has none (OQ-1). The controls are structural instead: the file is
  * gitignored, and every event is sink-wrapped. The store payload is NOT scanned
- * by this module — see the retrieve note below for why the approval gate is
+ * by this module â€” see the retrieve note below for why the approval gate is
  * the sanction and a local deny-scan would be neither.
  *
- * The residual risk — a local process that can read the workspace directory can
- * read these values — is ACCEPTED BY RULING.
+ * The residual risk â€” a local process that can read the workspace directory can
+ * read these values â€” is ACCEPTED BY RULING.
  */
 
 /** How an unredacted retrieval is permitted. */
@@ -206,7 +206,7 @@ export class CredentialVault {
     this.mode = config.retrieveMode;
     // Every event leaves through the redacting sink. A caller cannot reach the
     // raw sink, so a future edit cannot bypass redaction by writing to it
-    // directly — the same property that makes the sink the enforcement point for
+    // directly â€” the same property that makes the sink the enforcement point for
     // the trace.
     this.record = createRedactingSink(options.persist);
     this.now = options.now ?? (() => new Date().toISOString());
@@ -270,7 +270,7 @@ export class CredentialVault {
    *
    * The default returns a redacted preview. An unredacted retrieval is refused
    * outright when the configured mode does not opt in, and is otherwise gated
-   * on per-call approval — never on a session scope or a standing grant.
+   * on per-call approval â€” never on a session scope or a standing grant.
    */
   async retrieve(name: string, options: RetrieveOptions = {}): Promise<RetrieveResult> {
     if (!nonEmpty(name)) refuse("a vault entry needs a non-empty name");
@@ -383,7 +383,7 @@ export class CredentialVault {
    * unredacted copy of the material on disk.
    *
    * The mode is the point. This is a credential store writing plaintext, and
-   * `writeFile` without a mode creates the file 0644 masked by the umask —
+   * `writeFile` without a mode creates the file 0644 masked by the umask â€”
    * readable by every account on the host. That contradicts the redaction
    * discipline the rest of the vault keeps: the value is withheld from the
    * retrieve path, from the event log, and from the preview, and then handed
@@ -391,14 +391,15 @@ export class CredentialVault {
    * CREATED, so a vault written by an earlier version keeps its old
    * permissions unless the mode is also enforced after the write.
    *
-   * 0600/0700 are the conventional owner-only bits. They are not encryption —
-   * the material is still plaintext on disk — but they are the baseline the
+   * 0600/0700 are the conventional owner-only bits. They are not encryption â€”
+   * the material is still plaintext on disk â€” but they are the baseline the
    * rest of this file already assumes. Windows has no POSIX mode, and Node
    * accepts the option there without effect, so this is a no-op on that
    * platform rather than a failure.
    */
   private async persist(file: VaultFile): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    await chmod(path.dirname(this.file), 0o700);
     await writeFile(this.file, `${JSON.stringify(file, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     // Enforced rather than merely requested, so a file created before this
     // change is tightened on its next write instead of keeping 0644 forever.
@@ -409,3 +410,4 @@ export class CredentialVault {
     this.record({ ...partial, at: this.now() });
   }
 }
+
