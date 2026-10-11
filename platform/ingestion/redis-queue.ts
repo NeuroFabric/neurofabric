@@ -1,6 +1,7 @@
-import { Redis } from "ioredis";
+﻿import { Redis } from "ioredis";
 import path from "node:path";
-import { Embassy, RemediationProposal, ExecutionResult } from "../../platform/embassy/engine.ts";
+import { Embassy } from "../embassy/engine.ts";
+import type { RemediationProposal, ExecutionResult } from "../embassy/engine.ts";
 import { AutonomousDeploymentAdapter } from "../embassy/AutonomousDeploymentAdapter.ts";
 import { HitlAdapter } from "../embassy/HitlAdapter.ts";
 
@@ -148,3 +149,4 @@ export class TelemetryWorker {
     }
   }
 }
+

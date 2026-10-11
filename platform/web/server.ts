@@ -817,7 +817,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
           broadcastAlert({
             type: "REMEDIATION_ROLLED_BACK",
-            data: { taskId, target, reason: "Manual abort invoked by operator." },
+            data: { taskId, service: target, reason: "Manual abort invoked by operator." },
           });
 
           sendJson(response, 200, { success: true, taskId, status: "ROLLED_BACK" });
@@ -882,7 +882,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               task_token: taskId,
               taskId,
               status: "CIRCUIT_TRIPPED",
-              target,
+              service: target,
               approvedBy: reviewer,
               reason,
               createdAt: mem?.createdAt || new Date().toISOString(),
@@ -890,7 +890,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
             };
             merkleAuditLedger.append(trippedEntry);
             inMemoryLedger.set(taskId, trippedEntry);
-            broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { taskId, target, status: "CIRCUIT_TRIPPED", reason } });
+            broadcastAlert({ type: "CIRCUIT_TRIPPED", data: { taskId, service: target, status: "CIRCUIT_TRIPPED", reason } });
             sendJson(response, 423, { success: false, taskId, status: "CIRCUIT_TRIPPED", reason });
             return;
           }
@@ -903,8 +903,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
             try {
               rca = await agenticDiagnosticAdapter.diagnose({
-                service: target,
-                target,
+                target: target,
                 diff,
                 taskId,
                 stackTrace: mem?.reason || mem?.subject?.reason || `Telemetry degradation on ${target}`,
@@ -922,7 +921,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               gitops = await gitHubGitOpsAdapter.dispatchRemediation({
                 taskId,
                 taskToken: taskId,
-                target,
+                target: target,
                 diff,
                 rca: rca || {
                   rootCause: "Autonomous Patch Applied",
@@ -942,7 +941,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               task_token: taskId,
               taskId,
               status: "CANARY_VERIFYING",
-              target,
+              service: target,
               approvedBy: reviewer,
               createdAt: mem?.createdAt || new Date().toISOString(),
               decidedAt: new Date().toISOString(),
@@ -954,7 +953,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
             broadcastAlert({
               type: "CANARY_VERIFYING",
-              data: { taskId, target, slice: "10%", timeoutMs: 15000, reviewer, rca, gitops },
+              data: { taskId, service: target, slice: "10%", timeoutMs: 15000, reviewer, rca, gitops },
             });
 
             const timer = setTimeout(async () => {
@@ -962,7 +961,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               const currentItem = inMemoryLedger.get(taskId);
               if (currentItem && currentItem.status === "CANARY_VERIFYING") {
                 try {
-                  await new AutonomousDeploymentAdapter().applyRemediation({ target, diff } as any);
+                  await new AutonomousDeploymentAdapter().applyRemediation({ service: target, diff } as any);
                 } catch (err) {
                   console.warn("[AutonomousDeploymentAdapter] warning:", err);
                 }
@@ -977,7 +976,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
 
                 broadcastAlert({
                   type: "CANARY_CONFIRMED",
-                  data: { taskId, target, status: "VERIFIED_RESOLVED" },
+                  data: { taskId, service: target, status: "VERIFIED_RESOLVED" },
                 });
               }
             }, 15000);
@@ -1033,7 +1032,7 @@ export function createWedgeServer(options: { cwd: string }): Server {
               inMemoryLedger.set(token, updated);
             }
           }
-          sendJson(response, 200, { success: true, target, message: `Circuit breaker reset for ${target}.` });
+          sendJson(response, 200, { success: true, service: target, message: `Circuit breaker reset for ${target}.` });
           return;
         }
 
@@ -1058,3 +1057,46 @@ const server = createWedgeServer({ cwd: process.cwd() });
 server.listen(PORT, HOST, () => {
   console.log(`🚀 [NeuroFabric] Backend actively listening on http://${HOST}:${PORT}`);
 });
+
+
+export interface WedgeServerOptions {
+  port?: number;
+  host?: string;
+  cwd?: string;
+  installRoot?: string;
+  [key: string]: any;
+}
+
+export interface WedgeServerHandle {
+  url: string;
+  close: () => Promise<void>;
+  [key: string]: any;
+}
+
+export async function startWedgeServer(
+  portOrOptions?: number | WedgeServerOptions
+): Promise<WedgeServerHandle> {
+  const opts = typeof portOrOptions === "number" ? { port: portOrOptions } : (portOrOptions || {});
+  const targetPort = opts.port || PORT;
+  const targetHost = opts.host || HOST;
+
+  if (!server.listening) {
+    await new Promise<void>((resolve) => {
+      server.listen(targetPort, targetHost, () => {
+        console.log(`🚀 [NeuroFabric] Backend actively listening on http://${targetHost}:${targetPort}`);
+        resolve();
+      });
+    });
+  }
+
+  const url = `http://${targetHost}:${targetPort}`;
+
+  return Object.assign(server, {
+    url,
+    close: async (): Promise<void> => {
+      return new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  });
+}

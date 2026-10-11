@@ -1,4 +1,4 @@
-import { RemediationProposal, ExecutionResult } from "./engine.ts";
+﻿import type { RemediationProposal, ExecutionResult } from "./engine.ts";
 import { EventEmitter } from "node:events";
 
 // Shared event emitter for HITL events (process-local).

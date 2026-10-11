@@ -1,4 +1,4 @@
-const ALLOWED_TARGETS = new Set([
+﻿const ALLOWED_TARGETS = new Set([
   'deployment/payment-gateway-service',
   'deployment/order-service',
   'deployment/auth-gateway',
@@ -6,7 +6,7 @@ const ALLOWED_TARGETS = new Set([
   'k8s-payment-gateway'
 ]);
 
-import { RemediationProposal, ExecutionResult } from "./engine.ts";
+import type { RemediationProposal, ExecutionResult } from "./engine.ts";
 
 export class AutonomousDeploymentAdapter {
   async execute(proposal: RemediationProposal): Promise<ExecutionResult> {
@@ -26,3 +26,4 @@ export class AutonomousDeploymentAdapter {
     };
   }
 }
+
