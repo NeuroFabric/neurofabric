@@ -91,7 +91,6 @@ const UNKNOWN_PURPOSE: Purpose = {
 
 export interface WedgeOptions {
   hub?: AlertHub;
-  [key: string]: any;
   /** The data workspace. This is the ONLY place a file may be read from. */
   cwd: string;
   /** Where `configs/default-schemas.json` lives. Defaults to the install root. */
@@ -1619,5 +1618,7 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
     }),
   };
 }
+
+
 
 
