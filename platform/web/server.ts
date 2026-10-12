@@ -1,3 +1,4 @@
+import { eventBridge } from "../core/event-bridge.ts";
 ﻿import type { AlertHub } from "../memory/alert-hub.ts";
 
 import { hitlEventBus } from "../embassy/HitlAdapter.ts";
@@ -477,6 +478,11 @@ export function broadcastAlert(payload: unknown): void {
 
 RollbackCircuit.setMemoryLedger(inMemoryLedger);
 RollbackCircuit.setBroadcast(broadcastAlert);
+
+// Cross-Process SSE sync via SQLite event bridge
+eventBridge.subscribe((event) => {
+  broadcastAlert({ type: event.topic, data: event.payload });
+});
 
 hitlEventBus.on('hitl:events', (data: any) => {
   const taskToken = String(data?.taskId ?? '');

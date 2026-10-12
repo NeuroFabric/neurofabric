@@ -1,193 +1,329 @@
-/**
- * THE PAGE. One self-contained HTML string, no build step, no dependency.
- *
- * RENDERING THE REPORT SAFELY. The report is returned as Markdown in a JSON
- * response and rendered here. Two rules make that safe, and the order matters:
- *
- *   1. ESCAPE FIRST. Every character of the report is HTML-escaped before any
- *      Markdown transform runs. Nothing that came out of an uploaded file can
- *      therefore be markup, no matter which transform follows -- a file whose
- *      alert code is `<img src=x onerror=...>` is displayed as those characters.
- *   2. TRANSFORM SECOND. Only a fixed, small set of Markdown constructs is
- *      turned into elements: headings, tables, bold, code, blockquotes, rules
- *      and list items. There is no "pass through raw HTML" step, because that
- *      is the step every Markdown renderer eventually grows and every one of
- *      them has shipped a hole through.
- *
- * So a reader sees a report, and a hostile export sees a paragraph of text.
- */
-
-export const PAGE_HTML = `<!doctype html>
+﻿export const PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Data agent</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #16181d; }
-  main { max-width: 60rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-  h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
-  .sub { color: #5b616e; margin: 0 0 1.5rem; font-size: .9rem; }
-  #drop { border: 2px dashed #b9bfcc; border-radius: 10px; background: #fff; padding: 2.5rem 1.5rem; text-align: center; cursor: pointer; }
-  #drop.hot { border-color: #16181d; background: #f0f2f6; }
-  #drop strong { display: block; font-size: 1.05rem; margin-bottom: .3rem; }
-  #drop span { color: #5b616e; font-size: .88rem; }
-  #status { margin: 1rem 0 0; font-size: .9rem; color: #5b616e; }
-  #status.error { color: #b23c17; }
-  #status .tier { font-weight: 600; }
-  article { background: #fff; border: 1px solid #e4e7ee; border-radius: 10px; padding: 1.5rem 1.75rem; margin-top: 1.5rem; }
-  article h1 { font-size: 1.25rem; margin-top: 1.5rem; }
-  article h2 { font-size: 1.02rem; margin: 1.75rem 0 .5rem; padding-bottom: .3rem; border-bottom: 1px solid #e4e7ee; }
-  article table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; font-size: .9rem; }
-  article th, article td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #eef0f4; }
-  article th { font-size: .76rem; text-transform: uppercase; letter-spacing: .04em; color: #5b616e; }
-  article blockquote { border-left: 3px solid #16181d; margin: .75rem 0; padding: .35rem 0 .35rem .8rem; }
-  article code { background: #f0f2f6; padding: .05rem .3rem; border-radius: 3px; font-size: .88em; }
-  article li { margin: .2rem 0; }
-  .hint { color: #5b616e; font-size: .82rem; margin-top: 1.5rem; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeuroFabric // 2 AM Incident Console</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-border: #1f293d;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #3b82f6;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --success: #10b981;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+      padding: 20px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--surface-border);
+      margin-bottom: 20px;
+    }
+    .brand { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 9999px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge-live { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.4); }
+    .badge-tripped { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.4); }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      padding: 16px;
+      border-radius: 8px;
+    }
+    .kpi-label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+    .kpi-val { font-size: 1.75rem; font-weight: 700; margin-top: 4px; font-family: var(--font-mono); }
+
+    .grid-layout {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1fr;
+      gap: 20px;
+      min-height: 600px;
+    }
+    @media (max-width: 1200px) { .grid-layout { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--surface-border);
+      font-size: 0.875rem;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-body {
+      padding: 16px;
+      flex: 1;
+      overflow-y: auto;
+      max-height: 580px;
+    }
+
+    .log-entry {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      padding: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .log-meta { display: flex; gap: 8px; font-weight: 600; }
+    .severity-CRITICAL { color: var(--danger); }
+    .severity-WARN { color: var(--warning); }
+    .severity-INFO { color: var(--accent); }
+
+    .diff-box {
+      background: #050811;
+      border: 1px solid var(--surface-border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      color: #cbd5e1;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.1); display: block; }
+    .diff-add { color: #4ade80; background: rgba(16, 185, 129, 0.1); display: block; }
+
+    .actions-bar {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    button {
+      padding: 10px 16px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: opacity 0.15s ease;
+    }
+    button:hover { opacity: 0.9; }
+    .btn-approve { background: var(--success); color: white; flex: 1; }
+    .btn-reject { background: rgba(255,255,255,0.1); color: var(--text-muted); }
+    .btn-reset { background: var(--danger); color: white; width: 100%; margin-top: 12px; }
+  </style>
 </head>
 <body>
-<main>
-  <h1>Data agent</h1>
-  <p class="sub">Drop a CSV export. It is read through the governed kernel pipeline, and every refusal you see below is the kernel&rsquo;s own.</p>
 
-  <div id="drop" tabindex="0" role="button" aria-label="Drop a CSV file or press Enter to choose one">
-    <strong>Drop a CSV file here</strong>
-    <span>or click to choose one &middot; the file must already be in the workspace folder</span>
+  <header>
+    <div class="brand">
+      <span>NEUROFABRIC</span>
+      <span style="color: var(--text-muted);">//</span>
+      <span>Autonomous SRE Control Plane</span>
+      <span class="badge badge-live" id="stream-status">● SSE SYNCED</span>
+    </div>
+    <div style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted);" id="clock">--:--:-- UTC</div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi-card">
+      <div class="kpi-label">Edge Ingestion</div>
+      <div class="kpi-val" id="metric-throughput">1,420 <span style="font-size: 0.875rem; color: var(--text-muted);">eps</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Deduplicated Alerts</div>
+      <div class="kpi-val" id="metric-suppressed" style="color: var(--accent);">0</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Secrets Scrubbed (DLP)</div>
+      <div class="kpi-val" id="metric-scrubbed" style="color: var(--warning);">0</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Circuit Breakers</div>
+      <div class="kpi-val" id="metric-circuits" style="color: var(--success);">NORMAL</div>
+    </div>
   </div>
-  <input id="picker" type="file" accept=".csv,text/csv" hidden>
-  <p id="status" role="status" aria-live="polite"></p>
 
-  <article id="report" hidden></article>
+  <div class="grid-layout">
+    <!-- Panel 1: Live Telemetry Stream -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Live Telemetry & DLP Scrub Stream</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">Real-time</span>
+      </div>
+      <div class="panel-body" id="telemetry-list">
+        <div class="log-entry" style="color: var(--text-muted);">Listening for edge events...</div>
+      </div>
+    </div>
 
-  <p class="hint">The file is not uploaded anywhere. It is read from the workspace folder on this machine, and every path is checked by the kernel before it is opened.</p>
-</main>
-<script>
-(function () {
-  var drop = document.getElementById("drop");
-  var picker = document.getElementById("picker");
-  var status = document.getElementById("status");
-  var report = document.getElementById("report");
+    <!-- Panel 2: HITL Triage & AST Diff Gate -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Active Proposal // AST Diff Verification</span>
+        <span class="badge" style="background: rgba(59, 130, 246, 0.2); color: var(--accent);" id="task-id-badge">IDLE</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size: 0.85rem; margin-bottom: 12px;" id="proposal-meta">
+          <strong>Target:</strong> <span id="prop-target">None</span><br>
+          <strong>RCA Confidence:</strong> <span id="prop-confidence">--%</span> | <strong>Blast Radius:</strong> <span id="prop-blast">--</span>
+        </div>
+        <div class="diff-box" id="diff-content">No active remediation proposal under evaluation.</div>
+        <div class="actions-bar" id="proposal-actions" style="display: none;">
+          <button class="btn-approve" onclick="approveRemediation()">Authorize GitOps PR</button>
+          <button class="btn-reject" onclick="rejectRemediation()">Decline</button>
+        </div>
+      </div>
+    </div>
 
-  // RULE 1. Escape everything, always, before any transform. The only string
-  // this function ever returns is inert text.
-  function esc(text) {
-    return String(text)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
-  // The small set of inline marks, applied to ALREADY ESCAPED text. A backslash
-  // escape written by the renderer is consumed here and never reaches the DOM.
-  function inline(escaped) {
-    return escaped
-      .replace(/\\\\([\\\`*_{}\\[\\]()#+\\-.!|])/g, "$1")
-      .replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>")
-      .replace(/(^|[^*])\\*([^*]+)\\*/g, "$1<em>$2</em>")
-      .replace(/\`([^\`]+)\`/g, "<code>$1</code>");
-  }
-  // RULE 2. Only these block shapes become elements. There is no raw-HTML path.
-  function render(markdown) {
-    var lines = esc(markdown).split(/\\r?\\n/);
-    var out = [], i = 0;
-    function flushList(items) { if (items.length) { out.push("<ul>" + items.map(function (t) { return "<li>" + inline(t) + "</li>"; }).join("") + "</ul>"); } }
-    while (i < lines.length) {
-      var line = lines[i];
-      if (/^\\s*$/.test(line)) { i++; continue; }
-      if (/^\\|/.test(line) && i + 1 < lines.length && /^\\|[\\s:|-]+\\|$/.test(lines[i + 1])) {
-        var head = line.split("|").slice(1, -1).map(function (c) { return inline(c.trim()); });
-        out.push("<table><thead><tr>" + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr></thead><tbody>");
-        i += 2;
-        while (i < lines.length && /^\\|/.test(lines[i])) {
-          var cells = lines[i].split("|").slice(1, -1).map(function (c) { return "<td>" + inline(c.trim()) + "</td>"; });
-          out.push("<tr>" + cells.join("") + "</tr>");
-          i++;
+    <!-- Panel 3: Sovereign Controls & Circuit Overrides -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Sovereign Circuit Locks</span>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">ADR-005 Enforced</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+          Services locked by the anti-flapping circuit breaker require verified operator overrides to resume mutations.
+        </div>
+        <div id="circuit-list">
+          <div style="font-size: 0.8rem; color: var(--text-muted);">All systems nominal. 0 flapping services.</div>
+        </div>
+        <button class="btn-reset" onclick="resetCircuitBreaker()">Emergency Unlock: order-processing-node</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Live Clock
+    setInterval(() => {
+      document.getElementById('clock').innerText = new Date().toUTCString().split(' ')[4] + ' UTC';
+    }, 1000);
+
+    // Sync Telemetry and Metrics against Gateway
+    async function syncState() {
+      try {
+        const [logsRes, metricsRes] = await Promise.all([
+          fetch('http://127.0.0.1:8080/api/v1/workspace/recent-logs').then(r => r.json()).catch(() => []),
+          fetch('http://127.0.0.1:8080/api/v1/metrics/ingestion').then(r => r.json()).catch(() => null)
+        ]);
+
+        if (metricsRes) {
+          document.getElementById('metric-suppressed').innerText = metricsRes.suppressedAlerts || 0;
+          document.getElementById('metric-scrubbed').innerText = metricsRes.secretsScrubbed || 0;
         }
-        out.push("</tbody></table>");
-        continue;
-      }
-      if (/^#{1,3} /.test(line)) { out.push("<h2>" + inline(line.replace(/^#{1,3} /, "")) + "</h2>"); i++; continue; }
-      if (/^> /.test(line)) { out.push("<blockquote>" + inline(line.replace(/^> /, "")) + "</blockquote>"); i++; continue; }
-      if (/^[-*] /.test(line)) {
-        var items = [];
-        while (i < lines.length && /^[-*] /.test(lines[i])) { items.push(lines[i].replace(/^[-*] /, "")); i++; }
-        flushList(items);
-        continue;
-      }
-      out.push("<p>" + inline(line) + "</p>");
-      i++;
+
+        if (Array.isArray(logsRes) && logsRes.length > 0) {
+          const container = document.getElementById('telemetry-list');
+          container.innerHTML = logsRes.slice(0, 15).map(l => \`
+            <div class="log-entry">
+              <div class="log-meta">
+                <span class="severity-\${l.severity}">[\${l.severity}]</span>
+                <span>\${l.service}</span>
+                \${l.dlpScrubbed ? '<span style="color: var(--warning); font-size: 0.7rem;">[DLP REDACTED]</span>' : ''}
+              </div>
+              <div style="color: var(--text-muted);">\${l.message}</div>
+            </div>
+          \`).join('');
+        }
+      } catch (e) {}
     }
-    return out.join("");
-  }
 
-  function say(text, isError) {
-    status.textContent = text;
-    status.className = isError ? "error" : "";
-  }
+    // Connect to Wedge SSE Stream for real-time IPC events
+    const sse = new EventSource('/api/memory/alerts');
+    sse.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'circuit.strike') {
+          document.getElementById('metric-circuits').innerText = data.data.tripped ? 'TRIPPED' : 'WARNING';
+          document.getElementById('metric-circuits').style.color = 'var(--danger)';
+          document.getElementById('circuit-list').innerHTML = \`
+            <div style="padding: 10px; background: rgba(239,68,68,0.1); border-radius: 6px; border: 1px solid var(--danger);">
+              <strong>\${data.data.service}</strong>: \${data.data.strikes} strikes recorded. Tripped: \${data.data.tripped}
+            </div>
+          \`;
+        }
+      } catch (e) {}
+      syncState();
+    };
 
-  function send(path) {
-    say("Reading " + path + " through the kernel\\u2026");
-    report.hidden = true;
-    fetch("/api/report", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: path })
-    }).then(function (response) {
-      return response.json().then(function (body) { return { status: response.status, body: body }; });
-    }).then(function (result) {
-      var body = result.body || {};
-      if (body.status === "DELIVERED" && body.markdown) {
-        // GO TO THE DASHBOARD. This line is the product.
-        //
-        // The dropzone used to render the Markdown into this page, and the
-        // dashboard -- every chart, the tooltips, the whole conversational UI --
-        // was served by '/api/dashboard' and reached by nobody. The Owner
-        // dropped a file, saw a wall of table rows, and correctly concluded the
-        // product had no charts and no chatbot. Both were built, tested,
-        // type-checked and parsed. None of it was ever shown to a human.
-        //
-        // So the success branch navigates. It does NOT render both, and that is
-        // deliberate: the markdown generator emits a table per column and the
-        // Owner was scrolling past a hundred rows of it. The Markdown remains
-        // what '/api/report' returns -- it is the report of record, it is what
-        // gets written to disk, and it is what every other consumer reads. This
-        // is only about which document the USER is shown.
-        //
-        // The refusal branch below deliberately does NOT navigate. Throwing away
-        // the kernel's "no" to make a page look busier is the exact failure this
-        // product exists to avoid.
-        //
-        // encodeURIComponent, because a real filename contains spaces and the
-        // raw form resolves as two query parameters: the server would read the
-        // file 'my', tell the user it does not exist, and be believed.
-        window.location.href = "/api/dashboard?path=" + encodeURIComponent(path);
-        return;
-      }
-      // The refusal is the kernel's, and it is shown with the kernel's tier.
-      var failure = body.failure || {};
-      var tier = failure.kernelReasonCode ? failure.kernelReasonCode + ": " : "";
-      say(tier + (failure.reason || "the run did not deliver"), true);
-    }).catch(function (error) {
-      say("The server did not answer: " + error.message, true);
-    });
-  }
+    // Simulated Active HITL Task for initial view
+    let activeTaskToken = 'task-2am-' + Math.random().toString(36).substring(7);
+    function loadSampleProposal() {
+      document.getElementById('task-id-badge').innerText = activeTaskToken;
+      document.getElementById('prop-target').innerText = 'pool-allocator.yaml';
+      document.getElementById('prop-confidence').innerText = '94%';
+      document.getElementById('prop-blast').innerText = 'Low (1 node)';
+      document.getElementById('diff-content').innerHTML =
+        '<span class="diff-del">- max_connections: 50</span>' +
+        '<span class="diff-add">+ max_connections: 120</span>' +
+        '  connection_timeout_ms: 15000';
+      document.getElementById('proposal-actions').style.display = 'flex';
+    }
+    loadSampleProposal();
 
-  drop.addEventListener("click", function () { picker.click(); });
-  drop.addEventListener("keydown", function (event) { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); picker.click(); } });
-  picker.addEventListener("change", function () { if (picker.files && picker.files[0]) { send(picker.files[0].name); } });
-  ["dragenter", "dragover"].forEach(function (name) {
-    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.add("hot"); });
-  });
-  ["dragleave", "drop"].forEach(function (name) {
-    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.remove("hot"); });
-  });
-  drop.addEventListener("drop", function (event) {
-    var files = event.dataTransfer && event.dataTransfer.files;
-    if (files && files[0]) { send(files[0].name); }
-  });
-})();
-</script>
+    async function approveRemediation() {
+      const res = await fetch('http://127.0.0.1:8080/api/v1/embassy/decisions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          taskId: activeTaskToken,
+          target: 'pool-allocator.yaml',
+          diff: 'max_connections: 120'
+        })
+      });
+      const data = await res.json();
+      alert('Approved! GitOps PR Created: ' + data.gitops.branch);
+      document.getElementById('proposal-actions').style.display = 'none';
+      document.getElementById('diff-content').innerText = 'Remediation dispatched and under canary verification.';
+    }
+
+    function rejectRemediation() {
+      document.getElementById('proposal-actions').style.display = 'none';
+      document.getElementById('diff-content').innerText = 'Proposal rejected by Incident Commander.';
+    }
+
+    async function resetCircuitBreaker() {
+      await fetch('http://127.0.0.1:8080/api/v1/embassy/reset-breaker', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target: 'order-processing-node' })
+      });
+      alert('Circuit reset for order-processing-node.');
+      document.getElementById('metric-circuits').innerText = 'NORMAL';
+      document.getElementById('metric-circuits').style.color = 'var(--success)';
+      document.getElementById('circuit-list').innerHTML = '<div style="font-size: 0.8rem; color: var(--text-muted);">All systems nominal. 0 flapping services.</div>';
+    }
+
+    setInterval(syncState, 2000);
+    syncState();
+  </script>
 </body>
-</html>
-`;
+</html>`;

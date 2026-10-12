@@ -21,7 +21,8 @@
     "start": "tsx platform/web/server.ts",
     "test:harness": "node --experimental-strip-types platform/test-support/embassy-test-server.ts",
     "test:regression": "node --experimental-strip-types scripts/run-regression-suite.ts",
-    "test:triage": "node --experimental-strip-types scripts/triage-agent-client.ts"
+    "test:triage": "node --experimental-strip-types scripts/triage-agent-client.ts",
+    "start:daemon": "node --experimental-strip-types scripts/daemon.ts"
   },
   "devDependencies": {
     "@types/node": "22.7.5",
