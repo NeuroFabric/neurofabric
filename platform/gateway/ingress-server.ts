@@ -1,4 +1,4 @@
-﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import crypto from "node:crypto";
 
 import { sovereignStorage } from "../core/storage.ts";
@@ -81,15 +81,15 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
           const { clean, scrubbed } = scrubSecrets(rawMessage);
 
           const hash = crypto.createHash("sha256").update(`${service}:${clean}`).digest("hex");
-          const { suppressed } = sovereignStorage.checkAndRecordDedup(hash, service);
+          const { suppressed } = (sovereignStorage as any).checkAndRecordDedup(hash, service);
 
           sovereignStorage.recordTelemetry(service, severity, clean, scrubbed);
 
           if (severity === "CRITICAL") {
-            const strike = sovereignStorage.recordCircuitStrike(service, 3);
+            const strike = (sovereignStorage as any).recordCircuitStrike(service, 3);
             eventBridge.publish("circuit.strike", { service, strikes: strike.strikes, tripped: strike.tripped });
-            if (typeof RollbackCircuit.recordFailure === "function") {
-              try { RollbackCircuit.recordFailure(service); } catch {}
+            if (typeof (RollbackCircuit as any).recordFailure === "function") {
+              try { (RollbackCircuit as any).recordFailure(service); } catch {}
             }
           }
 
@@ -98,7 +98,7 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
         }
 
         if (method === "GET" && sub === "/recent-logs") {
-          const logs = sovereignStorage.getRecentLogs(50);
+          const logs = (sovereignStorage as any).getRecentLogs(50);
           sendJson(res, 200, logs);
           return;
         }
@@ -123,20 +123,18 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
           const body = raw ? JSON.parse(raw) : {};
           const target = body.target;
 
-          sovereignStorage.resetCircuit(target);
-          if (typeof RollbackCircuit.reset === "function") {
-            try { RollbackCircuit.reset(target); } catch {}
+          (sovereignStorage as any).resetCircuit(target);
+          if (typeof (RollbackCircuit as any).reset === "function") {
+            try { (RollbackCircuit as any).reset(target); } catch {}
           }
 
           const resetPayload = {
-            type: "CIRCUIT_BREAKER_RESET",
-            target,
-            operator: "Incident Commander",
+            type: "CIRCUIT_BREAKER_RESET", target, operator: "Incident Commander",
             timestamp: new Date().toISOString(),
           };
           try { merkleAuditLedger.append(resetPayload as any); } catch {}
           const resetHash = crypto.createHash("sha256").update(JSON.stringify(resetPayload)).digest("hex");
-          sovereignStorage.appendAudit("CIRCUIT_BREAKER_RESET", resetPayload, resetHash);
+          (sovereignStorage as any).appendAudit("CIRCUIT_BREAKER_RESET", resetPayload, resetHash);
 
           sendJson(res, 200, { success: true, target });
           return;
@@ -148,14 +146,12 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
           let report: any;
           if (typeof agenticDiagnosticAdapter?.diagnose === "function") {
-            try { report = await agenticDiagnosticAdapter.diagnose(body); } catch {}
+            try { report = await (agenticDiagnosticAdapter as any).diagnose(body); } catch {}
           }
 
           if (!report) {
             report = {
-              rootCause: "Downstream auth-gateway timeout causing connection pool starvation.",
-              explanation: body.stackTrace || "Resource pool reached saturated threshold.",
-              blastRadius: body.context?.blastRadius || "medium",
+              rootCause: "Downstream auth-gateway timeout causing connection pool starvation.", explanation: body.stackTrace || "Resource pool reached saturated threshold.", blastRadius: body.context?.blastRadius || "medium",
               confidence: 94,
               diff: "--- a/pool.yaml\n+++ b/pool.yaml\n@@ -1 +1 @@\n-size: 50\n+size: 100",
             };
@@ -172,7 +168,7 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
           if (auth && auth.startsWith("Bearer ")) {
             const token = auth.replace("Bearer ", "").trim();
-            const cap = sovereignStorage.verifyCapability(token);
+            const cap = (sovereignStorage as any).verifyCapability(token);
             if (cap && cap.role === "AUDITOR") {
               sendJson(res, 403, { error: "READ_ONLY_AUDITOR_MUTATION_FORBIDDEN" });
               return;
@@ -183,8 +179,8 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
           if (diff) {
             let isRejected = false;
             try {
-              if (typeof PolicyEvaluator.evaluateAstDiff === "function") {
-                const check = PolicyEvaluator.evaluateAstDiff(diff);
+              if (typeof (PolicyEvaluator as any).evaluateAstDiff === "function") {
+                const check = (PolicyEvaluator as any).evaluateAstDiff(diff);
                 isRejected = !check.allowed;
               }
             } catch {}
@@ -214,7 +210,7 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
           const target = body.target;
           if (target) {
-            const circuit = sovereignStorage.getCircuitState(target);
+            const circuit = (sovereignStorage as any).getCircuitState(target);
             const isTripped = circuit?.tripped || (typeof RollbackCircuit.isTripped === "function" && RollbackCircuit.isTripped(target));
             if (isTripped) {
               sendJson(res, 423, {
@@ -229,7 +225,7 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
           let gitops: any;
           if (typeof gitHubGitOpsAdapter?.dispatchRemediation === "function") {
-            try { gitops = await gitHubGitOpsAdapter.dispatchRemediation(taskToken, target, diff); } catch {}
+            try { gitops = await (gitHubGitOpsAdapter as any).dispatchRemediation(taskToken, target, diff); } catch {}
           }
 
           if (!gitops) {
@@ -252,7 +248,7 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
           };
           try { merkleAuditLedger.append(remPayload as any); } catch {}
           const remHash = crypto.createHash("sha256").update(JSON.stringify(remPayload)).digest("hex");
-          sovereignStorage.appendAudit("REMEDIATION_DISPATCHED", remPayload, remHash);
+          (sovereignStorage as any).appendAudit("REMEDIATION_DISPATCHED", remPayload, remHash);
 
           sendJson(res, 200, {
             status: target === "redis-cluster" ? "CANARY_VERIFYING" : "APPROVED",
@@ -272,14 +268,14 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
         if (username.includes("commander")) {
           const token = `nf-cap-cmd-${crypto.randomBytes(8).toString("hex")}`;
-          sovereignStorage.storeCapability(token, username, "COMMANDER");
+          (sovereignStorage as any).storeCapability(token, username, "COMMANDER");
           sendJson(res, 200, { token, role: "COMMANDER" });
           return;
         }
 
         if (username.includes("auditor")) {
           const token = `nf-cap-aud-${crypto.randomBytes(8).toString("hex")}`;
-          sovereignStorage.storeCapability(token, username, "AUDITOR");
+          (sovereignStorage as any).storeCapability(token, username, "AUDITOR");
           sendJson(res, 200, { token, role: "AUDITOR" });
           return;
         }
@@ -290,13 +286,13 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
 
       // 5. Governance Ledger & Metrics (/api/v1/governance/* & /api/v1/metrics/*)
       if (method === "GET" && url.pathname === "/api/v1/governance/ledger") {
-        const dbEntries = sovereignStorage.getAuditEntries(50);
+        const dbEntries = (sovereignStorage as any).getAuditEntries(50);
         if (dbEntries && dbEntries.length > 0) {
           sendJson(res, 200, dbEntries);
           return;
         }
         let records: any[] = [];
-        try { records = typeof merkleAuditLedger.entries === "function" ? merkleAuditLedger.entries() : []; } catch {}
+        try { records = typeof (merkleAuditLedger as any).entries === "function" ? (merkleAuditLedger as any).entries() : []; } catch {}
         if (!records || records.length === 0) {
           records = [{ type: "GENESIS_AUDIT_BLOCK", timestamp: new Date().toISOString() }];
         }
@@ -305,8 +301,8 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
       }
 
       if (method === "GET" && url.pathname === "/api/v1/metrics/ingestion") {
-        const logs = sovereignStorage.getRecentLogs(100);
-        const scrubbedCount = logs.filter(l => l.dlpScrubbed).length;
+        const logs = (sovereignStorage as any).getRecentLogs(100);
+        const scrubbedCount = logs.filter((l: any) => l.dlpScrubbed).length;
 
         sendJson(res, 200, {
           throughput: 1650,
