@@ -854,6 +854,10 @@ export function createWedgeServer(options: WedgeOptions): Server {
   routes = memoryRoutes;
 
   const server = createServer((request, response) => {
+  if (request.url === "/tokens.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/tokens.css")));
+  if (request.url === "/shell.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.css")));
+  if (request.url === "/shell.js") return response.writeHead(200, {"Content-Type":"application/javascript"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.js")));
+
     void (async () => {
       try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
