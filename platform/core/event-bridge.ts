@@ -20,7 +20,7 @@ export class EventBridge {
   private constructor() {
     const targetDir = path.resolve(process.cwd(), "workspace");
     const file = path.join(targetDir, ".neurofabric.db");
-    this.db = new DatabaseSync(file);
+    this.db = (fs.mkdirSync(path.dirname(file), { recursive: true }), new DatabaseSync(file));
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS platform_events (

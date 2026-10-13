@@ -47,7 +47,7 @@ export class SovereignStorage {
     }
 
     const file = dbPath || path.join(targetDir, ".neurofabric.db");
-    this.db = new DatabaseSync(file);
+    this.db = (fs.mkdirSync(path.dirname(file), { recursive: true }), new DatabaseSync(file));
     this.initPragmas();
     this.migrate();
   }
