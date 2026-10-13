@@ -1,6 +1,13 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from 'react';
-import { apiGet, apiPost, fetchTimeseries as apiFetchTimeseries, fetchLedger as apiFetchLedger, fetchIngestionMetrics, fetchRecentLogs as apiFetchRecentLogs, verifyLedger, ingestTelemetry, ingestTelemetryBatch, submitDecision, resetBreaker, abortCanary, ConnectionStatus, useSSEConnection } from './lib/apiClient';
-import { ConnectionIndicator, ConnectionDot } from './components/ConnectionIndicator.tsx';
+import {
+  API_BASE,
+  fetchTimeseries as apiFetchTimeseries,
+  fetchLedger as apiFetchLedger,
+  fetchIngestionMetrics,
+  fetchRecentLogs as apiFetchRecentLogs,
+  verifyLedger,
+} from './lib/apiClient';
+// import { ConnectionIndicator, ConnectionDot } from './components/ConnectionIndicator.tsx';
 
 const INGESTION_KEY = import.meta.env.VITE_INGESTION_KEY || 'nf-edge-telemetry-token-2026';
 
@@ -309,8 +316,8 @@ export default function App() {
 
   const fetchTimeseries = useCallback(async () => {
     try {
-      const body = await apiFetchTimeseries(timeRange);
-      if (Array.isArray(body.points)) setTimeseriesData(body.points);
+      const body = await apiFetchTimeseries(timeRange as any);
+      if (Array.isArray(body.points)) setTimeseriesData(body.points as any);
     } catch (err) {
       console.warn('[Timeseries] Fetch failed:', err);
       setTimeseriesData([]);
@@ -329,7 +336,7 @@ export default function App() {
 
         const pendingItems: HitlProposal[] = normalized
           .filter((t) => t.status === 'PENDING')
-          .map((t) => ({
+          .map((t: any) => ({
             taskId: t.token,
             target: t.target || t.subject?.target || 'service',
             title: t.subject?.title || `Critical Anomaly on ${t.target || t.subject?.target || 'service'}`,
@@ -345,7 +352,6 @@ export default function App() {
             status: 'PENDING',
           }));
         setPendingQueue(pendingItems);
-      }
     } catch (err) {
       console.warn('[Ledger] Fetch failed:', err);
       setLedger([]);
@@ -356,7 +362,12 @@ export default function App() {
   const fetchMerkleAudit = useCallback(async () => {
     try {
       const status = await verifyLedger();
-      setMerkleStatus(status);
+      setMerkleStatus({
+        valid: (status as any).status === 'VERIFIED' || (status as any).valid === true,
+        rootHash: status.rootHash || '',
+        chainLength: (status as any).totalLeaves || (status as any).chainLength || 0,
+        verifiedAt: (status as any).lastVerifiedAt || (status as any).verifiedAt || new Date().toISOString(),
+      });
     } catch (err) {
       console.warn('[Merkle] Fetch failed:', err);
     }
@@ -381,12 +392,12 @@ export default function App() {
         setMetrics((prev) => ({
           ...prev,
           throughput: ingRes.throughput ?? prev.throughput,
-          totalIngested: ingRes.totalIngested ?? prev.totalIngested,
+          totalIngested: (ingRes as any).totalIngested ?? prev.totalIngested,
           secretsScrubbed: ingRes.secretsScrubbed ?? prev.secretsScrubbed,
           suppressedAlerts: ingRes.suppressedAlerts ?? prev.suppressedAlerts,
-          hitlPending: ingRes.hitlPending ?? prev.hitlPending,
-          trippedCircuits: ingRes.trippedCircuits || prev.trippedCircuits || [],
-          serviceDistribution: ingRes.serviceDistribution || prev.serviceDistribution,
+          hitlPending: (ingRes as any).hitlPending ?? prev.hitlPending,
+          trippedCircuits: (ingRes as any).trippedCircuits || prev.trippedCircuits || [],
+          serviceDistribution: (ingRes as any).serviceDistribution || prev.serviceDistribution,
         }));
       }
     } catch (err) {
@@ -767,7 +778,7 @@ export default function App() {
   const activeTrippedTargets = Array.from(
     new Set([
       ...(metrics.trippedCircuits || []),
-      ...ledger.filter((t) => t.status === 'CIRCUIT_TRIPPED').map((t) => t.target || t.subject?.target).filter(Boolean),
+      ...ledger.filter((t) => t.status === 'CIRCUIT_TRIPPED').map((t: any) => t.target || t.subject?.target).filter(Boolean),
     ])
   ) as string[];
 

@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 interface HoverInspectionCardProps {
   /** Unique identifier for the chart */
@@ -22,7 +22,7 @@ interface HoverInspectionCardProps {
  * Displays detailed telemetry for the hovered data point
  */
 export function HoverInspectionCard({
-  chartId,
+  /* chartId */
   hoverIndex,
   isActive,
   dataPoint,
@@ -56,8 +56,8 @@ export function VelocityHoverCard({ point }: { point: Record<string, unknown> })
       <div className="text-cyan-400 font-bold border-b border-cyan-500/30 pb-1 mb-1">
         {point.label as string}
       </div>
-      <div>Velocity: <span className="text-white font-bold">{point.throughput} evt/s</span></div>
-      <div>Peak: <span className="text-emerald-400 font-bold">{point.p95}ms</span></div>
+      <div>Velocity: <span className="text-white font-bold">{String((point as any)?.throughput ?? '')} evt/s</span></div>
+      <div>Peak: <span className="text-emerald-400 font-bold">{String((point as any)?.p95 ?? '')}ms</span></div>
       <div>Backpressure Limit: <span className="text-amber-400 font-bold">{Math.round((point.throughput as number) * 1.5)} evt/s</span></div>
       <div className="text-[9px] text-slate-400 mt-1 italic">Click to filter stream to this slice</div>
     </div>
@@ -74,9 +74,9 @@ export function LatencyHoverCard({ point }: { point: Record<string, unknown> }):
       <div className="text-emerald-400 font-bold border-b border-emerald-500/30 pb-1 mb-1">
         {point.label as string}
       </div>
-      <div>P50 Transit: <span className="text-white font-bold">{point.p50}ms</span></div>
-      <div>P95 Critical Path: <span className="text-emerald-400 font-bold">{point.p95}ms</span></div>
-      <div>P99 Tail: <span className="text-amber-400 font-bold">{point.p99}ms</span></div>
+      <div>P50 Transit: <span className="text-white font-bold">{String((point as any)?.p50 ?? '')}ms</span></div>
+      <div>P95 Critical Path: <span className="text-emerald-400 font-bold">{String((point as any)?.p95 ?? '')}ms</span></div>
+      <div>P99 Tail: <span className="text-amber-400 font-bold">{String((point as any)?.p99 ?? '')}ms</span></div>
       <div>Jitter: <span className="text-cyan-400 font-bold">±{Math.round(Math.abs((point.p95 as number) - (point.p50 as number)) * 0.3)}ms</span></div>
     </div>
   );
@@ -97,7 +97,7 @@ export function ErrorRateHoverCard({ point }: { point: Record<string, unknown> }
         {point.label as string}
       </div>
       <div>Error Rate: <span className="text-white font-bold">{errorRate}%</span></div>
-      <div>SLA Target: <span className="text-emerald-400 font-bold">< 0.10%</span></div>
+      <div>SLA Target: <span className="text-emerald-400 font-bold">{'< 0.10%'}</span></div>
       <div>Error Budget: <span className={`font-bold ${remainingBudget > 50 ? 'text-emerald-400' : remainingBudget > 10 ? 'text-amber-400' : 'text-rose-400'}`}>
         {remainingBudget.toFixed(1)}% remaining
       </span></div>

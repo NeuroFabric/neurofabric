@@ -170,14 +170,19 @@ export async function fetchRecentLogs(limit = 50): Promise<TelemetryLog[]> {
  */
 export interface TimeseriesPoint {
   timestamp: string;
-  velocity: number;
-  throughput: number;
-  p50: number;
-  p95: number;
-  p99: number;
-  errorRate: number;
-  slaBudget: number;
-  suppressed: number;
+  velocity?: number;
+  throughput?: number;
+  p50?: number;
+  p95?: number;
+  p99?: number;
+  latencyP50?: number;
+  latencyP95?: number;
+  latencyP99?: number;
+  latency?: number;
+  errorRate?: number;
+  slaBudget?: number;
+  suppressed?: number;
+  [key: string]: any;
 }
 
 export interface TimeseriesResponse {
@@ -192,7 +197,7 @@ export interface TimeseriesResponse {
   };
 }
 
-export async function fetchTimeseries(range: '5M' | '15M' | '1H' | '24H' | 'ALL' = '5M'): Promise<TimeseriesResponse> {
+export async function fetchTimeseries(range?: string): Promise<TimeseriesResponse> {
   return apiGet(`/api/v1/metrics/timeseries?range=${range}`);
 }
 
@@ -200,9 +205,14 @@ export async function fetchTimeseries(range: '5M' | '15M' | '1H' | '24H' | 'ALL'
  * Ingestion metrics
  */
 export interface IngestionMetrics {
-  throughput: number;
-  suppressedAlerts: number;
-  secretsScrubbed: number;
+  throughput?: number;
+  totalIngested?: number;
+  suppressedAlerts?: number;
+  secretsScrubbed?: number;
+  hitlPending?: number;
+  trippedCircuits?: string[];
+  serviceDistribution?: Record<string, number>;
+  [key: string]: any;
 }
 
 export async function fetchIngestionMetrics(): Promise<IngestionMetrics> {
@@ -212,9 +222,6 @@ export async function fetchIngestionMetrics(): Promise<IngestionMetrics> {
 /**
  * Recent logs
  */
-export async function fetchRecentLogs(limit = 50): Promise<TelemetryLog[]> {
-  return apiGet(`/api/v1/workspace/recent-logs?limit=${limit}`);
-}
 
 /**
  * Governance ledger
@@ -242,12 +249,16 @@ export async function fetchLedger(): Promise<LedgerEntry[]> {
 }
 
 export interface VerifyLedgerResponse {
-  status: 'VERIFIED' | 'FAILED';
-  tamperDetected: boolean;
-  totalLeaves: number;
+  status: string;
+  valid?: boolean;
+  tamperDetected?: boolean;
+  totalLeaves?: number;
+  chainLength?: number;
   rootHash: string;
-  lastVerifiedAt: string;
-  complianceFrameworks: string[];
+  verifiedAt?: string;
+  lastVerifiedAt?: string;
+  complianceFrameworks?: string[];
+  [key: string]: any;
 }
 
 export async function verifyLedger(): Promise<VerifyLedgerResponse> {
@@ -312,11 +323,12 @@ export function createEventSource(): EventSource {
 /**
  * Connection status enum for UI indicator
  */
-export enum ConnectionStatus {
-  Connected = 'connected',
-  Reconnecting = 'reconnecting',
-  Disconnected = 'disconnected',
-}
+export const ConnectionStatus = {
+  Connected: 'Connected',
+  Reconnecting: 'Reconnecting',
+  Disconnected: 'Disconnected',
+} as const;
+export type ConnectionStatus = (typeof ConnectionStatus)[keyof typeof ConnectionStatus];
 
 /**
  * Hook for managing SSE connection with status tracking
@@ -327,7 +339,7 @@ export function useSSEConnection(
 ): { close: () => void } {
   let es: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let currentStatus = ConnectionStatus.Disconnected;
+  let currentStatus: ConnectionStatus = ConnectionStatus.Disconnected;
 
   const setStatus = (status: ConnectionStatus) => {
     if (currentStatus !== status) {
