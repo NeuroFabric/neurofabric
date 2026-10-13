@@ -128,7 +128,14 @@ function NeuroFabricLogo({ className = "h-10 w-10" }: { className?: string }) {
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     const cached = localStorage.getItem('nf_auth_user');
-    return cached ? JSON.parse(cached) : {
+    if (cached && cached !== "undefined" && cached !== "null") {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // fallback on corrupt payload
+      }
+    }
+    return {
       username: 'commander@neurofabric.io',
       role: 'INCIDENT_COMMANDER',
       name: 'Alex Vance (Incident Commander)'
