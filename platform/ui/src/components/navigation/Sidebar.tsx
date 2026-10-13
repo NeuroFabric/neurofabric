@@ -1,6 +1,17 @@
+import { motion } from 'framer-motion';
+import {
+  LayoutDashboard,
+  Activity,
+  ShieldAlert,
+  Database,
+  Network,
+  LifeBuoy,
+  Sparkles,
+  LogOut,
+} from 'lucide-react';
 import { useTelemetry, ConnectionStatus } from '../../context/TelemetryContext';
 
-export type PageId = 'overview' | 'telemetry' | 'embassy' | 'governance' | 'topology';
+export type PageId = 'overview' | 'telemetry' | 'embassy' | 'governance' | 'topology' | 'support' | 'roadmap';
 
 interface SidebarProps {
   currentPage: PageId;
@@ -11,38 +22,43 @@ interface SidebarProps {
 export function Sidebar({ currentPage, onNavigate, onExit }: SidebarProps) {
   const { status, trippedCircuits } = useTelemetry();
 
-  const links: { id: PageId; label: string; badge?: string; badgeColor?: string }[] = [
-    { id: 'overview', label: 'Command Center' },
-    { id: 'telemetry', label: 'Live Telemetry & DLP' },
-    { 
-      id: 'embassy', 
+  const primaryLinks = [
+    { id: 'overview' as PageId, label: 'Command Center', icon: LayoutDashboard },
+    { id: 'telemetry' as PageId, label: 'Live Telemetry & DLP', icon: Activity },
+    {
+      id: 'embassy' as PageId,
       label: 'Autonomous Embassy',
+      icon: ShieldAlert,
       badge: trippedCircuits.length > 0 ? `${trippedCircuits.length} TRIPPED` : undefined,
-      badgeColor: 'bg-rose-950 text-rose-400 border border-rose-800'
     },
-    { id: 'governance', label: 'Merkle Audit Ledger' },
-    { id: 'topology', label: 'Cluster Topology' },
+    { id: 'governance' as PageId, label: 'Merkle Audit Ledger', icon: Database },
+    { id: 'topology' as PageId, label: 'Cluster Topology', icon: Network },
+  ];
+
+  const secondaryLinks = [
+    { id: 'support' as PageId, label: 'Incident Desk & Query', icon: LifeBuoy },
+    { id: 'roadmap' as PageId, label: 'Future Ecosystem', icon: Sparkles, badge: 'NEW' },
   ];
 
   return (
-    <aside className="w-64 bg-[#0d121d] border-r border-slate-800 flex flex-col justify-between shrink-0 select-none">
+    <aside className="w-64 bg-[#0d121d] border-r border-slate-800/80 flex flex-col justify-between shrink-0 select-none z-20">
       <div>
         {/* Brand Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+        <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500 flex items-center justify-center font-black text-slate-950 text-sm shadow-lg shadow-cyan-500/20">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center font-black text-slate-950 text-xs shadow-lg shadow-cyan-500/20">
               NF
             </div>
             <div>
-              <div className="font-bold text-white tracking-tight leading-none">NeuroFabric</div>
-              <div className="text-[10px] text-slate-500 font-mono mt-1">ENTERPRISE SRE HUD</div>
+              <div className="font-bold text-white tracking-tight leading-none text-sm">NeuroFabric</div>
+              <div className="text-[10px] text-cyan-400 font-mono mt-1 font-semibold">AUTONOMOUS SRE</div>
             </div>
           </div>
         </div>
 
-        {/* Real-time SSE Connection Indicator */}
+        {/* Real-Time SSE Status */}
         <div className="px-5 py-3 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-between text-xs font-mono">
-          <span className="text-slate-400">Telemetry Bus</span>
+          <span className="text-slate-400">Edge Stream</span>
           <span
             className={`inline-flex items-center gap-1.5 font-bold ${
               status === ConnectionStatus.Connected
@@ -54,48 +70,100 @@ export function Sidebar({ currentPage, onNavigate, onExit }: SidebarProps) {
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                status === ConnectionStatus.Connected
-                  ? 'bg-emerald-400 animate-pulse'
-                  : 'bg-amber-400'
+                status === ConnectionStatus.Connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
               }`}
             />
             {status}
           </span>
         </div>
 
-        {/* Navigation Items */}
-        <nav className="p-3 space-y-1">
-          {links.map((link) => {
-            const active = currentPage === link.id;
-            return (
-              <button
-                key={link.id}
-                onClick={() => onNavigate(link.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition ${
-                  active
-                    ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
-                }`}
-              >
-                <span>{link.label}</span>
-                {link.badge && (
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${link.badgeColor}`}>
-                    {link.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
+        {/* Primary Operational Links */}
+        <div className="p-3">
+          <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">
+            Observability Mesh
+          </div>
+          <nav className="mt-1 space-y-1">
+            {primaryLinks.map((link) => {
+              const active = currentPage === link.id;
+              const Icon = link.icon;
+              return (
+                <button
+                  key={link.id}
+                  onClick={() => onNavigate(link.id)}
+                  className={`relative w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition ${
+                    active ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="activeSidebarPill"
+                      className="absolute inset-0 bg-cyan-500/10 border border-cyan-500/30 rounded-xl -z-10 shadow-sm shadow-cyan-500/10"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center space-x-3">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span>{link.label}</span>
+                  </div>
+                  {link.badge && (
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold bg-rose-950 text-rose-400 border border-rose-800">
+                      {link.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Secondary Links */}
+        <div className="p-3 pt-0">
+          <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">
+            Ecosystem & Support
+          </div>
+          <nav className="mt-1 space-y-1">
+            {secondaryLinks.map((link) => {
+              const active = currentPage === link.id;
+              const Icon = link.icon;
+              return (
+                <button
+                  key={link.id}
+                  onClick={() => onNavigate(link.id)}
+                  className={`relative w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition ${
+                    active ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {active && (
+                    <motion.div
+                      layoutId="activeSidebarPill"
+                      className="absolute inset-0 bg-cyan-500/10 border border-cyan-500/30 rounded-xl -z-10 shadow-sm shadow-cyan-500/10"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <div className="flex items-center space-x-3">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span>{link.label}</span>
+                  </div>
+                  {link.badge && (
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold bg-cyan-950 text-cyan-400 border border-cyan-800">
+                      {link.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
       </div>
 
-      {/* Return to Home / Sign Out */}
-      <div className="p-4 border-t border-slate-800">
+      {/* Exit Button */}
+      <div className="p-4 border-t border-slate-800/80">
         <button
           onClick={onExit}
-          className="w-full py-2.5 px-3 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition flex items-center justify-center space-x-2"
+          className="w-full py-2.5 px-3 rounded-xl text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition flex items-center justify-center space-x-2 border border-transparent hover:border-rose-500/20"
         >
-          <span>← Exit Console to Landing</span>
+          <LogOut className="w-3.5 h-3.5" />
+          <span>Exit to Public Portal</span>
         </button>
       </div>
     </aside>
