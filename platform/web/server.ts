@@ -1606,7 +1606,12 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
   const host = options.host ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, host, () => resolve());
+    const effectivePort = Number(process.env.PORT) || port;
+      const effectiveHost = process.env.HOST || (process.env.PORT ? "0.0.0.0" : host);
+      server.listen(effectivePort, effectiveHost, () => {
+        console.log(`[Wedge UI] Listening on http://${effectiveHost}:${effectivePort}`);
+        resolve();
+      });
   });
   const address = server.address();
   const bound = typeof address === "object" && address !== null ? address.port : port;
@@ -1626,5 +1631,31 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
 }
 
 
+// --- Direct Execution Entrypoint (Render / CLI runner) ---
+import { fileURLToPath } from "node:url";
 
+const isMainModule = Boolean(
+  process.argv[1] &&
+  (
+    process.argv[1].endsWith("server.ts") ||
+    process.argv[1].endsWith("server.js") ||
+    (import.meta.url && fileURLToPath(import.meta.url) === process.argv[1])
+  )
+);
 
+if (isMainModule) {
+  const port = Number(process.env.PORT) || 3000;
+  const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
+  const cwd = process.cwd();
+
+  console.log(`[Wedge UI] Starting server on ${host}:${port} (cwd: ${cwd})...`);
+
+  startWedgeServer({
+    port,
+    host,
+    cwd,
+  } as any).catch((err) => {
+    console.error("[Wedge UI] Fatal error on startup:", err);
+    process.exit(1);
+  });
+}
