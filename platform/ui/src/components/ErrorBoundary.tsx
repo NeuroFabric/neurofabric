@@ -1,153 +1,47 @@
-import { Component, type ReactNode, type ErrorInfo } from 'react';
+﻿import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { AlertOctagon, RotateCcw } from 'lucide-react';
 
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: Error | null;
-  errorInfo: ErrorInfo | null;
-}
-
-interface ErrorBoundaryProps {
+interface Props {
   children: ReactNode;
-  fallback?: ReactNode;
-  onError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
-/**
- * Error Boundary to prevent black screen crashes
- * Catches rendering errors and displays a recovery UI instead of unmounting
- */
-export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = {
-    hasError: false,
-    error: null,
-    errorInfo: null,
-  };
+interface State {
+  hasError: boolean;
+  error?: Error;
+}
 
-  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+export class ErrorBoundary extends Component<Props, State> {
+  public state: State = { hasError: false };
+
+  public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    this.setState({ errorInfo });
-    console.error('[ErrorBoundary] Caught error:', error, errorInfo);
-    this.props.onError?.(error, errorInfo);
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Console caught error:', error, errorInfo);
   }
 
-  render(): ReactNode {
+  public render() {
     if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
       return (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minHeight: '60vh',
-            padding: '2rem',
-            background: '#07090e',
-            color: '#e2e8f0',
-            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '1rem',
-              maxWidth: '600px',
-              textAlign: 'center',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              borderRadius: '12px',
-              padding: '2rem',
-              background: 'rgba(239, 68, 68, 0.05)',
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            <div style={{ fontSize: '3rem' }}>⚠️</div>
-            <h2 style={{ margin: 0, color: '#ef4444', fontSize: '1.25rem', fontWeight: 600 }}>
-              System Diagnostics Recovery
-            </h2>
-            <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.875rem', lineHeight: 1.5 }}>
-              An unexpected error was caught by the NeuroFabric safety net.
-              The dashboard has been paused to prevent data corruption.
-            </p>
-            <details
-              style={{
-                textAlign: 'left',
-                width: '100%',
-                marginTop: '1rem',
-                padding: '1rem',
-                background: '#0d121d',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '8px',
-                color: '#64748b',
-                fontSize: '0.75rem',
-              }}
-            >
-              <summary style={{ cursor: 'pointer', color: '#ef4444', fontWeight: 600 }}>
-                Error Details (click to expand)
-              </summary>
-              <pre style={{ margin: '0.5rem 0 0', overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                {this.state.error?.message ?? 'Unknown error'}
-                {this.state.errorInfo?.componentStack ? `\n\n${this.state.errorInfo.componentStack}` : ''}
-              </pre>
-            </details>
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-              <button
-                onClick={() => this.setState({ hasError: false, error: null, errorInfo: null })}
-                style={{
-                  padding: '0.625rem 1.25rem',
-                  background: 'linear-gradient(135deg, #06b6d4, #3b82f6)',
-                  color: '#07090e',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontWeight: 600,
-                  fontSize: '0.875rem',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                }}
-              >
-                Retry Dashboard
-              </button>
-              <button
-                onClick={() => window.location.reload()}
-                style={{
-                  padding: '0.625rem 1.25rem',
-                  background: 'transparent',
-                  color: '#94a3b8',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: '8px',
-                  fontWeight: 600,
-                  fontSize: '0.875rem',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                }}
-              >
-                Full Reload
-              </button>
-            </div>
+        <div className="min-h-screen bg-[#07090e] text-white flex flex-col items-center justify-center p-6 text-center font-sans">
+          <div className="w-16 h-16 rounded-2xl bg-rose-950/40 border border-rose-800 flex items-center justify-center mb-4 text-rose-400">
+            <AlertOctagon className="w-8 h-8" />
           </div>
+          <h1 className="text-xl font-bold font-mono">Console Boundary Exception</h1>
+          <p className="text-xs text-slate-400 max-w-md mt-2 font-mono">
+            {this.state.error?.message || 'An unexpected rendering error occurred.'}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 px-4 py-2 bg-slate-900 border border-slate-700 hover:border-cyan-500 rounded-xl text-xs font-mono font-bold text-cyan-400 flex items-center space-x-2 transition"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Reload Console</span>
+          </button>
         </div>
       );
     }
     return this.props.children;
   }
-}
-
-/**
- * HOC wrapper for easy use
- */
-export function withErrorBoundary<P extends object>(
-  WrappedComponent: React.ComponentType<P>,
-  errorBoundaryProps?: Omit<ErrorBoundaryProps, 'children'>
-): React.FC<P> {
-  return (props) => (
-    <ErrorBoundary {...errorBoundaryProps}>
-      <WrappedComponent {...props} />
-    </ErrorBoundary>
-  );
 }

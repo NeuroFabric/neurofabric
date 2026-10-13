@@ -854,6 +854,25 @@ export function createWedgeServer(options: WedgeOptions): Server {
   routes = memoryRoutes;
 
   const server = createServer((request, response) => {
+    // === DELIVERABLE 1 STATIC ROUTER ===
+    const cleanUrl = (request.url || "/").split("?")[0];
+    if (cleanUrl === "/tokens.css") {
+      const p = require("node:path").join(process.cwd(), "platform/web/public/tokens.css");
+      return response.writeHead(200, { "Content-Type": "text/css" }).end(require("node:fs").readFileSync(p, "utf8"));
+    }
+    if (cleanUrl === "/shell.css") {
+      const p = require("node:path").join(process.cwd(), "platform/web/public/shell.css");
+      return response.writeHead(200, { "Content-Type": "text/css" }).end(require("node:fs").readFileSync(p, "utf8"));
+    }
+    if (cleanUrl === "/shell.js") {
+      const p = require("node:path").join(process.cwd(), "platform/web/public/shell.js");
+      return response.writeHead(200, { "Content-Type": "application/javascript" }).end(require("node:fs").readFileSync(p, "utf8"));
+    }
+    if (cleanUrl === "/favicon.ico") {
+      return response.writeHead(204).end();
+    }
+    // === END STATIC ROUTER ===
+
   if (request.url === "/tokens.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/tokens.css")));
   if (request.url === "/shell.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.css")));
   if (request.url === "/shell.js") return response.writeHead(200, {"Content-Type":"application/javascript"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.js")));

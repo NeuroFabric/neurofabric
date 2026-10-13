@@ -1,45 +1,69 @@
 :root {
-  /* Surface Elevation */
-  --bg-0: #0B0E14;
-  --bg-1: #11151C;
-  --bg-2: #161B24;
-  --bg-3: #1C2230;
-  
-  /* Text Hierarchy */
-  --fg-0: #E6E9EF;
-  --fg-1: #9DA7B8;
-  --fg-2: #5F6B7C;
-  --fg-3: #3B4452;
-  
-  /* Borders */
+  /* Surface Elevation Hierarchy (Near-black Charcoal / Navy Steps) */
+  --bg-0: #0B0E14; /* Deep Canvas Base */
+  --bg-1: #11151C; /* Primary Elevated Surface / Rail / Topbar */
+  --bg-2: #161B24; /* Secondary Surface / Cards / Containers */
+  --bg-3: #1C2230; /* Interactive Surface / Hover / Active Tabs */
+
+  /* Text & Foreground Hierarchy (Off-white, Halation-Safe) */
+  --fg-0: #E6E9EF; /* High-contrast Body & Headings */
+  --fg-1: #9DA7B8; /* Secondary Metadata */
+  --fg-2: #5F6B7C; /* Muted Labels & Inactive Icons */
+  --fg-3: #3B4452; /* Hairlines & Disabled Elements */
+
+  /* Borders & Hairlines */
   --border: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.12);
-  
-  /* Semantic Accents */
-  --accent-green: #3DD68C;
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --border-focus: #4CC2FF;
+
+  /* Semantic State Accents (Saturated Color = Meaning Only) */
+  --accent-green: #3DD68C;      /* Healthy / Approved / Circuit Closed */
   --accent-green-bg: rgba(61, 214, 140, 0.12);
-  --accent-amber: #F5B544;
+  --accent-amber: #F5B544;      /* Degraded / Strike 1-2 / Pending Review */
   --accent-amber-bg: rgba(245, 181, 68, 0.12);
-  --accent-red: #F45B69;
+  --accent-red: #F45B69;        /* Critical / Circuit TRIPPED / AST Rejected */
   --accent-red-bg: rgba(244, 91, 105, 0.14);
-  --accent-violet: #8B7CF6;
-  --accent-cyan: #4CC2FF;
+  --accent-violet: #8B7CF6;     /* Agentic Reasoning / Active RCA */
+  --accent-violet-bg: rgba(139, 124, 246, 0.12);
+  --accent-cyan: #4CC2FF;       /* Ingest Flow / Informational / Active Nav */
   --accent-cyan-bg: rgba(76, 194, 255, 0.12);
 
-  /* Typography */
+  /* Typography Stacks */
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  
-  /* 8px Grid & Layout */
-  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-5: 20px; --space-6: 24px; --space-8: 48px;
-  --radius-sm: 4px; --radius-md: 6px;
-  
-  /* Motion */
-  --dur-fast: 150ms; --dur-med: 250ms;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+  /* 8px Spacing Grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* Engineering Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  /* Functional Micro-Interactions */
+  --dur-fast: 150ms;
+  --dur-med: 250ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Layout Constants */
+  --rail-width: 240px;
+  --rail-collapsed-width: 56px;
+  --topbar-height: 48px;
 }
 
+/* Reduced Motion Override (WCAG 2.2 AA) */
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

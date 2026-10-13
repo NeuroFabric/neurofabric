@@ -1,29 +1,14 @@
-services:
-  # 1. Backend API & SSE Service
-  - type: web
-    name: neurofabric-backend
-    runtime: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npx tsx platform/web/server.ts
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: 10000
-      - key: REDIS_URL
-        sync: false
-
-  # 2. Frontend React Dashboard
-  - type: web
-    name: neurofabric-ui
-    runtime: static
-    buildCommand: cd platform/ui && npm install && npm run build
-    staticPublishPath: platform/ui/dist
+﻿services:
+  # --- Frontend Console (Static Site on Global CDN) ---
+  - type: static
+    name: neurofabric-console
+    rootDir: platform/ui
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
     envVars:
-      - key: VITE_API_URL
-        value: https://neurofabric-backend.onrender.com
+      - key: NODE_VERSION
+        value: 22.0.0

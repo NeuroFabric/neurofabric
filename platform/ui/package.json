@@ -11,15 +11,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@nodelib/fs.scandir": "^4.0.1",
+    "@nodelib/fs.stat": "^4.0.0",
+    "@nodelib/fs.walk": "^3.0.1",
     "@radix-ui/react-slot": "^1.4.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fast-glob": "^3.3.3",
     "framer-motion": "^14.0.0",
     "lucide-react": "^1.52.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.4",
     "recharts": "^3.10.1",
+    "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
