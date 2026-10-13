@@ -21,6 +21,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST, OPTIONS, PUT, DELETE",
+      "access-control-allow-headers": "Content-Type, Authorization, x-ingest-key",
     "content-length": Buffer.byteLength(payload),
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
@@ -54,6 +57,15 @@ export function createIngressGateway(options: IngressGatewayOptions = {}): Serve
     try {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const method = req.method ?? "GET";
+        if (method === "OPTIONS") {
+          res.writeHead(204, {
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, POST, OPTIONS, PUT, DELETE",
+            "access-control-allow-headers": "Content-Type, Authorization, x-ingest-key",
+          });
+          res.end();
+          return;
+        }
 
       // 1. Health Probe
       if (method === "GET" && url.pathname === "/health") {
