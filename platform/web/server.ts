@@ -1,3 +1,4 @@
+import { createIngressGateway } from "../gateway/ingress-server.ts";
 import { eventBridge } from "../core/event-bridge.ts";
 ﻿import type { AlertHub } from "../memory/alert-hub.ts";
 
@@ -505,6 +506,7 @@ hitlEventBus.on('hitl:events', (data: any) => {
 });
 
 export function createWedgeServer(options: WedgeOptions): Server {
+  
   const cwd = path.resolve(options.cwd);
   const installRoot = options.installRoot ?? process.cwd();
 
@@ -1602,6 +1604,22 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
 export async function startWedgeServer(options: WedgeOptions): Promise<RunningWedge> {
   const server = createWedgeServer(options);
+
+  // --- Unified Dual-Engine Request Interceptor ---
+  const ingressGateway = createIngressGateway();
+  const ingressHandler = ingressGateway.listeners("request")[0] as (req: any, res: any) => void;
+  const wedgeHandlers = server.listeners("request").slice();
+  server.removeAllListeners("request");
+
+  server.on("request", (req, res) => {
+    const rawUrl = req.url || "/";
+    if (rawUrl === "/health" || rawUrl.startsWith("/api/")) {
+      return ingressHandler(req, res);
+    }
+    for (const handler of wedgeHandlers) {
+      (handler as any)(req, res);
+    }
+  });
   const port = options.port ?? 0;
   const host = options.host ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {
