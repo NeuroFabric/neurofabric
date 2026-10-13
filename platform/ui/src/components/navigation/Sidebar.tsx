@@ -10,6 +10,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { useTelemetry, ConnectionStatus } from '../../context/TelemetryContext';
+import { Logo } from '../common/Logo';
 
 export type PageId = 'overview' | 'telemetry' | 'embassy' | 'governance' | 'topology' | 'support' | 'roadmap';
 
@@ -43,21 +44,13 @@ export function Sidebar({ currentPage, onNavigate, onExit }: SidebarProps) {
   return (
     <aside className="w-64 bg-[#0d121d] border-r border-slate-800/80 flex flex-col justify-between shrink-0 select-none z-20">
       <div>
-        {/* Brand Header */}
-        <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center font-black text-slate-950 text-xs shadow-lg shadow-cyan-500/20">
-              NF
-            </div>
-            <div>
-              <div className="font-bold text-white tracking-tight leading-none text-sm">NeuroFabric</div>
-              <div className="text-[10px] text-cyan-400 font-mono mt-1 font-semibold">AUTONOMOUS SRE</div>
-            </div>
-          </div>
+        {/* Brand Header with Exact Isometric Logo */}
+        <div className="p-4 border-b border-slate-800/80">
+          <Logo size="md" />
         </div>
 
         {/* Real-Time SSE Status */}
-        <div className="px-5 py-3 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-between text-xs font-mono">
+        <div className="px-4 py-2.5 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-between text-xs font-mono">
           <span className="text-slate-400">Edge Stream</span>
           <span
             className={`inline-flex items-center gap-1.5 font-bold ${
