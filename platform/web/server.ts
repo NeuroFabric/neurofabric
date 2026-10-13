@@ -1,4 +1,4 @@
-import { createIngressGateway } from "../gateway/ingress-server.ts";
+import { createIngressGateway, sseClients, broadcastSSE, startSSEKeepAlive, stopSSEKeepAlive } from "../gateway/ingress-server.ts";
 import { eventBridge } from "../core/event-bridge.ts";
 ﻿import type { AlertHub } from "../memory/alert-hub.ts";
 
@@ -465,24 +465,13 @@ if (dbUrl) {
   }
 }
 
-const sseClients = new Set<ServerResponse>();
-export function broadcastAlert(payload: unknown): void {
-  const data = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const client of sseClients) {
-    try {
-      client.write(data);
-    } catch {
-      sseClients.delete(client);
-    }
-  }
-}
-
 RollbackCircuit.setMemoryLedger(inMemoryLedger);
-RollbackCircuit.setBroadcast(broadcastAlert);
+RollbackCircuit.setBroadcast(broadcastSSE);
 
 // Cross-Process SSE sync via SQLite event bridge
 eventBridge.subscribe((event) => {
-  broadcastAlert({ type: event.topic, data: event.payload });
+  broadcastSSE({ type: event.topic, data: event.payload });
+  startSSEKeepAlive();
 });
 
 hitlEventBus.on('hitl:events', (data: any) => {
@@ -502,7 +491,8 @@ hitlEventBus.on('hitl:events', (data: any) => {
     subject: data,
     timestamp: new Date().toISOString()
   } as any);
-  broadcastAlert({ type: 'HITL_PROPOSAL', data });
+  broadcastSSE({ type: 'HITL_PROPOSAL', data });
+  startSSEKeepAlive();
 });
 
 export function createWedgeServer(options: WedgeOptions): Server {

@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback, useMemo } from 'react';
+import { apiGet, apiPost, fetchTimeseries as apiFetchTimeseries, fetchLedger as apiFetchLedger, fetchIngestionMetrics, fetchRecentLogs as apiFetchRecentLogs, verifyLedger, ingestTelemetry, ingestTelemetryBatch, submitDecision, resetBreaker, abortCanary, ConnectionStatus, useSSEConnection } from './lib/apiClient';
+import { ConnectionIndicator, ConnectionDot } from './components/ConnectionIndicator.tsx';
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'https://neurofabric-backend.onrender.com').replace(/\/$/, '');
 const INGESTION_KEY = import.meta.env.VITE_INGESTION_KEY || 'nf-edge-telemetry-token-2026';
 
 type TimeRange = '5M' | '15M' | '1H' | '24H' | 'ALL' | 'CUSTOM';
@@ -308,26 +309,18 @@ export default function App() {
 
   const fetchTimeseries = useCallback(async () => {
     try {
-      let queryUrl = `${API_BASE}/api/v1/metrics/timeseries?range=${timeRange}`;
-      if (timeRange === 'CUSTOM' && customWindow) {
-        queryUrl += `&start=${customWindow.start}&end=${customWindow.end}`;
-      }
-      const res = await fetch(queryUrl);
-      if (res.ok) {
-        const body = await res.json();
-        if (Array.isArray(body.points)) setTimeseriesData(body.points);
-      }
+      const body = await apiFetchTimeseries(timeRange);
+      if (Array.isArray(body.points)) setTimeseriesData(body.points);
     } catch (err) {
       console.warn('[Timeseries] Fetch failed:', err);
+      setTimeseriesData([]);
     }
-  }, [timeRange, customWindow]);
+  }, [timeRange]);
 
   const fetchLedger = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/governance/ledger`);
-      if (res.ok) {
-        const data: LedgerEntry[] = await res.json();
-        const list = Array.isArray(data) ? data : [];
+      const data = await apiFetchLedger();
+      const list = Array.isArray(data) ? data : [];
         const normalized = list.map((item) => ({
           ...item,
           createdTimestamp: item.createdAt ? new Date(item.createdAt).getTime() : Date.now(),
@@ -355,13 +348,15 @@ export default function App() {
       }
     } catch (err) {
       console.warn('[Ledger] Fetch failed:', err);
+      setLedger([]);
+      setPendingQueue([]);
     }
   }, []);
 
   const fetchMerkleAudit = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/governance/verify-ledger`);
-      if (res.ok) setMerkleStatus(await res.json());
+      const status = await verifyLedger();
+      setMerkleStatus(status);
     } catch (err) {
       console.warn('[Merkle] Fetch failed:', err);
     }
@@ -369,21 +364,19 @@ export default function App() {
 
   const fetchRecentLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/workspace/recent-logs`);
-      if (res.ok) {
-        const logs: TelemetryLog[] = await res.json();
-        if (Array.isArray(logs) && logs.length > 0) {
-          setTelemetryLogs(logs.reverse());
-        }
+      const logs = await apiFetchRecentLogs();
+      if (Array.isArray(logs) && logs.length > 0) {
+        setTelemetryLogs(logs.reverse());
       }
     } catch (err) {
       console.warn('[RecentLogs] Fetch failed:', err);
+      setTelemetryLogs([]);
     }
   }, []);
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const ingRes = await fetch(`${API_BASE}/api/v1/metrics/ingestion`).then((r) => (r.ok ? r.json() : null));
+      const ingRes = await fetchIngestionMetrics();
       if (ingRes) {
         setMetrics((prev) => ({
           ...prev,
