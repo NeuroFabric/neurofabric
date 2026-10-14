@@ -8,11 +8,9 @@ import {
   ArrowRight,
   Radio,
   Terminal,
-  Cpu,
   Layers,
   CheckCircle2,
   Play,
-  AlertTriangle,
   Sparkles,
 } from 'lucide-react';
 
@@ -374,3 +372,4 @@ export function LandingPage() {
     </div>
   );
 }
+
