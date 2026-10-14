@@ -1,5 +1,5 @@
 ﻿import { useNavigate } from 'react-router-dom';
-import { useTelemetry } from '../context/TelemetryContext';
+import { useTelemetry, type FeatureCheckItem } from '../context/TelemetryContext';
 import {
   Play,
   Square,
@@ -73,7 +73,6 @@ export function StressTestPage() {
 
   return (
     <div className="p-8 space-y-6 max-w-7xl font-sans">
-      {/* Header & Master Controls */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
@@ -137,7 +136,6 @@ export function StressTestPage() {
         </div>
       </div>
 
-      {/* 15:00 Countdown & 5-Phase Timeline Bar */}
       <div className="p-6 rounded-2xl bg-[#0D111C] border border-white/10 space-y-5 shadow-2xl">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center space-x-4">
@@ -173,7 +171,6 @@ export function StressTestPage() {
           </div>
         </div>
 
-        {/* Progress Bar */}
         <div className="w-full h-3 bg-[#07090F] rounded-full overflow-hidden border border-white/10">
           <div
             style={{ width: `${progressPct}%` }}
@@ -181,7 +178,6 @@ export function StressTestPage() {
           />
         </div>
 
-        {/* 5 Phases Grid */}
         <div className="grid md:grid-cols-5 gap-3 pt-1">
           {phases.map((p) => {
             const isCurrent = stress.active && stress.currentPhase === p.id;
@@ -215,7 +211,6 @@ export function StressTestPage() {
         </div>
       </div>
 
-      {/* Live Stress Telemetry Counters */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
         <div className="p-5 rounded-2xl bg-[#0D111C] border border-white/10 flex items-center justify-between">
           <div>
@@ -262,10 +257,8 @@ export function StressTestPage() {
         </div>
       </div>
 
-      {/* Live Waveform under Stress */}
       <LiveThroughputChart />
 
-      {/* 12-Point Automated Feature & Functionality Verification Matrix */}
       <div className="rounded-2xl bg-[#0D111C] border border-white/10 overflow-hidden shadow-2xl">
         <div className="p-5 border-b border-white/10 flex flex-wrap items-center justify-between gap-4 bg-[#121726]">
           <div>
@@ -293,7 +286,7 @@ export function StressTestPage() {
             <div className="col-span-1 text-right">Status</div>
           </div>
 
-          {stress.checks.map((chk) => (
+          {stress.checks.map((chk: FeatureCheckItem) => (
             <div
               key={chk.id}
               className="p-3.5 grid grid-cols-12 items-center hover:bg-white/5 transition gap-2"
@@ -318,7 +311,6 @@ export function StressTestPage() {
           ))}
         </div>
 
-        {/* Quick Jump Links to Inspect Pages Under Load */}
         <div className="p-4 bg-[#090C14] border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
           <span className="text-slate-400">Inspect live pages while stress test runs in background:</span>
           <div className="flex flex-wrap items-center gap-2">

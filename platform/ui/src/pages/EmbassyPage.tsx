@@ -16,9 +16,23 @@ import {
   CheckCheck,
   GitBranch,
   Layers,
+  ExternalLink,
+  Key,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { InfoTooltip } from '../components/common/Tooltip';
+
+function GitHubIcon({ className = 'w-3.5 h-3.5' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+      />
+    </svg>
+  );
+}
 
 export function EmbassyPage() {
   const {
@@ -33,6 +47,10 @@ export function EmbassyPage() {
     updateProposalDiff,
     synthesizeProposal,
     resetProposals,
+    githubConfig,
+    saveGitHubConfig,
+    syncGitHubPRs,
+    disconnectGitHub,
   } = useTelemetry();
 
   const [queueFilter, setQueueFilter] = useState<'ALL' | 'PENDING' | 'BLOCKED' | 'ACTIONED'>('ALL');
@@ -42,6 +60,11 @@ export function EmbassyPage() {
   const [showDeclineReasons, setShowDeclineReasons] = useState(false);
   const [isEditingDiff, setIsEditingDiff] = useState(false);
   const [draftDiff, setDraftDiff] = useState('');
+
+  const [showGitModal, setShowGitModal] = useState(false);
+  const [patInput, setPatInput] = useState(githubConfig.token || '');
+  const [repoInput, setRepoInput] = useState(githubConfig.repo || 'NeuroFabric/neurofabric');
+  const [branchInput, setBranchInput] = useState(githubConfig.branch || 'main');
 
   const filteredQueue = proposals.filter((p) => {
     if (queueFilter === 'PENDING') return p.status === 'PENDING';
@@ -99,6 +122,16 @@ export function EmbassyPage() {
     setShowConfirm(false);
   };
 
+  const handleConnectGitHub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patInput.trim()) {
+      toast.error('Personal Access Token Required', { description: 'Create a GitHub PAT with "repo" scope.' });
+      return;
+    }
+    await saveGitHubConfig(patInput, repoInput, branchInput);
+    setShowGitModal(false);
+  };
+
   const declineReasons = [
     'False Positive RCA',
     'Blast Radius Too Wide',
@@ -110,44 +143,91 @@ export function EmbassyPage() {
 
   return (
     <div className="p-8 space-y-6 max-w-7xl font-sans">
-      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-bold text-white tracking-tight">
               Autonomous Embassy — GitOps Patch Review (HITL)
             </h1>
-            <InfoTooltip content="Human-in-the-Loop review for agent-proposed pull requests. Inspect diffs, verify AST security screenings, adjust canary traffic, and authorize merge." />
+            <InfoTooltip content="Human-in-the-Loop review for pull requests. Connect your actual GitHub repo via PAT to sync, screen, and merge real pull requests on github.com." />
           </div>
-          <p className="text-xs text-slate-300 mt-1">
-            Target Fleet: <span className="text-emerald-400 font-mono font-bold">github.com/NeuroFabric/infrastructure-fleet</span> • Branch: <span className="text-white font-mono">refs/heads/prod-cluster-us-east</span>
-          </p>
+
+          <div className="flex items-center space-x-3 mt-1 text-xs">
+            {githubConfig.isConnected ? (
+              <span className="flex items-center space-x-1.5 font-mono text-emerald-400 font-bold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>Live GitHub Sync:</span>
+                <a
+                  href={`https://github.com/${githubConfig.repo}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-white flex items-center space-x-1"
+                >
+                  <span>{githubConfig.repo}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <span className="text-slate-400">({githubConfig.branch})</span>
+              </span>
+            ) : (
+              <span className="text-slate-400 font-mono flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span>Mode: Local Simulation (No GitHub PAT Connected)</span>
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {githubConfig.isConnected ? (
+            <>
+              <button
+                onClick={() => syncGitHubPRs()}
+                disabled={githubConfig.isSyncing}
+                className="px-3 py-1.5 rounded-xl bg-[#121622] hover:bg-slate-800 border border-white/10 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${githubConfig.isSyncing ? 'animate-spin' : ''}`} />
+                <span>{githubConfig.isSyncing ? 'Syncing...' : 'Fetch Live GitHub PRs'}</span>
+              </button>
+              <button
+                onClick={disconnectGitHub}
+                className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 text-xs font-mono transition"
+              >
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setShowGitModal(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-400/50 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
+            >
+              <GitHubIcon className="w-3.5 h-3.5" />
+              <span>Connect Live GitHub Repo</span>
+            </button>
+          )}
+
           <button
             onClick={bulkApproveVerified}
             className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
           >
             <CheckCheck className="w-3.5 h-3.5" />
-            <span>Bulk Approve Verified</span>
+            <span>Bulk Approve</span>
           </button>
           <button
             onClick={bulkDeclineBlocked}
             className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
           >
             <X className="w-3.5 h-3.5" />
-            <span>Refuse All Blocked</span>
+            <span>Refuse Blocked</span>
           </button>
           <button
-            onClick={() => {
-              const newId = synthesizeProposal('order-service');
+            onClick={async () => {
+              const newId = await synthesizeProposal('order-service');
               setSelectedId(newId);
             }}
             className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Synthesize Patch</span>
+            <span>{githubConfig.isConnected ? 'Create Real GitHub PR' : 'Synthesize Patch'}</span>
           </button>
           <button
             onClick={resetProposals}
@@ -159,9 +239,87 @@ export function EmbassyPage() {
         </div>
       </div>
 
-      {/* 3-Pane Review Console */}
+      {showGitModal && (
+        <form
+          onSubmit={handleConnectGitHub}
+          className="p-6 rounded-2xl nf-card border border-emerald-400/50 space-y-4 animate-in fade-in duration-150"
+        >
+          <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex items-center space-x-2 font-mono text-xs font-bold text-white uppercase">
+              <GitHubIcon className="w-4 h-4 text-emerald-400" />
+              <span>Connect Live GitHub Repository for Actual PR Creation & Merges</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowGitModal(false)}
+              className="text-xs font-mono text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-300 leading-relaxed font-sans">
+            By supplying a GitHub Personal Access Token (classic with <code className="text-emerald-400">repo</code> scope or fine-grained with Pull Requests: Read & Write), the Embassy agent will fetch your actual repository pull requests, screen real diffs, and perform live merges on <code className="text-white">github.com</code>.
+          </p>
+
+          <div className="grid md:grid-cols-3 gap-4 font-mono text-xs">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">
+                GITHUB PERSONAL ACCESS TOKEN (PAT)
+              </label>
+              <div className="relative">
+                <Key className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="password"
+                  required
+                  value={patInput}
+                  onChange={(e) => setPatInput(e.target.value)}
+                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="w-full bg-[#05070B] border border-white/15 rounded-xl pl-9 pr-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">TARGET REPO (OWNER/REPO)</label>
+              <input
+                type="text"
+                required
+                value={repoInput}
+                onChange={(e) => setRepoInput(e.target.value)}
+                placeholder="NeuroFabric/neurofabric"
+                className="w-full bg-[#05070B] border border-white/15 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1">TARGET BRANCH</label>
+              <input
+                type="text"
+                required
+                value={branchInput}
+                onChange={(e) => setBranchInput(e.target.value)}
+                placeholder="main"
+                className="w-full bg-[#05070B] border border-white/15 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-emerald-400"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <span className="text-[10px] font-mono text-slate-500">
+              Tokens are stored client-side in localStorage and never logged to disk.
+            </span>
+            <button
+              type="submit"
+              className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-xs rounded-xl transition shadow-lg shadow-emerald-500/20"
+            >
+              Authenticate & Sync Real PRs
+            </button>
+          </div>
+        </form>
+      )}
+
       <div className="grid lg:grid-cols-12 gap-6">
-        {/* Left Pane (3 Cols): Proposal Queue */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between px-1">
             <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
@@ -198,7 +356,10 @@ export function EmbassyPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-slate-400 font-bold">PR #{prop.prNumber}</span>
+                    <span className="text-[10px] font-mono text-slate-400 font-bold flex items-center space-x-1">
+                      {prop.isRealGitHubPr && <GitHubIcon className="w-3 h-3 text-emerald-400" />}
+                      <span>PR #{prop.prNumber}</span>
+                    </span>
                     <span
                       className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
                         prop.status === 'APPROVED'
@@ -224,14 +385,23 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Center Pane (5 Cols): GitOps PR Header + AST Banner + Diff Editor */}
         <div className="lg:col-span-5 space-y-4">
-          {/* GitOps PR Metadata Header */}
           <div className="p-4 rounded-2xl nf-card space-y-2 font-mono text-xs">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <GitPullRequest className="w-4 h-4 text-emerald-400" />
                 <span className="text-white font-bold text-sm">Pull Request #{current.prNumber}</span>
+                {current.githubUrl && (
+                  <a
+                    href={current.githubUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-cyan-300 hover:text-white underline flex items-center space-x-1 ml-2"
+                  >
+                    <span>View on GitHub</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">
                 Commit: {current.commitSha}
@@ -336,7 +506,6 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Right Pane (4 Cols): RCA, Canary Traffic & Merge Authorization */}
         <div className="lg:col-span-4 space-y-4">
           <div className="p-6 rounded-2xl nf-card space-y-4">
             <div className="flex items-center justify-between">
@@ -378,7 +547,6 @@ export function EmbassyPage() {
               </div>
             </div>
 
-            {/* Progressive Canary Rollout Slider */}
             <div className="p-3.5 rounded-xl bg-[#090C14] border border-white/10 space-y-2 font-mono text-xs">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center space-x-1.5">
@@ -458,7 +626,7 @@ export function EmbassyPage() {
                 <div className="flex items-center justify-between text-amber-300 text-xs font-mono font-bold">
                   <span className="flex items-center space-x-1.5">
                     <AlertTriangle className="w-4 h-4" />
-                    <span>Confirm Production Rollout</span>
+                    <span>Confirm Production Merge</span>
                   </span>
                   <button
                     type="button"
@@ -480,7 +648,7 @@ export function EmbassyPage() {
                     onClick={handleApprove}
                     className="flex-1 py-2 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold rounded-lg text-xs font-mono transition"
                   >
-                    Confirm & Merge PR
+                    Confirm & Merge on GitHub
                   </button>
                   <button
                     onClick={() => setShowConfirm(false)}
@@ -546,7 +714,7 @@ export function EmbassyPage() {
                     }`}
                   >
                     <Check className="w-4 h-4" />
-                    <span>Authorize & Merge PR</span>
+                    <span>{githubConfig.isConnected ? 'Authorize & Merge on GitHub' : 'Authorize & Merge PR'}</span>
                   </button>
                   <button
                     onClick={() => setShowDeclineReasons(true)}
