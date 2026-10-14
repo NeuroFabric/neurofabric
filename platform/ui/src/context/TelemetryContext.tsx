@@ -1,6 +1,6 @@
 ﻿import { createContext, useContext, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { sanitizeXSS, checkClientRateLimit } from '../utils/security';
+import { sanitizeXSS, checkClientRateLimit, scrubIndianAndGlobalPII } from '../utils/security';
 
 export type TimeRange = '5m' | '15m' | '30m' | '1h' | '2h' | '5h' | 'custom';
 
@@ -1191,9 +1191,9 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
     const nowMs = Date.now();
     const xssResult = sanitizeXSS(rawMessage);
-    const secretRegex = /(Bearer\s+[A-Za-z0-9\-._~+/]+=*|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk_live_[A-Za-z0-9]+)/g;
-    const hasSecret = secretRegex.test(xssResult.clean);
-    const scrubbedMsg = xssResult.clean.replace(secretRegex, '[DLP:REDACTED_SECRET]');
+    const dlpResult = scrubIndianAndGlobalPII(xssResult.clean);
+    const hasSecret = dlpResult.scrubbed;
+    const scrubbedMsg = dlpResult.clean;
     const hasMaliciousCmd = /(curl\s+.*\|\s*(bash|sh)|rm\s+-rf)/i.test(rawMessage);
 
     const newLog: TelemetryLog = {
@@ -1660,3 +1660,5 @@ export function useTelemetry(): TelemetryContextType {
   if (!ctx) throw new Error('useTelemetry must be used within a TelemetryProvider');
   return ctx;
 }
+
+

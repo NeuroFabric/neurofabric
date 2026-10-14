@@ -34,7 +34,6 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
 
   const primaryNav = [
     { to: '/overview', label: 'Command Center', icon: LayoutDashboard },
-    { to: '/security', label: '55-Point Security Scan', icon: ShieldCheck, badge: '55/55 PASS' },
     { to: '/stress', label: 'Stress & QA Lab (15m)', icon: Flame, badge: stressBadge },
     { to: '/alerts', label: 'Live Alerts Stream', icon: Activity, badge: logs.length > 0 ? `${logs.length}` : undefined },
     { to: '/telemetry', label: 'Telemetry Explorer', icon: Table },
@@ -55,7 +54,9 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
     { to: '/topology', label: 'Cluster Topology', icon: Network, badge: 'LIVE SIM' },
   ];
 
+  // Placed THIRD LAST (right above Incident Desk & Future Ecosystem) as requested
   const secondaryNav = [
+    { to: '/security', label: 'Security & India Gov', icon: ShieldCheck, badge: 'DPDP/CERT' },
     { to: '/support', label: 'Incident Desk & Query', icon: LifeBuoy },
     { to: '/roadmap', label: 'Future Ecosystem', icon: Sparkles, badge: 'ROADMAP' },
   ];
@@ -89,7 +90,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
 
           <div className="p-3">
             <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-              Observability &amp; SecOps Mesh
+              Observability Mesh
             </div>
             <nav className="mt-1 space-y-1">
               {primaryNav.map((item) => {
@@ -134,7 +135,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
 
           <div className="p-3 pt-0">
             <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-              Ecosystem &amp; Support
+              Governance, Security &amp; Support
             </div>
             <nav className="mt-1 space-y-1">
               {secondaryNav.map((item) => {
@@ -174,7 +175,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
             <span>•</span>
             <NavLink to="/terms" className="hover:text-emerald-400">Terms</NavLink>
             <span>•</span>
-            <NavLink to="/security" className="hover:text-emerald-400">55 Controls</NavLink>
+            <NavLink to="/security" className="hover:text-emerald-400">DPDP/CERT-In</NavLink>
           </div>
           <NavLink
             to="/"
