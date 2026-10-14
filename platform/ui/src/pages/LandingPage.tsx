@@ -1,5 +1,7 @@
 ﻿import { useState, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTelemetry } from '../context/TelemetryContext';
+import { toast } from 'sonner';
 import { Logo } from '../components/common/Logo';
 import {
   ShieldCheck,
@@ -67,6 +69,15 @@ function Interactive3DCard({
 
 export function LandingPage() {
   const navigate = useNavigate();
+  const { isAuthenticated } = useTelemetry();
+  const goProtected = (targetPath: string) => {
+    if (!isAuthenticated) {
+      toast.info('Authentication Required', { description: 'Please sign in with Google or your provisioned corporate email first.' });
+      navigate('/login?redirect=' + encodeURIComponent(targetPath));
+    } else {
+      navigate(targetPath);
+    }
+  };
   const [simStep, setSimStep] = useState<number>(0);
 
   const simStages = [
@@ -144,7 +155,7 @@ export function LandingPage() {
             Sign In
           </button>
           <button
-            onClick={() => navigate('/overview')}
+            onClick={() => goProtected('/overview')}
             className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 text-slate-950 flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
           >
             <span>Launch Live Console</span>
@@ -175,14 +186,14 @@ export function LandingPage() {
 
         <div className="flex flex-wrap items-center justify-center gap-4 mt-8">
           <button
-            onClick={() => navigate('/overview')}
+            onClick={() => goProtected('/overview')}
             className="px-6 py-3.5 rounded-xl font-mono text-xs font-bold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 text-slate-950 flex items-center space-x-2 transition shadow-xl shadow-emerald-500/25"
           >
             <span>Enter Command Center</span>
             <ArrowRight className="w-4 h-4" />
           </button>
           <button
-            onClick={() => navigate('/integrations')}
+            onClick={() => goProtected('/integrations')}
             className="px-6 py-3.5 rounded-xl font-mono text-xs font-bold bg-[#11141D] border border-white/10 hover:border-white/30 text-slate-200 transition"
           >
             Connect Ingestion (REST / OTel)
@@ -413,7 +424,7 @@ export function LandingPage() {
                   <span>Step Pipeline</span>
                 </button>
                 <button
-                  onClick={() => navigate('/embassy')}
+                  onClick={() => goProtected('/embassy')}
                   className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-mono transition"
                 >
                   Open Live HITL Diff
@@ -582,14 +593,14 @@ export function LandingPage() {
           </div>
           <div className="flex items-center space-x-3">
             <button
-              onClick={() => navigate('/overview')}
+              onClick={() => goProtected('/overview')}
               className="px-6 py-3 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-mono font-bold text-xs flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
             >
               <span>Launch Live Console</span>
               <ArrowRight className="w-4 h-4" />
             </button>
             <button
-              onClick={() => navigate('/integrations')}
+              onClick={() => goProtected('/integrations')}
               className="px-5 py-3 rounded-xl bg-[#090C14] hover:bg-slate-800 border border-white/10 text-slate-200 font-mono font-bold text-xs transition"
             >
               View Ingestion APIs
@@ -600,4 +611,6 @@ export function LandingPage() {
     </div>
   );
 }
+
+
 

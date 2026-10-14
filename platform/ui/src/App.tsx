@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage';
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { SecurityPosturePage } from './pages/SecurityPosturePage';
+import { AccessManagementPage } from './pages/AccessManagementPage';
 import { Sidebar } from './components/navigation/Sidebar';
 import { Topbar } from './components/navigation/Topbar';
 import { CommandPalette } from './components/navigation/CommandPalette';
@@ -31,11 +32,11 @@ const pageVariants: any = {
   exit: { opacity: 0, y: -8, filter: 'blur(3px)', transition: { duration: 0.15, ease: 'easeIn' } },
 };
 
-// Item #1 & #55: Protect Admin Routes with RBAC + MFA Guard
+// Strict Zero-Trust Route Guard: Requires explicit login completion (isAuthenticated === true)
 function RequireAdminAuth({ children }: { children: ReactNode }) {
-  const { user } = useTelemetry();
+  const { isAuthenticated, user } = useTelemetry();
   const location = useLocation();
-  if (!user || !user.mfaVerified || !user.emailVerified) {
+  if (!isAuthenticated || !user || !user.mfaVerified || !user.emailVerified) {
     return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname)}`} replace />;
   }
   return <>{children}</>;
@@ -76,6 +77,7 @@ function AuthenticatedWorkspace() {
               >
                 <Routes location={location}>
                   <Route path="/overview" element={<OverviewPage />} />
+                  <Route path="/iam" element={<AccessManagementPage />} />
                   <Route path="/security" element={<SecurityPosturePage />} />
                   <Route path="/stress" element={<StressTestPage />} />
                   <Route path="/alerts" element={<AlertsPage />} />
@@ -87,7 +89,6 @@ function AuthenticatedWorkspace() {
                   <Route path="/topology" element={<TopologyPage />} />
                   <Route path="/support" element={<SupportPage />} />
                   <Route path="/roadmap" element={<RoadmapPage />} />
-                  {/* Item #15: Custom 404 Page */}
                   <Route path="*" element={<NotFoundPage />} />
                 </Routes>
               </motion.div>

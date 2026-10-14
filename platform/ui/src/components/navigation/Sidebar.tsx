@@ -12,6 +12,7 @@ import {
   Table,
   Flame,
   Radio,
+  Users,
   LogOut,
   X,
 } from 'lucide-react';
@@ -24,8 +25,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
-  const { trippedCircuits, logs, proposals, stress, logoutUser } = useTelemetry();
+  const { trippedCircuits, logs, proposals, accessRequests, stress, logoutUser } = useTelemetry();
   const pendingCount = proposals.filter((p) => p.status === 'PENDING').length;
+  const pendingReqCount = accessRequests.filter((r) => r.status === 'PENDING').length;
 
   const remSec = Math.max(0, stress.totalDurationSec - stress.elapsedSec);
   const stressBadge = stress.active
@@ -34,6 +36,12 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
 
   const primaryNav = [
     { to: '/overview', label: 'Command Center', icon: LayoutDashboard },
+    {
+      to: '/iam',
+      label: 'User Access Portal (IAM)',
+      icon: Users,
+      badge: pendingReqCount > 0 ? `${pendingReqCount} REQ` : 'RBAC',
+    },
     { to: '/stress', label: 'Stress & QA Lab (15m)', icon: Flame, badge: stressBadge },
     { to: '/alerts', label: 'Live Alerts Stream', icon: Activity, badge: logs.length > 0 ? `${logs.length}` : undefined },
     { to: '/telemetry', label: 'Telemetry Explorer', icon: Table },
@@ -54,7 +62,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
     { to: '/topology', label: 'Cluster Topology', icon: Network, badge: 'LIVE SIM' },
   ];
 
-  // Placed THIRD LAST (right above Incident Desk & Future Ecosystem) as requested
+  // Security & India Gov remains third-last as requested
   const secondaryNav = [
     { to: '/security', label: 'Security & India Gov', icon: ShieldCheck, badge: 'DPDP/CERT' },
     { to: '/support', label: 'Incident Desk & Query', icon: LifeBuoy },
@@ -90,7 +98,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
 
           <div className="p-3">
             <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-              Observability Mesh
+              Observability &amp; IAM Mesh
             </div>
             <nav className="mt-1 space-y-1">
               {primaryNav.map((item) => {
@@ -115,7 +123,7 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
                     {item.badge && (
                       <span
                         className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
-                          item.badge.includes('LIVE')
+                          item.badge.includes('LIVE') || item.badge.includes('REQ')
                             ? 'bg-amber-500/20 text-amber-300 border border-amber-400 animate-pulse'
                             : item.badge.includes('TRIPPED')
                             ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
@@ -178,12 +186,12 @@ export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
             <NavLink to="/security" className="hover:text-emerald-400">DPDP/CERT-In</NavLink>
           </div>
           <NavLink
-            to="/"
+            to="/login"
             onClick={logoutUser}
             className="w-full py-2 px-3 rounded-xl text-xs font-medium text-slate-300 hover:text-rose-300 hover:bg-rose-500/15 transition flex items-center justify-center space-x-2 border border-white/5 hover:border-rose-500/30"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Purge RAM &amp; Exit</span>
+            <span>Lock Session &amp; Sign Out</span>
           </NavLink>
         </div>
       </aside>
