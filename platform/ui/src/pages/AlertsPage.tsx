@@ -3,16 +3,39 @@ import { useNavigate } from 'react-router-dom';
 import { useTelemetry } from '../context/TelemetryContext';
 import { Search, Pause, Play, Trash2, ChevronRight, ChevronDown, ShieldAlert, Wrench } from 'lucide-react';
 import { InfoTooltip } from '../components/common/Tooltip';
+import { toast } from 'sonner';
 
 export function AlertsPage() {
   const navigate = useNavigate();
   const { logs, clearLogs, synthesizeProposal, globalRange, customMinutes } = useTelemetry();
   const [paused, setPaused] = useState(false);
+  const [frozenLogs, setFrozenLogs] = useState<typeof logs | null>(null);
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'INFO' | 'WARNING' | 'CRITICAL'>('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(logs[0]?.id || null);
 
-  const filtered = logs.filter((l) => {
+  const activeLogs = paused && frozenLogs ? frozenLogs : logs;
+  const bufferedCount = paused && frozenLogs ? Math.max(0, logs.length - frozenLogs.length) : 0;
+
+  const handleTogglePause = () => {
+    if (!paused) {
+      setFrozenLogs([...logs]);
+      setPaused(true);
+      toast.info('Live Tail Paused', { description: 'Incoming frames will queue in background without shifting view.' });
+    } else {
+      setFrozenLogs(null);
+      setPaused(false);
+      toast.success('Live Tail Resumed', { description: 'Display synchronized with live EventBridge buffer.' });
+    }
+  };
+
+  const handleClear = () => {
+    clearLogs();
+    setFrozenLogs([]);
+    toast.info('Buffer Cleared', { description: 'Emptied all telemetry frames in local ring buffer.' });
+  };
+
+  const filtered = activeLogs.filter((l) => {
     const matchesSev = severityFilter === 'ALL' || l.severity === severityFilter;
     const matchesSearch =
       l.service.toLowerCase().includes(search.toLowerCase()) ||
@@ -26,10 +49,10 @@ export function AlertsPage() {
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-bold text-white tracking-tight">Live Alerts Stream</h1>
-            <InfoTooltip content="Click any alert row to expand its raw vs. DLP-scrubbed JSON envelope and escalate directly to Patch Review." />
+            <InfoTooltip content="Real-time EventBridge feed. Clicking Pause freezes the visible list while incoming frames are held in a holding queue." />
           </div>
           <p className="text-xs text-slate-300 mt-1">
-            Real-time EventBridge feed • Active Horizon:{' '}
+            Real-time EventBridge feed • Horizon:{' '}
             <span className="text-emerald-400 font-mono font-bold">
               {globalRange === 'custom' ? `${customMinutes}m` : globalRange}
             </span>{' '}
@@ -39,10 +62,10 @@ export function AlertsPage() {
 
         <div className="flex items-center space-x-2.5">
           <button
-            onClick={() => setPaused(!paused)}
+            onClick={handleTogglePause}
             className={`px-3.5 py-2 rounded-xl text-xs font-mono font-bold border flex items-center space-x-1.5 transition ${
               paused
-                ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-lg shadow-amber-500/10'
                 : 'bg-[#121622] border-white/10 text-slate-200 hover:text-white'
             }`}
           >
@@ -50,7 +73,7 @@ export function AlertsPage() {
             <span>{paused ? 'Resume Live Tail' : 'Pause Live Tail'}</span>
           </button>
           <button
-            onClick={clearLogs}
+            onClick={handleClear}
             className="px-3.5 py-2 rounded-xl bg-[#121622] hover:bg-rose-500/20 border border-white/10 hover:border-rose-500/40 text-xs font-mono text-slate-300 hover:text-rose-200 flex items-center space-x-1.5 transition"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -58,6 +81,22 @@ export function AlertsPage() {
           </button>
         </div>
       </div>
+
+      {/* Paused Live Tail Banner */}
+      {paused && (
+        <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-400/50 flex items-center justify-between text-xs font-mono text-amber-300 animate-in fade-in duration-150">
+          <div className="flex items-center space-x-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+            <span>STREAM PAUSED — {bufferedCount} new telemetry frames buffered in background.</span>
+          </div>
+          <button
+            onClick={handleTogglePause}
+            className="px-3 py-1 rounded-lg bg-amber-400 text-slate-950 font-bold hover:bg-amber-300"
+          >
+            Catch Up & Resume
+          </button>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="p-3.5 rounded-2xl nf-card flex flex-wrap items-center justify-between gap-4">

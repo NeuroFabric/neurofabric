@@ -4,33 +4,28 @@ import { useTelemetry, type TimeRange, type TimeSeriesPoint } from '../../contex
 import { InfoTooltip } from '../common/Tooltip';
 
 export function LiveThroughputChart() {
-  const { series, globalRange, setGlobalRange, customMinutes, setCustomMinutes } = useTelemetry();
+  const {
+    series,
+    globalRange,
+    setGlobalRange,
+    customMinutes,
+    setCustomMinutes,
+    isStreamPaused,
+    toggleStreamPause,
+  } = useTelemetry();
+
   const [metricTab, setMetricTab] = useState<'throughput' | 'latency' | 'errors'>('throughput');
   const [isCustomOpen, setIsCustomOpen] = useState(false);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [paused, setPaused] = useState(false);
-  const [frozenSeries, setFrozenSeries] = useState<TimeSeriesPoint[] | null>(null);
-
-  const activeSeries = paused && frozenSeries ? frozenSeries : series;
-
-  const togglePause = () => {
-    if (!paused) {
-      setFrozenSeries(series);
-      setPaused(true);
-    } else {
-      setFrozenSeries(null);
-      setPaused(false);
-    }
-  };
 
   const { pathD, areaD, p50PathD, coords, minVal, maxVal, currentVal, avgVal, peakVal } = useMemo(() => {
-    if (activeSeries.length === 0)
+    if (series.length === 0)
       return { pathD: '', areaD: '', p50PathD: '', coords: [], minVal: 0, maxVal: 1, currentVal: 0, avgVal: 0, peakVal: 0 };
 
     const getVal = (p: TimeSeriesPoint) =>
       metricTab === 'throughput' ? p.throughput : metricTab === 'latency' ? p.latencyP99 : p.errorRate;
 
-    const vals = activeSeries.map(getVal);
+    const vals = series.map(getVal);
     const min = Math.floor(Math.min(...vals) * 0.85);
     const max = Math.ceil(Math.max(...vals) * 1.15) || 1;
     const peak = Number(Math.max(...vals).toFixed(2));
@@ -39,9 +34,9 @@ export function LiveThroughputChart() {
 
     const width = 800;
     const height = 165;
-    const step = width / (activeSeries.length - 1 || 1);
+    const step = width / (series.length - 1 || 1);
 
-    const pts = activeSeries.map((p, idx) => {
+    const pts = series.map((p, idx) => {
       const v = getVal(p);
       const x = idx * step;
       const y = height - ((v - min) / (max - min || 1)) * (height - 30) - 15;
@@ -58,7 +53,7 @@ export function LiveThroughputChart() {
 
     let p50D = '';
     if (metricTab === 'latency') {
-      const p50Pts = activeSeries.map((p, idx) => {
+      const p50Pts = series.map((p, idx) => {
         const x = idx * step;
         const y = height - ((p.latencyP50 - min) / (max - min || 1)) * (height - 30) - 15;
         return { x, y };
@@ -85,16 +80,15 @@ export function LiveThroughputChart() {
       avgVal: avg,
       peakVal: peak,
     };
-  }, [activeSeries, metricTab]);
+  }, [series, metricTab]);
 
   const ranges: TimeRange[] = ['5m', '15m', '30m', '1h', '2h', '5h'];
   const hoveredCoord = hoveredIdx !== null && coords[hoveredIdx] ? coords[hoveredIdx] : null;
   const strokeColor = metricTab === 'throughput' ? '#10B981' : metricTab === 'latency' ? '#A855F7' : '#F43F5E';
 
-  // Guaranteed 6 evenly spaced X-axis timestamps spanning the entire selected window
   const xLabels = useMemo(() => {
-    if (activeSeries.length < 6) return [];
-    const lastIdx = activeSeries.length - 1;
+    if (series.length < 6) return [];
+    const lastIdx = series.length - 1;
     const indices = [
       0,
       Math.round(lastIdx * 0.2),
@@ -103,14 +97,13 @@ export function LiveThroughputChart() {
       Math.round(lastIdx * 0.8),
       lastIdx,
     ];
-    return indices.map((idx) => activeSeries[idx]?.timestamp || '');
-  }, [activeSeries]);
+    return indices.map((idx) => series[idx]?.timestamp || '');
+  }, [series]);
 
-  const spanBanner = activeSeries[activeSeries.length - 1]?.windowSpanLabel || '';
+  const spanBanner = series[series.length - 1]?.windowSpanLabel || '';
 
   return (
     <div className="grid lg:grid-cols-3 gap-5">
-      {/* Main Waveform Card */}
       <div className="lg:col-span-2 p-6 rounded-2xl nf-card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
@@ -147,15 +140,15 @@ export function LiveThroughputChart() {
 
           <div className="flex items-center space-x-2">
             <button
-              onClick={togglePause}
+              onClick={toggleStreamPause}
               className={`px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold border flex items-center space-x-1 transition ${
-                paused
+                isStreamPaused
                   ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
                   : 'bg-[#121622] border-white/10 text-slate-300 hover:text-white'
               }`}
             >
-              {paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
-              <span>{paused ? 'Resume' : 'Freeze'}</span>
+              {isStreamPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+              <span>{isStreamPaused ? 'Resume' : 'Freeze'}</span>
             </button>
 
             <div className="flex items-center bg-[#121622] p-1 rounded-xl border border-white/10 text-[11px] font-mono">
@@ -187,7 +180,6 @@ export function LiveThroughputChart() {
           </div>
         </div>
 
-        {/* Synchronized Horizon Bar */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
           <div className="text-[11px] font-mono text-slate-400">
             Active Span: <span className="text-emerald-300 font-bold">{spanBanner}</span>
@@ -250,7 +242,6 @@ export function LiveThroughputChart() {
           </div>
         )}
 
-        {/* Interactive SVG Canvas */}
         <div className="relative h-52 w-full bg-[#05070B] rounded-xl border border-white/10 p-3 overflow-hidden select-none">
           <div className="absolute left-3 top-3 bottom-8 flex flex-col justify-between text-[10px] font-mono text-slate-400 pointer-events-none z-10">
             <span>{maxVal}</span>
@@ -366,7 +357,6 @@ export function LiveThroughputChart() {
             })}
           </svg>
 
-          {/* True Time Horizon X-Axis */}
           <div className="flex items-center justify-between px-8 pt-1 text-[10px] font-mono text-slate-300 border-t border-white/10">
             {xLabels.map((lbl, i) => (
               <span key={i} className={i === xLabels.length - 1 ? 'text-emerald-400 font-bold' : ''}>
@@ -377,7 +367,6 @@ export function LiveThroughputChart() {
         </div>
       </div>
 
-      {/* Dedup & DLP Suppression Histogram */}
       <div className="p-6 rounded-2xl nf-card flex flex-col justify-between space-y-4">
         <div>
           <div className="flex items-center justify-between">
@@ -392,14 +381,14 @@ export function LiveThroughputChart() {
           <p className="text-[11px] text-slate-300 font-mono mt-1">
             Horizon: <span className="text-amber-400 font-bold">{globalRange === 'custom' ? `${customMinutes}m` : globalRange}</span> • Collapsed:{' '}
             <span className="text-emerald-400 font-bold">
-              {activeSeries.reduce((acc, p) => acc + p.suppressed, 0)} evts
+              {series.reduce((acc, p) => acc + p.suppressed, 0)} evts
             </span>
           </p>
         </div>
 
         <div className="h-52 bg-[#05070B] rounded-xl border border-white/10 p-3 flex flex-col justify-end">
           <div className="flex items-end justify-between h-36 space-x-1.5 pt-6">
-            {activeSeries.slice(-16).map((pt, i) => {
+            {series.slice(-16).map((pt, i) => {
               const heightPct = Math.min(100, Math.max(15, Math.round((pt.suppressed / 38) * 100)));
               return (
                 <div key={i} className="flex-1 flex flex-col items-center group relative h-full justify-end cursor-pointer">
@@ -419,8 +408,8 @@ export function LiveThroughputChart() {
             })}
           </div>
           <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-2 border-t border-white/10 mt-2">
-            <span>{activeSeries[Math.max(0, activeSeries.length - 16)]?.timestamp}</span>
-            <span className="text-emerald-400 font-bold">Now: {activeSeries[activeSeries.length - 1]?.suppressed}x</span>
+            <span>{series[Math.max(0, series.length - 16)]?.timestamp}</span>
+            <span className="text-emerald-400 font-bold">Now: {series[series.length - 1]?.suppressed}x</span>
           </div>
         </div>
       </div>

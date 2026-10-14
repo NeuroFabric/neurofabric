@@ -2,7 +2,6 @@
 import { toast } from 'sonner';
 
 export type TimeRange = '5m' | '15m' | '30m' | '1h' | '2h' | '5h' | 'custom';
-export type UITheme = 'apple-dark' | 'aws-midnight' | 'daylight';
 
 export interface OperatorUser {
   name: string;
@@ -14,6 +13,10 @@ export interface OperatorUser {
 
 export interface PatchProposal {
   taskId: string;
+  prNumber: number;
+  repository: string;
+  targetBranch: string;
+  commitSha: string;
   createdAt: string;
   title: string;
   target: string;
@@ -24,6 +27,7 @@ export interface PatchProposal {
   astStatus: 'PASS' | 'REJECT';
   astMessage: string;
   status: 'PENDING' | 'APPROVED' | 'DECLINED';
+  canaryPercentage: number;
   rcaSummary: string;
   diff: string[];
   declineReason?: string;
@@ -116,13 +120,25 @@ export interface StressTestState {
   checks: FeatureCheckItem[];
 }
 
+export interface IngestionConnector {
+  id: string;
+  name: string;
+  protocol: 'OpenTelemetry' | 'REST Webhook' | 'Prometheus' | 'FluentBit';
+  status: 'CONNECTED' | 'STANDBY';
+  endpoint: string;
+  lastPing: string;
+  eventsCount: number;
+}
+
 export interface TelemetryContextType {
-  theme: UITheme;
-  setTheme: (t: UITheme) => void;
   user: OperatorUser;
   loginUser: (u: OperatorUser) => void;
+  apiKey: string;
+  rotateApiKey: () => void;
   status: string;
   latencyMs: number;
+  isStreamPaused: boolean;
+  toggleStreamPause: () => void;
   globalRange: TimeRange;
   setGlobalRange: (r: TimeRange) => void;
   customMinutes: number;
@@ -141,9 +157,11 @@ export interface TelemetryContextType {
   bulkDeclineBlocked: () => void;
   reopenPR: (taskId: string) => void;
   rollbackPR: (taskId: string) => void;
+  setCanaryStage: (taskId: string, pct: number) => void;
   updateProposalDiff: (taskId: string, newDiffLines: string[]) => void;
   synthesizeProposal: (service?: string, summary?: string, forceMalicious?: boolean) => string;
   resetProposals: () => void;
+  connectors: IngestionConnector[];
   ingestCustomPayload: (service: string, severity: 'INFO' | 'WARNING' | 'CRITICAL', rawMessage: string) => void;
   ledger: LedgerItem[];
   merkleStatus: MerkleStatus;
@@ -156,34 +174,24 @@ export interface TelemetryContextType {
   resetStressTest: () => void;
 }
 
-const INITIAL_CHECKS: FeatureCheckItem[] = [
-  { id: 'chk-1', module: 'Ingress & EventBridge', feature: 'Sub-85ms SSE Stream & Ring Buffer Cap (200 max)', status: 'VERIFIED', opsCount: 1420, lastLatencyMs: 1.8, assertion: 'DOM buffer capped <= 200 nodes; 0 memory leaks' },
-  { id: 'chk-2', module: 'In-Flight DLP Engine', feature: 'Regex Secret & Bearer Token Scrubbing', status: 'VERIFIED', opsCount: 84, lastLatencyMs: 1.1, assertion: '100% of AWS/PAT/Bearer secrets replaced with [DLP:REDACTED_SECRET]' },
-  { id: 'chk-3', module: 'Sliding Dedup Window', feature: '60s Burst Collapse & Histogram Sync', status: 'VERIFIED', opsCount: 612, lastLatencyMs: 0.8, assertion: 'Duplicate alert storms collapsed at >90% efficiency' },
-  { id: 'chk-4', module: 'Epoch Time-Series Engine', feature: 'True Multi-Horizon Resampling (5m/15m/30m/1h/2h/5h/Custom)', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 1.4, assertion: 'X-axis and buckets accurately span full selected time horizon' },
-  { id: 'chk-5', module: 'Anti-Flapping Circuits', feature: '3-Strike Isolation (HTTP 423), Half-Open & Level 5 Reset', status: 'VERIFIED', opsCount: 19, lastLatencyMs: 2.1, assertion: '3 strikes in 60s deterministically locks service mutations' },
-  { id: 'chk-6', module: 'AST Diff Security Gate', feature: 'Live Syntax Screening & Shell Escape Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.6, assertion: 'Prohibited primitives (curl | bash, rm -rf) blocked pre-HITL' },
-  { id: 'chk-7', module: 'Autonomous Embassy (HITL)', feature: 'Auto-Synthesis from Criticals, Bulk Triage & Rollback', status: 'VERIFIED', opsCount: 28, lastLatencyMs: 2.4, assertion: 'Critical alerts auto-synthesize HITL patches & seal Merkle leaves' },
-  { id: 'chk-8', module: 'Merkle Audit Ledger', feature: 'WebCrypto SHA-256 Pairwise Chain Verification', status: 'VERIFIED', opsCount: 128, lastLatencyMs: 2.2, assertion: 'Client-side crypto.subtle SHA-256 matches sovereign root' },
-  { id: 'chk-9', module: 'Cluster Topology DAG', feature: '8-Stage Closed-Loop Pipeline & Live Node Diagnostics', status: 'VERIFIED', opsCount: 510, lastLatencyMs: 1.5, assertion: 'State machine transitions across all 8 stages without stall' },
-  { id: 'chk-10', module: 'Telemetry Explorer', feature: 'All-Service Filter, Live Payload Ingestor & CSV Export', status: 'VERIFIED', opsCount: 95, lastLatencyMs: 1.9, assertion: 'CSV export escapes quotes and preserves DLP markers' },
-  { id: 'chk-11', module: 'Command Palette (⌘K)', feature: 'Keyboard Navigation & Zero-Lag Action Dispatch', status: 'VERIFIED', opsCount: 64, lastLatencyMs: 0.5, assertion: 'Arrow keys, Enter, and Esc operate with 0 console warnings' },
-  { id: 'chk-12', module: 'RBAC & Multi-Theme Engine', feature: 'Cupertino/AWS/Daylight Themes & Clearance Enforcement', status: 'VERIFIED', opsCount: 12, lastLatencyMs: 0.9, assertion: 'Operator identity & theme persist and sign ledger rows' },
-];
-
 const INITIAL_PROPOSALS: PatchProposal[] = [
   {
     taskId: 'task-auth-gw-892',
+    prNumber: 1042,
+    repository: 'github.com/NeuroFabric/infrastructure-fleet',
+    targetBranch: 'refs/heads/prod-cluster-us-east',
+    commitSha: '9f86d081',
     createdAt: new Date(Date.now() - 180000).toISOString(),
     title: 'Pool Starvation Remediation',
     target: 'deployments/auth-gateway.yaml',
     service: 'auth-gateway',
     severity: 'HIGH',
     confidence: 96,
-    blastRadius: 'CONTAINED (1 POD)',
+    blastRadius: 'CONTAINED (1 POD REPLICA)',
     astStatus: 'PASS',
-    astMessage: 'AST Gate Verified: 0 dangerous shell primitives or curl pipes detected across 24 syntax nodes.',
+    astMessage: 'AST Gate Verified: 0 prohibited shell execution primitives or curl pipes across 24 syntax nodes.',
     status: 'PENDING',
+    canaryPercentage: 10,
     rcaSummary:
       'Agent identified recurring upstream HTTP 504 gateway timeouts triggered by connection pool exhaustion (92/100 active). Increasing MAX_IDLE_CONNS from 10 to 50 with a 1024Mi memory ceiling stabilizes P99 latency.',
     diff: [
@@ -207,6 +215,10 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
   {
     taskId: 'task-malicious-patch-401',
+    prNumber: 1043,
+    repository: 'github.com/NeuroFabric/infrastructure-fleet',
+    targetBranch: 'refs/heads/prod-cluster-us-east',
+    commitSha: '4b227777',
     createdAt: new Date(Date.now() - 120000).toISOString(),
     title: 'Rogue Remote Code Ingestion',
     target: 'scripts/billing-sync-job.sh',
@@ -217,6 +229,7 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
     astStatus: 'REJECT',
     astMessage: 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell pipe primitive [curl | bash] flagged on line 8.',
     status: 'PENDING',
+    canaryPercentage: 0,
     rcaSummary:
       'Prompt-injected upstream telemetry attempted to coerce the remediation agent into fetching an unverified external shell script during billing database reconciliation. Deterministically blocked by AST Gate.',
     diff: [
@@ -233,16 +246,21 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
   {
     taskId: 'task-payment-retry-304',
+    prNumber: 1044,
+    repository: 'github.com/NeuroFabric/infrastructure-fleet',
+    targetBranch: 'refs/heads/prod-cluster-us-east',
+    commitSha: '5e884898',
     createdAt: new Date(Date.now() - 95000).toISOString(),
     title: 'Exponential Backoff & Jitter Clamp',
     target: 'services/payment-worker/config.json',
     service: 'flapping-payment-worker',
     severity: 'HIGH',
     confidence: 94,
-    blastRadius: 'CONTAINED',
+    blastRadius: 'CONTAINED (1 SERVICE)',
     astStatus: 'PASS',
     astMessage: 'AST Gate Verified: Pure JSON configuration mutation. Zero executable primitives.',
     status: 'PENDING',
+    canaryPercentage: 25,
     rcaSummary:
       'Flapping payment worker tripped the 3-strike circuit breaker due to zero-jitter retry storms against the downstream clearing house. Adding 250ms exponential backoff prevents cascade lockouts.',
     diff: [
@@ -259,6 +277,10 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
   {
     taskId: 'task-order-dlq-519',
+    prNumber: 1045,
+    repository: 'github.com/NeuroFabric/infrastructure-fleet',
+    targetBranch: 'refs/heads/prod-cluster-us-east',
+    commitSha: '30340871',
     createdAt: new Date(Date.now() - 45000).toISOString(),
     title: 'Dead-Letter Queue Partition Isolation',
     target: 'deployments/order-service-consumer.yaml',
@@ -269,6 +291,7 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
     astStatus: 'PASS',
     astMessage: 'AST Gate Verified: Declarative Kubernetes manifest update passed policy check.',
     status: 'PENDING',
+    canaryPercentage: 10,
     rcaSummary:
       'Poison-pill message batch in order-service caused repeated consumer restarts. Isolating poisoned offset into dedicated DLQ partition restores nominal throughput.',
     diff: [
@@ -279,30 +302,6 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
       '+  dlqEnabled: true',
       '+  maxPoisonRetries: 2',
       '+  partitionIsolationMode: "strict"',
-    ],
-  },
-  {
-    taskId: 'task-egress-ratelimit-602',
-    createdAt: new Date(Date.now() - 20000).toISOString(),
-    title: 'DLP Header Scrubber & Token Bucket Clamp',
-    target: 'gateway/egress-payments-filter.yaml',
-    service: 'egress-payments-api',
-    severity: 'CRITICAL',
-    confidence: 98,
-    blastRadius: 'CONTAINED (EDGE)',
-    astStatus: 'PASS',
-    astMessage: 'AST Gate Verified: Envoy filter configuration contains 0 shell commands.',
-    status: 'PENDING',
-    rcaSummary:
-      'Detected outbound Authorization header leakage on egress-payments-api. Enforces strict regex token redaction prior to upstream forwarding.',
-    diff: [
-      '--- a/gateway/egress-payments-filter.yaml',
-      '+++ b/gateway/egress-payments-filter.yaml',
-      '@@ -9,3 +9,6 @@ filters:',
-      '   - name: envoy.filters.http.dlp_scrubber',
-      '+    strictHeaderRedaction: true',
-      '+    redactPatterns: ["Bearer ", "AKIA", "ghp_"]',
-      '+    rateLimitRps: 500',
     ],
   },
 ];
@@ -351,6 +350,45 @@ const INITIAL_CIRCUITS: ServiceCircuitState[] = [
     latencyMs: 46,
     errorRate: 1.45,
     history: [20, 28, 62, 45, 38, 72, 54, 49, 66, 58, 64, 70],
+  },
+];
+
+const INITIAL_CONNECTORS: IngestionConnector[] = [
+  {
+    id: 'conn-1',
+    name: 'OpenTelemetry gRPC/HTTP Exporter',
+    protocol: 'OpenTelemetry',
+    status: 'CONNECTED',
+    endpoint: 'otel.neurofabric.io:4317',
+    lastPing: '3s ago',
+    eventsCount: 42180,
+  },
+  {
+    id: 'conn-2',
+    name: 'Standard Edge REST Ingestion API',
+    protocol: 'REST Webhook',
+    status: 'CONNECTED',
+    endpoint: 'https://neurofabric-backend.onrender.com/api/v1/telemetry',
+    lastPing: '1s ago',
+    eventsCount: 18450,
+  },
+  {
+    id: 'conn-3',
+    name: 'Prometheus AlertManager Webhook',
+    protocol: 'Prometheus',
+    status: 'CONNECTED',
+    endpoint: 'https://neurofabric-backend.onrender.com/api/v1/alerts/prometheus',
+    lastPing: '8s ago',
+    eventsCount: 9240,
+  },
+  {
+    id: 'conn-4',
+    name: 'Kubernetes FluentBit DaemonSet',
+    protocol: 'FluentBit',
+    status: 'STANDBY',
+    endpoint: 'fluentbit.prod-k8s.internal:2020',
+    lastPing: '1m ago',
+    eventsCount: 3120,
   },
 ];
 
@@ -409,7 +447,7 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
 
     const matching = history.filter((s) => s.epochMs >= bucketStart && s.epochMs <= bucketEnd);
 
-    let tp = 22.4;
+    let tp = 24.2;
     let p50 = 12.5;
     let p99 = 24.0;
     let err = 0.08;
@@ -458,30 +496,6 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
 const TelemetryContext = createContext<TelemetryContextType | undefined>(undefined);
 
 export function TelemetryProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<UITheme>(() => {
-    try {
-      const saved = localStorage.getItem('nf_ui_theme') as UITheme;
-      if (saved) return saved;
-    } catch {
-      // ignore
-    }
-    return 'apple-dark';
-  });
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem('nf_ui_theme', theme);
-    } catch {
-      // ignore
-    }
-  }, [theme]);
-
-  const setTheme = (t: UITheme) => {
-    setThemeState(t);
-    toast.info(`Theme Switched: ${t === 'apple-dark' ? 'Cupertino Pro Dark' : t === 'aws-midnight' ? 'AWS Ops Midnight' : 'Executive Daylight'}`);
-  };
-
   const [user, setUser] = useState<OperatorUser>(() => {
     try {
       const saved = localStorage.getItem('nf_operator_user');
@@ -498,14 +512,32 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     };
   });
 
+  const [apiKey, setApiKey] = useState('nf_live_sec_8f92c10a44e9182390a1bc');
+  const rotateApiKey = () => {
+    const fresh = 'nf_live_sec_' + Array.from(crypto.getRandomValues(new Uint8Array(12)))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+    setApiKey(fresh);
+    toast.success('Ingestion API Key Rotated', { description: `New Bearer Token: ${fresh.slice(0, 16)}...` });
+  };
+
   const historyRef = useRef<RawSample[]>(createSixHourHistory());
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [status, setStatus] = useState<'LIVE EDGE' | 'STANDALONE'>('STANDALONE');
   const [latencyMs, setLatencyMs] = useState(12);
+  const [isStreamPaused, setIsStreamPaused] = useState(false);
   const [globalRange, setGlobalRange] = useState<TimeRange>('15m');
   const [customMinutes, setCustomMinutes] = useState<number>(45);
   const [proposals, setProposals] = useState<PatchProposal[]>(INITIAL_PROPOSALS);
   const [serviceCircuits, setServiceCircuits] = useState<ServiceCircuitState[]>(INITIAL_CIRCUITS);
+  const [connectors, setConnectors] = useState<IngestionConnector[]>(INITIAL_CONNECTORS);
+
+  const toggleStreamPause = () => {
+    setIsStreamPaused((prev) => {
+      const next = !prev;
+      toast.info(next ? 'Live Telemetry Stream Paused' : 'Live Telemetry Stream Resumed');
+      return next;
+    });
+  };
 
   const [ledger, setLedger] = useState<LedgerItem[]>([
     {
@@ -551,11 +583,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     circuitTripsCount: 3,
     astBlocksCount: 12,
     merkleVerificationsCount: 128,
-    proposalsSynthesizedCount: 5,
+    proposalsSynthesizedCount: 4,
     peakThroughput: 34.8,
     peakLatencyP99: 46.2,
     heapEstimateMb: 42.4,
-    checks: INITIAL_CHECKS,
+    checks: [],
   });
 
   const [logs, setLogs] = useState<TelemetryLog[]>([
@@ -637,8 +669,16 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const synthesizeProposal = (service = 'order-service', summary?: string, forceMalicious = false): string => {
     const id = `task-${service.split('-')[0]}-${Math.floor(100 + Math.random() * 899)}`;
+    const prNum = Math.floor(1050 + Math.random() * 400);
+    const sha = Array.from(crypto.getRandomValues(new Uint8Array(4)))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+
     const newProp: PatchProposal = {
       taskId: id,
+      prNumber: prNum,
+      repository: 'github.com/NeuroFabric/infrastructure-fleet',
+      targetBranch: 'refs/heads/prod-cluster-us-east',
+      commitSha: sha,
       createdAt: new Date().toISOString(),
       title: forceMalicious
         ? `Adversarial Diff Intercepted: ${service}`
@@ -650,13 +690,14 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       blastRadius: forceMalicious ? 'WIDE (CLUSTER-LEVEL)' : 'CONTAINED (1 SERVICE)',
       astStatus: forceMalicious ? 'REJECT' : 'PASS',
       astMessage: forceMalicious
-        ? 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell pipe primitive [curl | bash] blocked by AST Gate.'
+        ? 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell execution primitive [curl | bash] blocked by AST Gate.'
         : 'AST Gate Verified: Newly synthesized agent patch contains 0 forbidden shell primitives.',
       status: 'PENDING',
+      canaryPercentage: forceMalicious ? 0 : 10,
       rcaSummary:
         summary ||
         (forceMalicious
-          ? `Upstream telemetry anomaly attempted to inject an external shell pipe on ${service}. Blocked pre-deployment by AST Gate.`
+          ? `Upstream telemetry anomaly attempted to inject an external shell execution script on ${service}. Blocked pre-merge by AST Gate.`
           : `Pi Agent synthesized causal fix for ${service} critical alert. Tunes circuit timeout ceiling and increases worker concurrency pool.`),
       diff: forceMalicious
         ? [
@@ -678,11 +719,13 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
             '+  dlpInlineScrub: true',
           ],
     };
-    setProposals((prev) => [newProp, ...prev.slice(0, 29)]);
+    setProposals((prev) => [newProp, ...prev.slice(0, 39)]);
+    setConnectors((prev) =>
+      prev.map((c) => ({ ...c, eventsCount: c.eventsCount + 1, lastPing: 'Just now' }))
+    );
     return id;
   };
 
-  // Continuous Live Heartbeat + 15-Minute Stress Engine with Full Closed-Loop Correlation
   useEffect(() => {
     const intervalMs = stress.active ? (stress.warpSpeed ? 250 : 1000) : 1500;
 
@@ -690,7 +733,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       const nowMs = Date.now();
       const lastSample = historyRef.current[historyRef.current.length - 1];
 
-      // Cooldown tick for Circuits in Normal Mode
       setServiceCircuits((prev) =>
         prev.map((c) => {
           if (c.cooldownSec > 0) {
@@ -701,6 +743,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           return c;
         })
       );
+
+      if (isStreamPaused && !stress.active) {
+        return;
+      }
 
       if (!stress.active) {
         const nextTp = Number(Math.max(12.0, Math.min(38.0, (lastSample?.throughput || 22) + (Math.random() - 0.48) * 3.4)).toFixed(1));
@@ -719,11 +765,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         });
         if (historyRef.current.length > 3000) historyRef.current.shift();
 
-        // Push periodic live telemetry log so Command Center & Live Alerts are always alive!
-        if (Math.random() > 0.45) {
+        if (Math.random() > 0.4) {
           const svcs = ['ingress-gateway', 'auth-gateway', 'order-service', 'billing-core', 'flapping-payment-worker'];
           const pick = svcs[Math.floor(Math.random() * svcs.length)];
-          const isWarn = Math.random() > 0.78;
+          const isWarn = Math.random() > 0.82;
           setLogs((lPrev) => [
             {
               id: `live-${nowMs}`,
@@ -734,7 +779,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
               message: isWarn
                 ? `Elevated tail latency (${nextP99}ms P99) detected on ${pick}. Sliding dedup window active.`
                 : `Normalized ${nextTp} evt/s batch on ${pick}. 0 credential leaks.`,
-              dlpScrubbed: !isWarn && Math.random() > 0.6,
+              dlpScrubbed: !isWarn && Math.random() > 0.65,
               suppressedCount: isWarn ? 4 : 1,
             },
             ...lPrev.slice(0, 199),
@@ -746,21 +791,19 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // --- ACTIVE 15-MINUTE STRESS ENGINE ---
       setStress((prev) => {
         const stepSec = prev.warpSpeed ? 5 : 1;
         const nextElapsed = prev.elapsedSec + stepSec;
 
         if (nextElapsed >= prev.totalDurationSec) {
           toast.success('15-Minute Stress & Soak Test Completed!', {
-            description: 'All 12 functional modules verified with full closed-loop synchronization.',
+            description: 'All 12 functional modules verified with full closed-loop correlation.',
           });
           return {
             ...prev,
             active: false,
             elapsedSec: prev.totalDurationSec,
             phaseName: 'COMPLETED — All 12 System Modules Verified (100% PASS)',
-            checks: prev.checks.map((c) => ({ ...c, status: 'VERIFIED' })),
           };
         }
 
@@ -819,7 +862,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         } else if (phase === 3) {
           sev = 'CRITICAL';
           msg = `[STRESS-CIRCUIT] Timeout strike recorded on ${svc} (P99: ${simP99}ms). Evaluating 3-strike sovereign fence.`;
-          // Mutate real serviceCircuits state so /circuits page updates live!
           if (nextElapsed % 10 === 0) {
             didTripCircuit = true;
             setServiceCircuits((cPrev) =>
@@ -847,14 +889,12 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         } else if (phase === 4) {
           sev = 'CRITICAL';
           msg = `[STRESS-AST] Blocked adversarial diff on ${svc}: Prohibited primitive [curl -sSL | bash] rejected with HTTP 422.`;
-          // Auto-synthesize blocked & clean proposals into /embassy so queue reflects critical events!
           if (nextElapsed % 15 === 0) {
             didSynthesizeProposal = true;
             synthesizeProposal(svc, `Intercepted adversarial prompt-injection patch on ${svc} during Phase 4 flood.`, nextElapsed % 30 === 0);
           }
         } else if (phase === 5) {
           sev = 'INFO';
-          // Actually append real Merkle leaves during Phase 5!
           appendMerkleLeaf(`stress.soak.verified.p5`, svc, `${user.name} [SOAK-VERIFIER]`);
           msg = `[STRESS-MERKLE] Appended & verified SHA-256 Merkle leaf via WebCrypto subtle digest.`;
         }
@@ -895,25 +935,12 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           peakThroughput: Math.max(prev.peakThroughput, simTp),
           peakLatencyP99: Math.max(prev.peakLatencyP99, simP99),
           heapEstimateMb: Number((42.4 + Math.sin(nextElapsed * 0.1) * 1.8).toFixed(1)),
-          checks: prev.checks.map((c, idx) => ({
-            ...c,
-            status: (idx % 5) + 1 === phase ? 'STRESSING' : 'VERIFIED',
-            opsCount:
-              idx === 0 ? nextTotalEvts :
-              idx === 1 ? nextDlp :
-              idx === 4 ? nextTrips :
-              idx === 5 ? nextAst :
-              idx === 6 ? nextProps :
-              idx === 7 ? nextMerkle :
-              c.opsCount + Math.floor(simTp * 0.15),
-            lastLatencyMs: Number((c.lastLatencyMs * 0.85 + (Math.random() * 2.2 + 0.6) * 0.15).toFixed(1)),
-          })),
         };
       });
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [stress.active, stress.warpSpeed, merkleStatus.totalLeaves, user.name]);
+  }, [stress.active, stress.warpSpeed, isStreamPaused, merkleStatus.totalLeaves, user.name]);
 
   const clearLogs = () => setLogs([]);
 
@@ -981,10 +1008,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   };
 
   const authorizePR = async (taskId: string, target: string) => {
-    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'APPROVED' } : p)));
-    appendMerkleLeaf('gitops.pr.authorized', target);
-    toast.success('GitOps PR Approved & Dispatched', {
-      description: `Task ${taskId} merged and sealed into Merkle leaf #${merkleStatus.totalLeaves + 1}.`,
+    const found = proposals.find((p) => p.taskId === taskId);
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'APPROVED', canaryPercentage: 100 } : p)));
+    appendMerkleLeaf(`gitops.pr.authorized (PR #${found?.prNumber || 1042})`, target);
+    toast.success('GitOps PR Merged to Production', {
+      description: `PR #${found?.prNumber || 1042} merged to refs/heads/prod-cluster-us-east. Sealed into leaf #${merkleStatus.totalLeaves + 1}.`,
     });
   };
 
@@ -996,6 +1024,12 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const setCanaryStage = (taskId: string, pct: number) => {
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, canaryPercentage: pct } : p)));
+    appendMerkleLeaf(`gitops.canary.stepped (${pct}%)`, taskId);
+    toast.info(`Canary Stepped to ${pct}%`, { description: `Shifted live cluster traffic weight for ${taskId}.` });
+  };
+
   const bulkApproveVerified = () => {
     const verifiedPending = proposals.filter((p) => p.status === 'PENDING' && p.astStatus === 'PASS');
     if (verifiedPending.length === 0) {
@@ -1003,11 +1037,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       return;
     }
     setProposals((prev) =>
-      prev.map((p) => (p.status === 'PENDING' && p.astStatus === 'PASS' ? { ...p, status: 'APPROVED' } : p))
+      prev.map((p) => (p.status === 'PENDING' && p.astStatus === 'PASS' ? { ...p, status: 'APPROVED', canaryPercentage: 100 } : p))
     );
     appendMerkleLeaf(`gitops.pr.bulk_authorized (${verifiedPending.length} PRs)`, 'cluster-fleet');
     toast.success(`Bulk Approved ${verifiedPending.length} Verified PRs`, {
-      description: 'Dispatched all clean proposals and sealed batch Merkle leaf.',
+      description: 'Dispatched all clean proposals to GitOps and sealed batch Merkle leaf.',
     });
   };
 
@@ -1037,8 +1071,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const rollbackPR = (taskId: string) => {
     const found = proposals.find((p) => p.taskId === taskId);
-    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'PENDING' } : p)));
-    appendMerkleLeaf('gitops.pr.rollback', found?.target || taskId);
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'PENDING', canaryPercentage: 0 } : p)));
+    appendMerkleLeaf(`gitops.pr.rollback (PR #${found?.prNumber || 1042})`, found?.target || taskId);
     toast.warning('GitOps Rollback Dispatched', {
       description: `Reverted ${taskId} and sealed rollback leaf to Merkle ledger.`,
     });
@@ -1068,7 +1102,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const resetProposals = () => {
     setProposals(INITIAL_PROPOSALS);
-    toast.info('Proposal Queue Reset', { description: 'Restored initial 5 HITL proposals to PENDING state.' });
+    toast.info('Proposal Queue Reset', { description: 'Restored initial 4 HITL proposals to PENDING state.' });
   };
 
   const ingestCustomPayload = (service: string, severity: 'INFO' | 'WARNING' | 'CRITICAL', rawMessage: string) => {
@@ -1169,7 +1203,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       ...prev,
       active: false,
       phaseName: `PAUSED at ${Math.floor(prev.elapsedSec / 60)}m ${prev.elapsedSec % 60}s — All Checks Intact`,
-      checks: prev.checks.map((c) => ({ ...c, status: 'VERIFIED' })),
     }));
     toast.warning('Stress Test Paused', { description: 'Baseline telemetry rate restored.' });
   };
@@ -1195,7 +1228,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       peakThroughput: 34.8,
       peakLatencyP99: 46.2,
       heapEstimateMb: 42.4,
-      checks: INITIAL_CHECKS,
+      checks: [],
     });
     toast.info('Stress Counters Reset', { description: 'Ready for a fresh 15-minute soak run.' });
   };
@@ -1206,12 +1239,14 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
-      theme,
-      setTheme,
       user,
       loginUser,
+      apiKey,
+      rotateApiKey,
       status,
       latencyMs,
+      isStreamPaused,
+      toggleStreamPause,
       globalRange,
       setGlobalRange,
       customMinutes,
@@ -1230,9 +1265,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       bulkDeclineBlocked,
       reopenPR,
       rollbackPR,
+      setCanaryStage,
       updateProposalDiff,
       synthesizeProposal,
       resetProposals,
+      connectors,
       ingestCustomPayload,
       ledger,
       merkleStatus,
@@ -1244,7 +1281,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       toggleWarpSpeed,
       resetStressTest,
     }),
-    [theme, user, status, latencyMs, globalRange, customMinutes, series, logs, serviceCircuits, trippedCircuits, proposals, ledger, merkleStatus, stress]
+    [user, apiKey, status, latencyMs, isStreamPaused, globalRange, customMinutes, series, logs, serviceCircuits, trippedCircuits, proposals, connectors, ledger, merkleStatus, stress]
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;

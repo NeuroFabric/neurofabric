@@ -14,6 +14,8 @@ import {
   Undo2,
   RefreshCw,
   CheckCheck,
+  GitBranch,
+  Layers,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { InfoTooltip } from '../components/common/Tooltip';
@@ -27,6 +29,7 @@ export function EmbassyPage() {
     bulkDeclineBlocked,
     reopenPR,
     rollbackPR,
+    setCanaryStage,
     updateProposalDiff,
     synthesizeProposal,
     resetProposals,
@@ -107,16 +110,17 @@ export function EmbassyPage() {
 
   return (
     <div className="p-8 space-y-6 max-w-7xl font-sans">
+      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-bold text-white tracking-tight">
-              Autonomous Embassy — Patch Review (HITL)
+              Autonomous Embassy — GitOps Patch Review (HITL)
             </h1>
-            <InfoTooltip content="Critical alerts and circuit trips automatically synthesize new Patch Proposals into this queue. Use Bulk Triage or inspect individual diffs." />
+            <InfoTooltip content="Human-in-the-Loop review for agent-proposed pull requests. Inspect diffs, verify AST security screenings, adjust canary traffic, and authorize merge." />
           </div>
           <p className="text-xs text-slate-300 mt-1">
-            Auto-correlated with live critical alerts • Edit & re-screen syntax trees live, bulk-approve verified diffs, or rollback PRs.
+            Target Fleet: <span className="text-emerald-400 font-mono font-bold">github.com/NeuroFabric/infrastructure-fleet</span> • Branch: <span className="text-white font-mono">refs/heads/prod-cluster-us-east</span>
           </p>
         </div>
 
@@ -133,7 +137,7 @@ export function EmbassyPage() {
             className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
           >
             <X className="w-3.5 h-3.5" />
-            <span>Refuse All AST-Blocked</span>
+            <span>Refuse All Blocked</span>
           </button>
           <button
             onClick={() => {
@@ -155,18 +159,17 @@ export function EmbassyPage() {
         </div>
       </div>
 
-      {/* 3-Pane Layout */}
+      {/* 3-Pane Review Console */}
       <div className="grid lg:grid-cols-12 gap-6">
-        {/* Left Pane (3 Cols): Filterable Proposal Queue */}
+        {/* Left Pane (3 Cols): Proposal Queue */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between px-1">
             <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
-              Queue ({filteredQueue.length} / {proposals.length})
+              PR Queue ({filteredQueue.length} / {proposals.length})
             </span>
             <span className="text-[10px] font-mono text-amber-400 font-bold">{pendingCount} Pending</span>
           </div>
 
-          {/* Queue Filter Pills */}
           <div className="grid grid-cols-4 gap-1 bg-[#090C14] p-1 rounded-xl border border-white/10 font-mono text-[10px]">
             {(['ALL', 'PENDING', 'BLOCKED', 'ACTIONED'] as const).map((f) => (
               <button
@@ -195,7 +198,7 @@ export function EmbassyPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-slate-400">{prop.taskId}</span>
+                    <span className="text-[10px] font-mono text-slate-400 font-bold">PR #{prop.prNumber}</span>
                     <span
                       className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
                         prop.status === 'APPROVED'
@@ -221,8 +224,34 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Center Pane (5 Cols): AST Banner + Interactive Diff Editor */}
+        {/* Center Pane (5 Cols): GitOps PR Header + AST Banner + Diff Editor */}
         <div className="lg:col-span-5 space-y-4">
+          {/* GitOps PR Metadata Header */}
+          <div className="p-4 rounded-2xl nf-card space-y-2 font-mono text-xs">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center space-x-2">
+                <GitPullRequest className="w-4 h-4 text-emerald-400" />
+                <span className="text-white font-bold text-sm">Pull Request #{current.prNumber}</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">
+                Commit: {current.commitSha}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
+              <div>
+                <span className="text-slate-500 block text-[9px]">TARGET REPO</span>
+                <span className="text-white truncate block">{current.repository}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[9px]">TARGET BRANCH</span>
+                <span className="text-emerald-300 flex items-center space-x-1">
+                  <GitBranch className="w-3 h-3" />
+                  <span>{current.targetBranch}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
           {current.astStatus === 'PASS' ? (
             <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/50 flex items-center space-x-3">
               <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
@@ -244,7 +273,7 @@ export function EmbassyPage() {
           <div className="rounded-2xl nf-card overflow-hidden">
             <div className="p-3.5 border-b border-white/10 flex items-center justify-between bg-[#101420] font-mono text-xs">
               <div className="flex items-center space-x-2">
-                <GitPullRequest className="w-4 h-4 text-emerald-400" />
+                <FileCode className="w-4 h-4 text-emerald-400" />
                 <span className="text-white font-bold">{current.target}</span>
               </div>
               {!isEditingDiff ? (
@@ -269,7 +298,7 @@ export function EmbassyPage() {
             {isEditingDiff ? (
               <div className="p-4 bg-[#05070B] space-y-2">
                 <div className="text-[11px] font-mono text-slate-400">
-                  Remove or add <code className="text-rose-400">curl | bash</code> or <code className="text-rose-400">rm -rf</code> to test real-time AST Gate blocking:
+                  Tip: Remove or add <code className="text-rose-400">curl | bash</code> to test live AST blocking:
                 </div>
                 <textarea
                   value={draftDiff}
@@ -307,12 +336,12 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Right Pane (4 Cols): Agent RCA & Lifecycle Actions */}
+        {/* Right Pane (4 Cols): RCA, Canary Traffic & Merge Authorization */}
         <div className="lg:col-span-4 space-y-4">
           <div className="p-6 rounded-2xl nf-card space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-mono font-bold text-emerald-400 uppercase tracking-wider">
-                Autonomous RCA Context
+                Autonomous RCA Evaluation
               </span>
               <span
                 className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
@@ -345,7 +374,33 @@ export function EmbassyPage() {
               </div>
               <div className="p-3 rounded-xl bg-[#090C14] border border-white/10">
                 <div className="text-slate-400 text-[10px]">BLAST RADIUS</div>
-                <div className="text-sm font-bold text-cyan-300 mt-1.5">{current.blastRadius}</div>
+                <div className="text-sm font-bold text-purple-300 mt-1.5">{current.blastRadius}</div>
+              </div>
+            </div>
+
+            {/* Progressive Canary Rollout Slider */}
+            <div className="p-3.5 rounded-xl bg-[#090C14] border border-white/10 space-y-2 font-mono text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center space-x-1.5">
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Canary Progressive Rollout</span>
+                </span>
+                <span className="text-cyan-300 font-bold">{current.canaryPercentage}% Weight</span>
+              </div>
+              <div className="flex items-center space-x-2 pt-1">
+                {[10, 25, 50, 100].map((pct) => (
+                  <button
+                    key={pct}
+                    onClick={() => setCanaryStage(current.taskId, pct)}
+                    className={`flex-1 py-1 rounded text-[10px] font-bold transition ${
+                      current.canaryPercentage === pct
+                        ? 'bg-cyan-500 text-slate-950 shadow'
+                        : 'bg-[#141A29] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {pct}%
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -353,7 +408,7 @@ export function EmbassyPage() {
               <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-500/50 text-xs font-mono text-emerald-200 space-y-3">
                 <div className="font-bold text-emerald-400 flex items-center space-x-1.5">
                   <Check className="w-4 h-4" />
-                  <span>DISPATCHED TO GITOPS & MERKLE SEALED</span>
+                  <span>PR #{current.prNumber} MERGED & CANARY ACTIVE</span>
                 </div>
                 <div className="flex items-center space-x-2 pt-1">
                   <button
@@ -425,7 +480,7 @@ export function EmbassyPage() {
                     onClick={handleApprove}
                     className="flex-1 py-2 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold rounded-lg text-xs font-mono transition"
                   >
-                    Confirm & Dispatch PR
+                    Confirm & Merge PR
                   </button>
                   <button
                     onClick={() => setShowConfirm(false)}
@@ -491,7 +546,7 @@ export function EmbassyPage() {
                     }`}
                   >
                     <Check className="w-4 h-4" />
-                    <span>Authorize & Dispatch PR</span>
+                    <span>Authorize & Merge PR</span>
                   </button>
                   <button
                     onClick={() => setShowDeclineReasons(true)}

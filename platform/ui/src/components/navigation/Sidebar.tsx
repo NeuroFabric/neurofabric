@@ -10,6 +10,7 @@ import {
   Zap,
   Table,
   Flame,
+  Radio,
   LogOut,
 } from 'lucide-react';
 import { useTelemetry } from '../../context/TelemetryContext';
@@ -27,8 +28,9 @@ export function Sidebar() {
   const primaryNav = [
     { to: '/overview', label: 'Command Center', icon: LayoutDashboard },
     { to: '/stress', label: 'Stress & QA Lab (15m)', icon: Flame, badge: stressBadge },
-    { to: '/alerts', label: 'Live Alerts', icon: Activity, badge: logs.length > 0 ? `${logs.length}` : undefined },
+    { to: '/alerts', label: 'Live Alerts Stream', icon: Activity, badge: logs.length > 0 ? `${logs.length}` : undefined },
     { to: '/telemetry', label: 'Telemetry Explorer', icon: Table },
+    { to: '/integrations', label: 'Ingestion & Connectors', icon: Radio, badge: 'REST/OTEL' },
     {
       to: '/embassy',
       label: 'Patch Review (HITL)',
@@ -51,7 +53,7 @@ export function Sidebar() {
   ];
 
   return (
-    <aside className="w-64 bg-[#0B0E17] border-r border-white/10 flex flex-col justify-between shrink-0 select-none z-20">
+    <aside className="w-64 bg-[#080B12] border-r border-white/10 flex flex-col justify-between shrink-0 select-none z-20">
       <div>
         <div className="p-4 border-b border-white/10">
           <Logo size="md" />
@@ -71,13 +73,13 @@ export function Sidebar() {
                   className={({ isActive }) =>
                     `relative w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition ${
                       isActive
-                        ? 'text-white font-bold bg-gradient-to-r from-cyan-500/20 to-indigo-500/20 border border-cyan-400/40 shadow-sm'
+                        ? 'text-white font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/10 border border-emerald-400/40 shadow-sm'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                     }`
                   }
                 >
                   <div className="flex items-center space-x-3">
-                    <Icon className={`w-4 h-4 shrink-0 ${item.to === '/stress' && stress.active ? 'text-amber-400 animate-spin' : 'text-cyan-400'}`} />
+                    <Icon className={`w-4 h-4 shrink-0 ${item.to === '/stress' && stress.active ? 'text-amber-400 animate-spin' : 'text-emerald-400'}`} />
                     <span>{item.label}</span>
                   </div>
                   {item.badge && (
@@ -89,7 +91,7 @@ export function Sidebar() {
                           ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                           : item.badge.includes('PENDING')
                           ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                          : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                          : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                       }`}
                     >
                       {item.badge}
@@ -115,17 +117,17 @@ export function Sidebar() {
                   className={({ isActive }) =>
                     `relative w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition ${
                       isActive
-                        ? 'text-white font-bold bg-gradient-to-r from-cyan-500/20 to-indigo-500/20 border border-cyan-400/40'
+                        ? 'text-white font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/10 border border-emerald-400/40'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-white/5 border border-transparent'
                     }`
                   }
                 >
                   <div className="flex items-center space-x-3">
-                    <Icon className="w-4 h-4 shrink-0 text-indigo-400" />
+                    <Icon className="w-4 h-4 shrink-0 text-cyan-400" />
                     <span>{item.label}</span>
                   </div>
                   {item.badge && (
-                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                       {item.badge}
                     </span>
                   )}

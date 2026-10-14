@@ -11,6 +11,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { StressTestPage } from './pages/StressTestPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { TelemetryExplorerPage } from './pages/TelemetryExplorerPage';
+import { IntegrationsPage } from './pages/IntegrationsPage';
 import { EmbassyPage } from './pages/EmbassyPage';
 import { CircuitsPage } from './pages/CircuitsPage';
 import { GovernancePage } from './pages/GovernancePage';
@@ -42,12 +43,12 @@ function AuthenticatedWorkspace() {
   }, []);
 
   return (
-    <div className="flex h-screen bg-[#06070B] text-slate-100 overflow-hidden select-none">
+    <div className="flex h-screen bg-[#050609] text-slate-100 overflow-hidden select-none">
       <CommandPalette isOpen={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Topbar />
-        <main className="flex-1 overflow-y-auto relative bg-[#06070B]">
+        <main className="flex-1 overflow-y-auto relative bg-[#050609]">
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
@@ -62,6 +63,7 @@ function AuthenticatedWorkspace() {
                 <Route path="/stress" element={<StressTestPage />} />
                 <Route path="/alerts" element={<AlertsPage />} />
                 <Route path="/telemetry" element={<TelemetryExplorerPage />} />
+                <Route path="/integrations" element={<IntegrationsPage />} />
                 <Route path="/embassy" element={<EmbassyPage />} />
                 <Route path="/circuits" element={<CircuitsPage />} />
                 <Route path="/governance" element={<GovernancePage />} />

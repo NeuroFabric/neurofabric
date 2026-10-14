@@ -1,14 +1,12 @@
 ﻿import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Radio, Clock, User, Calendar, Wifi, Play, Palette } from 'lucide-react';
-import { useTelemetry, type TimeRange, type UITheme } from '../../context/TelemetryContext';
+import { Radio, Clock, User, Calendar, Wifi, Play } from 'lucide-react';
+import { useTelemetry, type TimeRange } from '../../context/TelemetryContext';
 
 export function Topbar() {
   const location = useLocation();
   const navigate = useNavigate();
   const {
-    theme,
-    setTheme,
     user,
     status,
     latencyMs,
@@ -42,17 +40,8 @@ export function Topbar() {
   const breadcrumb = pathName.toUpperCase();
   const ranges: TimeRange[] = ['5m', '15m', '30m', '1h', '2h', '5h'];
 
-  const cycleTheme = () => {
-    const order: UITheme[] = ['apple-dark', 'aws-midnight', 'daylight'];
-    const next = order[(order.indexOf(theme) + 1) % order.length];
-    setTheme(next);
-  };
-
-  const themeLabel =
-    theme === 'apple-dark' ? 'Apple Pro' : theme === 'aws-midnight' ? 'AWS Ops' : 'Daylight';
-
   return (
-    <header className="h-14 nf-glass border-b px-6 flex items-center justify-between text-xs select-none shrink-0 z-40 font-sans relative">
+    <header className="h-14 bg-[#080B12]/95 backdrop-blur-md border-b border-white/10 px-6 flex items-center justify-between text-xs select-none shrink-0 z-40 font-sans relative">
       <div className="flex items-center space-x-2 font-mono">
         <span className="text-slate-400 font-bold">NEUROFABRIC</span>
         <span className="text-slate-600">/</span>
@@ -62,7 +51,7 @@ export function Topbar() {
         </span>
       </div>
 
-      {/* Global Time Window Selector */}
+      {/* Synchronized Global Time Range Selector */}
       <div className="hidden xl:flex items-center space-x-1 bg-[#121622] p-1 rounded-xl border border-white/10 font-mono text-[11px]">
         <span className="text-[10px] text-slate-400 px-2 font-bold uppercase tracking-wider">Time Window:</span>
         {ranges.map((r) => (
@@ -117,17 +106,7 @@ export function Topbar() {
         </div>
       )}
 
-      <div className="flex items-center space-x-2.5">
-        {/* Theme Switcher Button */}
-        <button
-          onClick={cycleTheme}
-          title="Switch UI Theme (Apple Pro Dark / AWS Ops Midnight / Daylight)"
-          className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-[#121622] border border-white/10 hover:border-emerald-400/50 text-slate-200 font-mono transition"
-        >
-          <Palette className="w-3.5 h-3.5 text-emerald-400" />
-          <span>{themeLabel}</span>
-        </button>
-
+      <div className="flex items-center space-x-3">
         <button
           onClick={() => setIsUTC(!isUTC)}
           title="Click to toggle Local / UTC time"
