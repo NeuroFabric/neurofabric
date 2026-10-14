@@ -1,4 +1,3 @@
-import { createIngressGateway, sseClients, broadcastSSE, startSSEKeepAlive, stopSSEKeepAlive } from "../gateway/ingress-server.ts";
 import { eventBridge } from "../core/event-bridge.ts";
 ﻿import type { AlertHub } from "../memory/alert-hub.ts";
 
@@ -465,13 +464,24 @@ if (dbUrl) {
   }
 }
 
+const sseClients = new Set<ServerResponse>();
+export function broadcastAlert(payload: unknown): void {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(data);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
 RollbackCircuit.setMemoryLedger(inMemoryLedger);
-RollbackCircuit.setBroadcast(broadcastSSE);
+RollbackCircuit.setBroadcast(broadcastAlert);
 
 // Cross-Process SSE sync via SQLite event bridge
 eventBridge.subscribe((event) => {
-  broadcastSSE({ type: event.topic, data: event.payload });
-  startSSEKeepAlive();
+  broadcastAlert({ type: event.topic, data: event.payload });
 });
 
 hitlEventBus.on('hitl:events', (data: any) => {
@@ -491,12 +501,10 @@ hitlEventBus.on('hitl:events', (data: any) => {
     subject: data,
     timestamp: new Date().toISOString()
   } as any);
-  broadcastSSE({ type: 'HITL_PROPOSAL', data });
-  startSSEKeepAlive();
+  broadcastAlert({ type: 'HITL_PROPOSAL', data });
 });
 
 export function createWedgeServer(options: WedgeOptions): Server {
-  
   const cwd = path.resolve(options.cwd);
   const installRoot = options.installRoot ?? process.cwd();
 
@@ -854,25 +862,6 @@ export function createWedgeServer(options: WedgeOptions): Server {
   routes = memoryRoutes;
 
   const server = createServer((request, response) => {
-    // === DELIVERABLE 1 STATIC ROUTER ===
-    const cleanUrl = (request.url || "/").split("?")[0];
-    if (cleanUrl === "/tokens.css") {
-      const p = require("node:path").join(process.cwd(), "platform/web/public/tokens.css");
-      return response.writeHead(200, { "Content-Type": "text/css" }).end(require("node:fs").readFileSync(p, "utf8"));
-    }
-    if (cleanUrl === "/shell.css") {
-      const p = require("node:path").join(process.cwd(), "platform/web/public/shell.css");
-      return response.writeHead(200, { "Content-Type": "text/css" }).end(require("node:fs").readFileSync(p, "utf8"));
-    }
-    if (cleanUrl === "/shell.js") {
-      const p = require("node:path").join(process.cwd(), "platform/web/public/shell.js");
-      return response.writeHead(200, { "Content-Type": "application/javascript" }).end(require("node:fs").readFileSync(p, "utf8"));
-    }
-    if (cleanUrl === "/favicon.ico") {
-      return response.writeHead(204).end();
-    }
-    // === END STATIC ROUTER ===
-
   if (request.url === "/tokens.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/tokens.css")));
   if (request.url === "/shell.css") return response.writeHead(200, {"Content-Type":"text/css"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.css")));
   if (request.url === "/shell.js") return response.writeHead(200, {"Content-Type":"application/javascript"}).end(require("node:fs").readFileSync(require("node:path").join(__dirname, "public/shell.js")));
@@ -1617,32 +1606,11 @@ export function createWedgeServer(options: WedgeOptions): Server {
 
 export async function startWedgeServer(options: WedgeOptions): Promise<RunningWedge> {
   const server = createWedgeServer(options);
-
-  // --- Unified Dual-Engine Request Interceptor ---
-  const ingressGateway = createIngressGateway();
-  const ingressHandler = ingressGateway.listeners("request")[0] as (req: any, res: any) => void;
-  const wedgeHandlers = server.listeners("request").slice();
-  server.removeAllListeners("request");
-
-  server.on("request", (req, res) => {
-    const rawUrl = req.url || "/";
-    if (rawUrl === "/health" || rawUrl.startsWith("/api/")) {
-      return ingressHandler(req, res);
-    }
-    for (const handler of wedgeHandlers) {
-      (handler as any)(req, res);
-    }
-  });
   const port = options.port ?? 0;
   const host = options.host ?? "127.0.0.1";
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    const effectivePort = Number(process.env.PORT) || port;
-      const effectiveHost = process.env.HOST || (process.env.PORT ? "0.0.0.0" : host);
-      server.listen(effectivePort, effectiveHost, () => {
-        console.log(`[Wedge UI] Listening on http://${effectiveHost}:${effectivePort}`);
-        resolve();
-      });
+    server.listen(port, host, () => resolve());
   });
   const address = server.address();
   const bound = typeof address === "object" && address !== null ? address.port : port;
@@ -1662,31 +1630,5 @@ export async function startWedgeServer(options: WedgeOptions): Promise<RunningWe
 }
 
 
-// --- Direct Execution Entrypoint (Render / CLI runner) ---
-import { fileURLToPath } from "node:url";
 
-const isMainModule = Boolean(
-  process.argv[1] &&
-  (
-    process.argv[1].endsWith("server.ts") ||
-    process.argv[1].endsWith("server.js") ||
-    (import.meta.url && fileURLToPath(import.meta.url) === process.argv[1])
-  )
-);
 
-if (isMainModule) {
-  const port = Number(process.env.PORT) || 3000;
-  const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
-  const cwd = process.cwd();
-
-  console.log(`[Wedge UI] Starting server on ${host}:${port} (cwd: ${cwd})...`);
-
-  startWedgeServer({
-    port,
-    host,
-    cwd,
-  } as any).catch((err) => {
-    console.error("[Wedge UI] Fatal error on startup:", err);
-    process.exit(1);
-  });
-}

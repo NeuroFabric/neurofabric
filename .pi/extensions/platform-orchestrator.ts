@@ -55,13 +55,7 @@ const pendingDenials = new Map<string, { reason: string; violation?: "block" | "
 export default function platformOrchestrator(pi: ExtensionAPI): void {
   // The ONLY write path into Pi session history. It is wrapped in the shared
   // redactor so nothing can bypass sanitization by calling appendEntry here.
-  persistTrace = createRedactingSink((entry: TraceEntry) => {
-    try {
-       pi.appendEntry("platform-trace", entry) 
-    } catch (err: any) {
-       if (!err?.message?.includes("stale")) console.error("[orchestrator] appendEntry:", err); 
-    }
-  });
+  persistTrace = createRedactingSink((entry: TraceEntry) => pi.appendEntry("platform-trace", entry));
   // Pi remains the only agent loop; this adapter only translates lifecycle events into kernel state.
   const kernel = new KernelAdapter();
   let config: NeurofebricProjectConfig | undefined;

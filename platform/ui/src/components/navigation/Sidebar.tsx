@@ -9,17 +9,24 @@ import {
   Sparkles,
   Zap,
   Table,
+  Flame,
   LogOut,
 } from 'lucide-react';
 import { useTelemetry } from '../../context/TelemetryContext';
 import { Logo } from '../common/Logo';
 
 export function Sidebar() {
-  const { trippedCircuits, logs, proposals } = useTelemetry();
+  const { trippedCircuits, logs, proposals, stress } = useTelemetry();
   const pendingCount = proposals.filter((p) => p.status === 'PENDING').length;
+
+  const remSec = Math.max(0, stress.totalDurationSec - stress.elapsedSec);
+  const stressBadge = stress.active
+    ? `${Math.floor(remSec / 60)}:${(remSec % 60).toString().padStart(2, '0')} LIVE`
+    : '15M SOAK';
 
   const primaryNav = [
     { to: '/overview', label: 'Command Center', icon: LayoutDashboard },
+    { to: '/stress', label: 'Stress & QA Lab (15m)', icon: Flame, badge: stressBadge },
     { to: '/alerts', label: 'Live Alerts', icon: Activity, badge: logs.length > 0 ? `${logs.length}` : undefined },
     { to: '/telemetry', label: 'Telemetry Explorer', icon: Table },
     {
@@ -70,13 +77,15 @@ export function Sidebar() {
                   }
                 >
                   <div className="flex items-center space-x-3">
-                    <Icon className="w-4 h-4 shrink-0 text-cyan-400" />
+                    <Icon className={`w-4 h-4 shrink-0 ${item.to === '/stress' && stress.active ? 'text-amber-400 animate-spin' : 'text-cyan-400'}`} />
                     <span>{item.label}</span>
                   </div>
                   {item.badge && (
                     <span
                       className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
-                        item.badge.includes('TRIPPED')
+                        item.badge.includes('LIVE')
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-400 animate-pulse'
+                          : item.badge.includes('TRIPPED')
                           ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                           : item.badge.includes('PENDING')
                           ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'

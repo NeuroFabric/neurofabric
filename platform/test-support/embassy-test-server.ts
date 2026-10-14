@@ -146,8 +146,8 @@ const server = createServer(async (req, res) => {
           );
 
           try {
-            if (typeof (RollbackCircuit as any).recordFailure === "function") {
-              (RollbackCircuit as any).recordFailure(service);
+            if (typeof RollbackCircuit.recordFailure === "function") {
+              RollbackCircuit.recordFailure(service);
             }
           } catch {}
         }
@@ -183,8 +183,8 @@ const server = createServer(async (req, res) => {
 
         db.prepare("UPDATE circuit_trips SET strikes = 0, tripped = 0 WHERE service = ?").run(target);
         try {
-          if (typeof (RollbackCircuit as any).reset === "function") {
-            (RollbackCircuit as any).reset(target);
+          if (typeof RollbackCircuit.reset === "function") {
+            RollbackCircuit.reset(target);
           }
         } catch {}
 
@@ -206,13 +206,15 @@ const server = createServer(async (req, res) => {
         let report: any;
         try {
           if (typeof agenticDiagnosticAdapter?.diagnose === "function") {
-            report = await (agenticDiagnosticAdapter as any).diagnose(body);
+            report = await agenticDiagnosticAdapter.diagnose(body);
           }
         } catch {}
 
         if (!report) {
           report = {
-            rootCause: "Downstream auth-gateway timeout causing pool connection starvation.", explanation: body.stackTrace || "Resource pool reached saturated threshold.", blastRadius: body.context?.blastRadius || "medium",
+            rootCause: "Downstream auth-gateway timeout causing pool connection starvation.",
+            explanation: body.stackTrace || "Resource pool reached saturated threshold.",
+            blastRadius: body.context?.blastRadius || "medium",
             confidence: 94,
             diff: "--- a/pool.yaml\n+++ b/pool.yaml\n@@ -1 +1 @@\n-size: 50\n+size: 100",
           };
@@ -240,8 +242,8 @@ const server = createServer(async (req, res) => {
         if (diff) {
           let isRejected = false;
           try {
-            if (typeof (PolicyEvaluator as any).evaluateAstDiff === "function") {
-              const check = (PolicyEvaluator as any).evaluateAstDiff(diff);
+            if (typeof PolicyEvaluator.evaluateAstDiff === "function") {
+              const check = PolicyEvaluator.evaluateAstDiff(diff);
               isRejected = !check.allowed;
             }
           } catch {}
@@ -294,7 +296,7 @@ const server = createServer(async (req, res) => {
         let gitops: any;
         try {
           if (typeof gitHubGitOpsAdapter?.dispatchRemediation === "function") {
-            gitops = await (gitHubGitOpsAdapter as any).dispatchRemediation(taskToken, target, diff);
+            gitops = await gitHubGitOpsAdapter.dispatchRemediation(taskToken, target, diff);
           }
         } catch {}
 
@@ -366,7 +368,7 @@ const server = createServer(async (req, res) => {
     if (method === "GET" && url.pathname === "/api/v1/governance/ledger") {
       let records: any[] = [];
       try {
-        records = typeof (merkleAuditLedger as any).entries === "function" ? (merkleAuditLedger as any).entries() : [];
+        records = typeof merkleAuditLedger.entries === "function" ? merkleAuditLedger.entries() : [];
       } catch {}
       if (!records || records.length === 0) {
         records = [{ type: "GENESIS_AUDIT_BLOCK", timestamp: new Date().toISOString() }];
