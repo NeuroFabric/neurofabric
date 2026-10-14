@@ -103,7 +103,7 @@ export function LiveThroughputChart() {
   const spanBanner = series[series.length - 1]?.windowSpanLabel || '';
 
   return (
-    <div className="grid lg:grid-cols-3 gap-5">
+    <div className="grid lg:grid-cols-3 gap-5 tabular-nums">
       <div className="lg:col-span-2 p-6 rounded-2xl nf-card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
@@ -115,7 +115,7 @@ export function LiveThroughputChart() {
                 <h3 className="text-xs font-mono font-bold text-white uppercase tracking-wider">
                   Real-Time Ingestion Waveform
                 </h3>
-                <InfoTooltip content="Resamples the 6-hour master ring buffer across the exact selected time window (5m to 5h). Hover any point to inspect telemetry." />
+                <InfoTooltip content="Measures events/sec, P99/P50 tail latency (ms), and error % across the selected time window. Hover any point to inspect exact bucket metrics." />
               </div>
               <div className="text-[11px] text-slate-300 font-mono mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>
@@ -275,8 +275,8 @@ export function LiveThroughputChart() {
               </div>
             </div>
           ) : (
-            <div className="absolute right-3 top-2.5 text-[10px] font-mono text-slate-500 pointer-events-none">
-              Hover curve to inspect time-bucket stats
+            <div className="absolute right-3 top-2.5 text-[10px] font-mono text-slate-400 pointer-events-none">
+              Measures events/sec, P99/P50 tail latency (ms), and error % across the selected time window
             </div>
           )}
 
@@ -373,10 +373,10 @@ export function LiveThroughputChart() {
             <div className="flex items-center space-x-2">
               <BarChart3 className="w-4 h-4 text-amber-400" />
               <h3 className="text-xs font-mono font-bold text-white uppercase tracking-wider">
-                Alert Dedup & Burst Suppression
+                Alert Dedup &amp; Burst Suppression
               </h3>
             </div>
-            <InfoTooltip content="Displays duplicate alert bursts collapsed within the active time window." />
+            <InfoTooltip content="Shows how many duplicate alert storms were collapsed inside each 60-second deduplication bucket." />
           </div>
           <p className="text-[11px] text-slate-300 font-mono mt-1">
             Horizon: <span className="text-amber-400 font-bold">{globalRange === 'custom' ? `${customMinutes}m` : globalRange}</span> • Collapsed:{' '}
