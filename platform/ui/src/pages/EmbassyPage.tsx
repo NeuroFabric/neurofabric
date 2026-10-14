@@ -13,6 +13,7 @@ import {
   Edit3,
   Undo2,
   RefreshCw,
+  CheckCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { InfoTooltip } from '../components/common/Tooltip';
@@ -22,6 +23,8 @@ export function EmbassyPage() {
     proposals,
     authorizePR,
     declinePR,
+    bulkApproveVerified,
+    bulkDeclineBlocked,
     reopenPR,
     rollbackPR,
     updateProposalDiff,
@@ -29,6 +32,7 @@ export function EmbassyPage() {
     resetProposals,
   } = useTelemetry();
 
+  const [queueFilter, setQueueFilter] = useState<'ALL' | 'PENDING' | 'BLOCKED' | 'ACTIONED'>('ALL');
   const [selectedId, setSelectedId] = useState<string>(proposals[0]?.taskId || 'task-auth-gw-892');
   const [taskToken, setTaskToken] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
@@ -36,7 +40,14 @@ export function EmbassyPage() {
   const [isEditingDiff, setIsEditingDiff] = useState(false);
   const [draftDiff, setDraftDiff] = useState('');
 
-  const current = proposals.find((p) => p.taskId === selectedId) || proposals[0];
+  const filteredQueue = proposals.filter((p) => {
+    if (queueFilter === 'PENDING') return p.status === 'PENDING';
+    if (queueFilter === 'BLOCKED') return p.astStatus === 'REJECT';
+    if (queueFilter === 'ACTIONED') return p.status !== 'PENDING';
+    return true;
+  });
+
+  const current = proposals.find((p) => p.taskId === selectedId) || filteredQueue[0] || proposals[0];
 
   const handleSelect = (id: string) => {
     setSelectedId(id);
@@ -59,7 +70,7 @@ export function EmbassyPage() {
   const handleApprove = async () => {
     if (current.astStatus === 'REJECT') {
       toast.error('AST Gate Policy Lock (HTTP 422)', {
-        description: 'Cannot dispatch a proposal containing prohibited shell primitives. Edit the diff first to remove curl | bash.',
+        description: 'Cannot dispatch a proposal containing prohibited shell primitives. Click "Sanitize Malicious Line" first.',
       });
       return;
     }
@@ -102,54 +113,84 @@ export function EmbassyPage() {
             <h1 className="text-2xl font-bold text-white tracking-tight">
               Autonomous Embassy — Patch Review (HITL)
             </h1>
-            <InfoTooltip content="Human-in-the-Loop GitOps console. Edit diffs inline to test the AST Security Gate, approve/decline proposals, or rollback deployed PRs." />
+            <InfoTooltip content="Critical alerts and circuit trips automatically synthesize new Patch Proposals into this queue. Use Bulk Triage or inspect individual diffs." />
           </div>
           <p className="text-xs text-slate-300 mt-1">
-            Review agent-proposed GitOps diffs, edit & re-screen syntax trees live, and authorize or rollback rollouts.
+            Auto-correlated with live critical alerts • Edit & re-screen syntax trees live, bulk-approve verified diffs, or rollback PRs.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-xs font-mono px-3 py-1.5 rounded-xl bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
-            {pendingCount} PENDING REVIEW
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={bulkApproveVerified}
+            className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            <span>Bulk Approve Verified</span>
+          </button>
+          <button
+            onClick={bulkDeclineBlocked}
+            className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span>Refuse All AST-Blocked</span>
+          </button>
           <button
             onClick={() => {
-              const newId = synthesizeProposal('auth-gateway');
+              const newId = synthesizeProposal('order-service');
               setSelectedId(newId);
             }}
             className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Synthesize Agent Patch</span>
+            <span>Synthesize Patch</span>
           </button>
           <button
             onClick={resetProposals}
             className="px-3 py-1.5 rounded-xl bg-[#121622] hover:bg-slate-800 border border-white/10 text-xs font-mono text-slate-300 flex items-center space-x-1.5 transition"
           >
             <RotateCcw className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Reset Queue</span>
+            <span>Reset</span>
           </button>
         </div>
       </div>
 
       {/* 3-Pane Layout */}
       <div className="grid lg:grid-cols-12 gap-6">
-        {/* Left Pane (3 Cols): Proposal Queue */}
+        {/* Left Pane (3 Cols): Filterable Proposal Queue */}
         <div className="lg:col-span-3 space-y-3">
-          <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 px-1">
-            Proposal Queue ({proposals.length})
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+              Queue ({filteredQueue.length} / {proposals.length})
+            </span>
+            <span className="text-[10px] font-mono text-amber-400 font-bold">{pendingCount} Pending</span>
           </div>
-          <div className="space-y-2.5 max-h-[540px] overflow-y-auto pr-1">
-            {proposals.map((prop) => {
+
+          {/* Queue Filter Pills */}
+          <div className="grid grid-cols-4 gap-1 bg-[#090C14] p-1 rounded-xl border border-white/10 font-mono text-[10px]">
+            {(['ALL', 'PENDING', 'BLOCKED', 'ACTIONED'] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setQueueFilter(f)}
+                className={`py-1 rounded-lg font-bold transition ${
+                  queueFilter === f ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+            {filteredQueue.map((prop) => {
               const isSelected = prop.taskId === current.taskId;
               return (
                 <div
                   key={prop.taskId}
                   onClick={() => handleSelect(prop.taskId)}
-                  className={`p-4 rounded-2xl border cursor-pointer transition space-y-2 ${
+                  className={`p-3.5 rounded-2xl border cursor-pointer transition space-y-1.5 ${
                     isSelected
-                      ? 'bg-gradient-to-br from-emerald-500/15 to-purple-500/15 border-emerald-400 shadow-lg'
+                      ? 'bg-gradient-to-br from-emerald-500/20 to-cyan-500/10 border-emerald-400 shadow-lg'
                       : 'nf-card hover:border-white/25'
                   }`}
                 >
@@ -169,8 +210,8 @@ export function EmbassyPage() {
                       {prop.status === 'PENDING' && prop.astStatus === 'REJECT' ? 'AST BLOCKED' : prop.status}
                     </span>
                   </div>
-                  <div className="text-xs font-bold text-white">{prop.title}</div>
-                  <div className="text-[11px] font-mono text-emerald-400 truncate flex items-center space-x-1">
+                  <div className="text-xs font-bold text-white leading-snug">{prop.title}</div>
+                  <div className="text-[10px] font-mono text-emerald-400 truncate flex items-center space-x-1">
                     <FileCode className="w-3 h-3 shrink-0" />
                     <span className="truncate">{prop.target}</span>
                   </div>
@@ -180,26 +221,22 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Center Pane (5 Cols): AST Security Banner + Interactive Diff Editor */}
+        {/* Center Pane (5 Cols): AST Banner + Interactive Diff Editor */}
         <div className="lg:col-span-5 space-y-4">
           {current.astStatus === 'PASS' ? (
-            <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/50 flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-                <div>
-                  <div className="text-xs font-bold text-emerald-300 font-mono">AST SECURITY GATE: VERIFIED (PASS)</div>
-                  <div className="text-[11px] text-emerald-200/80 mt-0.5">{current.astMessage}</div>
-                </div>
+            <div className="p-4 rounded-2xl bg-emerald-950/50 border border-emerald-500/50 flex items-center space-x-3">
+              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div>
+                <div className="text-xs font-bold text-emerald-300 font-mono">AST SECURITY GATE: VERIFIED (PASS)</div>
+                <div className="text-[11px] text-emerald-200/80 mt-0.5">{current.astMessage}</div>
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-2xl bg-rose-950/60 border border-rose-500/60 flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
-                <div>
-                  <div className="text-xs font-bold text-rose-300 font-mono">AST SECURITY GATE: BLOCKED (HTTP 422)</div>
-                  <div className="text-[11px] text-rose-200/90 mt-0.5">{current.astMessage}</div>
-                </div>
+            <div className="p-4 rounded-2xl bg-rose-950/60 border border-rose-500/60 flex items-center space-x-3">
+              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+              <div>
+                <div className="text-xs font-bold text-rose-300 font-mono">AST SECURITY GATE: BLOCKED (HTTP 422)</div>
+                <div className="text-[11px] text-rose-200/90 mt-0.5">{current.astMessage}</div>
               </div>
             </div>
           )}
@@ -210,31 +247,29 @@ export function EmbassyPage() {
                 <GitPullRequest className="w-4 h-4 text-emerald-400" />
                 <span className="text-white font-bold">{current.target}</span>
               </div>
-              <div className="flex items-center space-x-2">
-                {!isEditingDiff ? (
-                  <button
-                    onClick={handleStartEdit}
-                    className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-emerald-300 flex items-center space-x-1 transition"
-                  >
-                    <Edit3 className="w-3 h-3" />
-                    <span>Edit Diff & Re-Screen AST</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleSaveDiff}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 font-bold text-[11px] flex items-center space-x-1"
-                  >
-                    <Check className="w-3 h-3" />
-                    <span>Run AST Gate & Save</span>
-                  </button>
-                )}
-              </div>
+              {!isEditingDiff ? (
+                <button
+                  onClick={handleStartEdit}
+                  className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-emerald-300 flex items-center space-x-1 transition"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>Edit Diff & Re-Screen AST</span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleSaveDiff}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 font-bold text-[11px] flex items-center space-x-1"
+                >
+                  <Check className="w-3 h-3" />
+                  <span>Run AST Gate & Save</span>
+                </button>
+              )}
             </div>
 
             {isEditingDiff ? (
               <div className="p-4 bg-[#05070B] space-y-2">
                 <div className="text-[11px] font-mono text-slate-400">
-                  Tip: Remove or add <code className="text-rose-400">curl | bash</code> or <code className="text-rose-400">rm -rf</code> to test real-time AST Gate blocking:
+                  Remove or add <code className="text-rose-400">curl | bash</code> or <code className="text-rose-400">rm -rf</code> to test real-time AST Gate blocking:
                 </div>
                 <textarea
                   value={draftDiff}
@@ -272,7 +307,7 @@ export function EmbassyPage() {
           </div>
         </div>
 
-        {/* Right Pane (4 Cols): Agent RCA & Full Lifecycle Controls */}
+        {/* Right Pane (4 Cols): Agent RCA & Lifecycle Actions */}
         <div className="lg:col-span-4 space-y-4">
           <div className="p-6 rounded-2xl nf-card space-y-4">
             <div className="flex items-center justify-between">
@@ -310,20 +345,16 @@ export function EmbassyPage() {
               </div>
               <div className="p-3 rounded-xl bg-[#090C14] border border-white/10">
                 <div className="text-slate-400 text-[10px]">BLAST RADIUS</div>
-                <div className="text-sm font-bold text-purple-300 mt-1.5">{current.blastRadius}</div>
+                <div className="text-sm font-bold text-cyan-300 mt-1.5">{current.blastRadius}</div>
               </div>
             </div>
 
-            {/* Actioned States now include Rollback & Re-Open Controls */}
             {current.status === 'APPROVED' && (
               <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-500/50 text-xs font-mono text-emerald-200 space-y-3">
                 <div className="font-bold text-emerald-400 flex items-center space-x-1.5">
                   <Check className="w-4 h-4" />
                   <span>DISPATCHED TO GITOPS & MERKLE SEALED</span>
                 </div>
-                <p className="text-[11px] text-slate-300 font-sans">
-                  This patch is live in the cluster. You can trigger an immediate GitOps rollback or re-open review:
-                </p>
                 <div className="flex items-center space-x-2 pt-1">
                   <button
                     onClick={() => rollbackPR(current.taskId)}
@@ -355,7 +386,7 @@ export function EmbassyPage() {
                     className="flex-1 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-300 font-bold flex items-center justify-center space-x-1.5 transition"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Re-Open Proposal for Review</span>
+                    <span>Re-Open Proposal</span>
                   </button>
                   <button
                     onClick={handleStartEdit}
@@ -382,9 +413,6 @@ export function EmbassyPage() {
                     Auto-fill token
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-300">
-                  Type or click auto-fill for <span className="text-white font-mono font-bold">{current.taskId}</span>:
-                </p>
                 <input
                   type="text"
                   value={taskToken}

