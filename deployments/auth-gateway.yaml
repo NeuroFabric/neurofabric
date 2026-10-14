@@ -1,50 +1,5 @@
-# NeuroFabric Autonomous SRE Remediation Patch
-# Incident: INC-88219 (Connection Pool Starvation on auth-gateway)
-# Verified by: AST Security Gate (Policy: ADR-005)
-# Operator Clearance: LEVEL 5 (Rishabh Sharma)
-
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: auth-gateway
-  namespace: prod-cluster-us-east
-  labels:
-    app.kubernetes.io/name: auth-gateway
-    neurofabric.io/remediated-by: autonomous-embassy
-    neurofabric.io/incident-id: INC-88219
-spec:
-  replicas: 4
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 0
-  template:
-    metadata:
-      labels:
-        app: auth-gateway
-        version: v2.8.1-remediated
-    spec:
-      containers:
-      - name: auth-gateway
-        image: ghcr.io/neurofabric/auth-gateway:v2.8.1
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "500m"
-          limits:
-            memory: "1024Mi"
-            cpu: "1000m"
-        env:
-        - name: MAX_IDLE_CONNS
-          value: "50"
-        - name: MAX_OPEN_CONNS
-          value: "100"
-        - name: CONN_MAX_LIFETIME_SEC
-          value: "300"
-        - name: CONN_MAX_IDLE_TIME_SEC
-          value: "45"
-        - name: POOL_ACQUIRE_TIMEOUT_MS
-          value: "2500"
-        - name: CIRCUIT_BREAKER_ENABLED
-          value: "true"
+# NeuroFabric Remediation Manifest
+# Service: auth-gateway
+# Author: Rishabh Sharma [LEVEL 5]
+  maxIdleConns: 50
+  poolAcquireTimeoutMs: 2500
