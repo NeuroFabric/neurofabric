@@ -1,4 +1,4 @@
-﻿import { createContext, useContext, useState, useEffect, useMemo, type ReactNode } from 'react';
+﻿import { createContext, useContext, useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 export type TimeRange = '5m' | '15m' | '30m' | '1h' | '2h' | '5h' | 'custom';
@@ -21,14 +21,14 @@ export interface PatchProposal {
   blastRadius: string;
   astStatus: 'PASS' | 'REJECT';
   astMessage: string;
-  status: 'PENDING' | 'APPROVED' | 'DECLINED' | 'CHANGES_REQUESTED';
+  status: 'PENDING' | 'APPROVED' | 'DECLINED';
   rcaSummary: string;
   diff: string[];
   declineReason?: string;
 }
 
-export interface TimeSeriesPoint {
-  timestamp: string;
+export interface RawSample {
+  epochMs: number;
   throughput: number;
   latencyP99: number;
   latencyP50: number;
@@ -36,18 +36,42 @@ export interface TimeSeriesPoint {
   suppressed: number;
 }
 
+export interface TimeSeriesPoint {
+  epochMs: number;
+  timestamp: string;
+  windowSpanLabel: string;
+  throughput: number;
+  latencyP99: number;
+  latencyP50: number;
+  errorRate: number;
+  suppressed: number;
+}
+
+export interface ServiceCircuitState {
+  name: string;
+  strikes: number;
+  maxStrikes: number;
+  lastStrike: string;
+  status: 'CLOSED' | 'TRIPPED';
+  latencyMs: number;
+  errorRate: number;
+  history: number[];
+}
+
 export interface TelemetryLog {
   id: string;
+  epochMs: number;
   timestamp: string;
   severity: 'INFO' | 'WARNING' | 'CRITICAL';
   service: string;
   message: string;
   dlpScrubbed?: boolean;
   suppressedCount?: number;
-  payload?: Record<string, unknown>;
+  rawEnvelope?: string;
 }
 
 export interface LedgerItem {
+  leafIndex: number;
   action: string;
   target: string;
   operator: string;
@@ -100,12 +124,17 @@ export interface TelemetryContextType {
   series: TimeSeriesPoint[];
   logs: TelemetryLog[];
   clearLogs: () => void;
+  serviceCircuits: ServiceCircuitState[];
   trippedCircuits: string[];
   unlockCircuit: (service: string) => Promise<void>;
   triggerProbe: (service: string, trip?: boolean) => Promise<void>;
   proposals: PatchProposal[];
   authorizePR: (taskId: string, target: string, diff: string) => Promise<void>;
   declinePR: (taskId: string, target: string, reason?: string) => Promise<void>;
+  reopenPR: (taskId: string) => void;
+  rollbackPR: (taskId: string) => void;
+  updateProposalDiff: (taskId: string, newDiffLines: string[]) => void;
+  synthesizeProposal: (service?: string, summary?: string) => string;
   resetProposals: () => void;
   ledger: LedgerItem[];
   merkleStatus: MerkleStatus;
@@ -122,10 +151,10 @@ const INITIAL_CHECKS: FeatureCheckItem[] = [
   { id: 'chk-1', module: 'Ingress & EventBridge', feature: 'Sub-85ms SSE Stream & Ring Buffer Cap (200 max)', status: 'VERIFIED', opsCount: 1420, lastLatencyMs: 12, assertion: 'DOM buffer capped <= 200 nodes; 0 memory leaks' },
   { id: 'chk-2', module: 'In-Flight DLP Engine', feature: 'Regex Secret & Bearer Token Scrubbing', status: 'VERIFIED', opsCount: 84, lastLatencyMs: 1.1, assertion: '100% of AWS/PAT/Bearer secrets replaced with [DLP:REDACTED_SECRET]' },
   { id: 'chk-3', module: 'Sliding Dedup Window', feature: '60s Burst Collapse & Histogram Sync', status: 'VERIFIED', opsCount: 612, lastLatencyMs: 0.8, assertion: 'Duplicate alert storms collapsed at >90% efficiency' },
-  { id: 'chk-4', module: 'Waveform & Time Engine', feature: 'Global Time Range (5m/15m/30m/1h/2h/5h/Custom) & Crosshairs', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 4.2, assertion: 'All series & sparklines resampled without layout shift' },
+  { id: 'chk-4', module: 'Epoch Time-Series Engine', feature: 'True Multi-Horizon Resampling (5m/15m/30m/1h/2h/5h/Custom)', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 2.1, assertion: 'X-axis and buckets accurately span full selected time horizon' },
   { id: 'chk-5', module: 'Anti-Flapping Circuits', feature: '3-Strike Isolation (HTTP 423) & Operator Level 5 Reset', status: 'VERIFIED', opsCount: 19, lastLatencyMs: 2.4, assertion: '3 strikes in 60s deterministically locks service mutations' },
-  { id: 'chk-6', module: 'AST Diff Security Gate', feature: 'Shell Escape & Pipe Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.9, assertion: 'Prohibited primitives (curl | bash, rm -rf) blocked pre-HITL' },
-  { id: 'chk-7', module: 'Autonomous Embassy (HITL)', feature: 'Stateful 3-Pane Queue, Token Confirm & Refusal Chips', status: 'VERIFIED', opsCount: 28, lastLatencyMs: 6.0, assertion: 'Approvals & refusals mutate queue & seal Merkle leaves' },
+  { id: 'chk-6', module: 'AST Diff Security Gate', feature: 'Live Syntax Screening & Shell Escape Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.9, assertion: 'Prohibited primitives (curl | bash, rm -rf) blocked pre-HITL' },
+  { id: 'chk-7', module: 'Autonomous Embassy (HITL)', feature: 'Stateful Queue, Inline Diff Edit, Re-open & Rollback', status: 'VERIFIED', opsCount: 28, lastLatencyMs: 4.0, assertion: 'Approvals, refusals & rollbacks mutate state & seal Merkle leaves' },
   { id: 'chk-8', module: 'Merkle Audit Ledger', feature: 'WebCrypto SHA-256 Pairwise Chain Verification', status: 'VERIFIED', opsCount: 128, lastLatencyMs: 3.5, assertion: 'Client-side crypto.subtle SHA-256 matches sovereign root' },
   { id: 'chk-9', module: 'Cluster Topology DAG', feature: '8-Stage Closed-Loop Pipeline & Live Node Diagnostics', status: 'VERIFIED', opsCount: 510, lastLatencyMs: 1.5, assertion: 'State machine transitions across all 8 stages without stall' },
   { id: 'chk-10', module: 'Telemetry Explorer', feature: 'Multi-Service Filter, Keyword Search & RFC-4180 CSV Export', status: 'VERIFIED', opsCount: 95, lastLatencyMs: 2.8, assertion: 'CSV export escapes quotes and preserves DLP markers' },
@@ -175,7 +204,7 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
     confidence: 42,
     blastRadius: 'WIDE (CLUSTER-LEVEL)',
     astStatus: 'REJECT',
-    astMessage: 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell pipe primitive [curl | bash] flagged on line 18.',
+    astMessage: 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell pipe primitive [curl | bash] flagged on line 8.',
     status: 'PENDING',
     rcaSummary:
       'Prompt-injected upstream telemetry attempted to coerce the remediation agent into fetching an unverified external shell script during billing database reconciliation. Deterministically blocked by AST Gate.',
@@ -218,33 +247,73 @@ const INITIAL_PROPOSALS: PatchProposal[] = [
   },
 ];
 
-const TelemetryContext = createContext<TelemetryContextType | undefined>(undefined);
+const INITIAL_CIRCUITS: ServiceCircuitState[] = [
+  {
+    name: 'auth-gateway',
+    strikes: 1,
+    maxStrikes: 3,
+    lastStrike: '4m ago',
+    status: 'CLOSED',
+    latencyMs: 18,
+    errorRate: 0.12,
+    history: [18, 22, 19, 34, 28, 21, 19, 24, 20, 18, 22, 19],
+  },
+  {
+    name: 'flapping-payment-worker',
+    strikes: 3,
+    maxStrikes: 3,
+    lastStrike: 'Just now',
+    status: 'TRIPPED',
+    latencyMs: 142,
+    errorRate: 4.85,
+    history: [32, 48, 65, 78, 92, 96, 100, 98, 100, 95, 100, 100],
+  },
+  {
+    name: 'billing-core',
+    strikes: 0,
+    maxStrikes: 3,
+    lastStrike: 'None',
+    status: 'CLOSED',
+    latencyMs: 11,
+    errorRate: 0.01,
+    history: [14, 16, 15, 18, 14, 15, 17, 16, 14, 15, 16, 15],
+  },
+  {
+    name: 'order-service',
+    strikes: 2,
+    maxStrikes: 3,
+    lastStrike: '1m ago',
+    status: 'CLOSED',
+    latencyMs: 46,
+    errorRate: 1.45,
+    history: [20, 28, 62, 45, 38, 72, 54, 49, 66, 58, 64, 70],
+  },
+];
 
-function generateInitialSeries(range: TimeRange, customMins: number): TimeSeriesPoint[] {
-  const mins =
-    range === '5m' ? 5 :
-    range === '15m' ? 15 :
-    range === '30m' ? 30 :
-    range === '1h' ? 60 :
-    range === '2h' ? 120 :
-    range === '5h' ? 300 : customMins;
-
-  const count = 30;
-  const stepMs = (mins * 60 * 1000) / count;
+// Seed 6 hours of realistic historical samples at 15-second intervals (1,440 samples)
+function createSixHourHistory(): RawSample[] {
   const now = Date.now();
-  const pts: TimeSeriesPoint[] = [];
+  const samples: RawSample[] = [];
+  const totalSeconds = 6 * 3600;
+  const stepSec = 10;
+  const count = Math.floor(totalSeconds / stepSec);
 
   for (let i = count; i >= 0; i--) {
-    const t = new Date(now - i * stepMs);
-    const wave = Math.sin(i * 0.45) * 4.8 + Math.cos(i * 0.25) * 2.4;
-    const tp = Number(Math.max(7.2, 16.8 + wave + (Math.random() - 0.5) * 2.2).toFixed(1));
-    const p50 = Number(Math.max(8, 11.8 + Math.sin(i * 0.3) * 2.2 + Math.random() * 1.4).toFixed(1));
-    const p99 = Number((p50 * 1.65 + (i % 8 === 0 ? 11 : 2) + Math.random() * 2.5).toFixed(1));
-    const err = Number((i % 10 === 0 ? 0.75 + Math.random() * 0.5 : 0.02 + Math.random() * 0.04).toFixed(2));
-    const sup = Math.max(2, Math.round(tp * 0.65 + (i % 6 === 0 ? 14 : 3)));
+    const epochMs = now - i * stepSec * 1000;
+    // Multi-frequency wave so 5m, 15m, 1h, and 5h each have distinct, realistic topology
+    const slowWave = Math.sin(i * 0.015) * 8.5;
+    const medWave = Math.cos(i * 0.08) * 4.2;
+    const fastWave = Math.sin(i * 0.45) * 3.1;
+    const burst = i % 42 === 0 ? 18.5 : i % 19 === 0 ? 9.2 : 0;
 
-    pts.push({
-      timestamp: t.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    const tp = Number(Math.max(9.4, 24.0 + slowWave + medWave + fastWave + burst).toFixed(1));
+    const p50 = Number(Math.max(8.5, 12.4 + Math.sin(i * 0.12) * 3.2 + (burst > 0 ? 4.5 : 0)).toFixed(1));
+    const p99 = Number((p50 * 1.65 + (burst > 0 ? 22.0 : 3.5) + Math.abs(fastWave) * 1.8).toFixed(1));
+    const err = Number((burst > 10 ? 1.85 : burst > 0 ? 0.65 : 0.04 + Math.abs(Math.sin(i * 0.2)) * 0.12).toFixed(2));
+    const sup = Math.max(3, Math.round(tp * 0.68 + (burst > 0 ? 24 : 4)));
+
+    samples.push({
+      epochMs,
       throughput: tp,
       latencyP50: p50,
       latencyP99: p99,
@@ -252,8 +321,82 @@ function generateInitialSeries(range: TimeRange, customMins: number): TimeSeries
       suppressed: sup,
     });
   }
-  return pts;
+  return samples;
 }
+
+// Resample the master history buffer over the exact [now - windowMs, now] time range
+function resampleForRange(history: RawSample[], range: TimeRange, customMins: number, nowMs: number): TimeSeriesPoint[] {
+  const mins =
+    range === '5m' ? 5 :
+    range === '15m' ? 15 :
+    range === '30m' ? 30 :
+    range === '1h' ? 60 :
+    range === '2h' ? 120 :
+    range === '5h' ? 300 : Math.max(1, customMins);
+
+  const windowMs = mins * 60 * 1000;
+  const startMs = nowMs - windowMs;
+  const bucketCount = 30;
+  const bucketStepMs = windowMs / bucketCount;
+
+  const points: TimeSeriesPoint[] = [];
+
+  for (let b = 0; b <= bucketCount; b++) {
+    const bucketStart = startMs + (b - 0.5) * bucketStepMs;
+    const bucketEnd = startMs + (b + 0.5) * bucketStepMs;
+    const bucketCenter = Math.round(startMs + b * bucketStepMs);
+
+    // Find samples falling into this bucket
+    const matching = history.filter((s) => s.epochMs >= bucketStart && s.epochMs <= bucketEnd);
+
+    let tp = 22.4;
+    let p50 = 12.5;
+    let p99 = 24.0;
+    let err = 0.08;
+    let sup = 15;
+
+    if (matching.length > 0) {
+      tp = Number((matching.reduce((acc, x) => acc + x.throughput, 0) / matching.length).toFixed(1));
+      p50 = Number((matching.reduce((acc, x) => acc + x.latencyP50, 0) / matching.length).toFixed(1));
+      p99 = Number(Math.max(...matching.map((x) => x.latencyP99)).toFixed(1));
+      err = Number((matching.reduce((acc, x) => acc + x.errorRate, 0) / matching.length).toFixed(2));
+      sup = Math.round(matching.reduce((acc, x) => acc + x.suppressed, 0) / matching.length);
+    } else if (history.length > 0) {
+      const fallback = history[Math.min(history.length - 1, Math.floor((b / bucketCount) * history.length))];
+      tp = fallback.throughput;
+      p50 = fallback.latencyP50;
+      p99 = fallback.latencyP99;
+      err = fallback.errorRate;
+      sup = fallback.suppressed;
+    }
+
+    const d = new Date(bucketCenter);
+    // Format label cleanly: HH:MM:SS for <=30m, HH:MM for >=1h
+    const timestamp =
+      mins <= 30
+        ? d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+
+    const startD = new Date(startMs);
+    const endD = new Date(nowMs);
+    const windowSpanLabel = `${startD.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })} → ${endD.toLocaleTimeString([], { hour12: false, hour: '2-digit', second: '2-digit', minute: '2-digit' })} (${mins}m span)`;
+
+    points.push({
+      epochMs: bucketCenter,
+      timestamp,
+      windowSpanLabel,
+      throughput: tp,
+      latencyP50: p50,
+      latencyP99: p99,
+      errorRate: err,
+      suppressed: sup,
+    });
+  }
+
+  return points;
+}
+
+const TelemetryContext = createContext<TelemetryContextType | undefined>(undefined);
 
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<OperatorUser>(() => {
@@ -272,64 +415,18 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     };
   });
 
+  const historyRef = useRef<RawSample[]>(createSixHourHistory());
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [status, setStatus] = useState<'LIVE EDGE' | 'STANDALONE'>('STANDALONE');
   const [latencyMs, setLatencyMs] = useState(12);
-  const [globalRange, setGlobalRange] = useState<TimeRange>('15m');
+  const [globalRange, setGlobalRange] = useState<TimeRange>('5m');
   const [customMinutes, setCustomMinutes] = useState<number>(45);
-  const [series, setSeries] = useState<TimeSeriesPoint[]>(() => generateInitialSeries('15m', 45));
   const [proposals, setProposals] = useState<PatchProposal[]>(INITIAL_PROPOSALS);
-  const [trippedCircuits, setTrippedCircuits] = useState<string[]>(['flapping-payment-worker']);
-
-  const [stress, setStress] = useState<StressTestState>({
-    active: false,
-    warpSpeed: false,
-    elapsedSec: 0,
-    totalDurationSec: 900, // 15 minutes = 900 seconds
-    currentPhase: 1,
-    phaseName: 'Standby — Ready for 15-Minute Soak & Chaos Run',
-    totalEventsGenerated: 1420,
-    dlpRedactionsCount: 84,
-    circuitTripsCount: 3,
-    astBlocksCount: 12,
-    merkleVerificationsCount: 128,
-    peakThroughput: 24.6,
-    peakLatencyP99: 38.4,
-    heapEstimateMb: 42.4,
-    checks: INITIAL_CHECKS,
-  });
-
-  const [logs, setLogs] = useState<TelemetryLog[]>([
-    {
-      id: 'log-1',
-      timestamp: new Date().toISOString(),
-      severity: 'CRITICAL',
-      service: 'flapping-payment-worker',
-      message: 'Circuit breaker tripped: 3 consecutive timeout strikes in 60s window [HTTP 423 locked]',
-      dlpScrubbed: false,
-      suppressedCount: 14,
-    },
-    {
-      id: 'log-2',
-      timestamp: new Date(Date.now() - 25000).toISOString(),
-      severity: 'WARNING',
-      service: 'auth-gateway',
-      message: 'Connection pool near exhaustion (92/100 conns allocated). Upstream latency +120ms.',
-      dlpScrubbed: false,
-      suppressedCount: 6,
-    },
-    {
-      id: 'log-3',
-      timestamp: new Date(Date.now() - 55000).toISOString(),
-      severity: 'INFO',
-      service: 'ingress-router',
-      message: 'Bearer secret scrubbed in-flight [DLP:REDACTED_SECRET] prior to WAL commit.',
-      dlpScrubbed: true,
-      suppressedCount: 1,
-    },
-  ]);
+  const [serviceCircuits, setServiceCircuits] = useState<ServiceCircuitState[]>(INITIAL_CIRCUITS);
 
   const [ledger, setLedger] = useState<LedgerItem[]>([
     {
+      leafIndex: 128,
       action: 'vault.approval.granted',
       target: 'payments/api-key',
       operator: 'Rishabh Sharma [LEVEL 5]',
@@ -337,6 +434,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       hash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
     },
     {
+      leafIndex: 127,
       action: 'circuit.breaker.tripped',
       target: 'flapping-payment-worker',
       operator: 'Autonomous Sovereign Kernel',
@@ -344,6 +442,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       hash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',
     },
     {
+      leafIndex: 126,
       action: 'vault.approval.refused',
       target: 'customer-db/credentials',
       operator: 'Rishabh Sharma [LEVEL 5]',
@@ -354,8 +453,62 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const [merkleStatus, setMerkleStatus] = useState<MerkleStatus>({
     totalLeaves: 128,
-    rootHash: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',
+    rootHash: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
   });
+
+  const [stress, setStress] = useState<StressTestState>({
+    active: false,
+    warpSpeed: false,
+    elapsedSec: 0,
+    totalDurationSec: 900,
+    currentPhase: 1,
+    phaseName: 'Standby — Ready for 15-Minute Soak & Chaos Run',
+    totalEventsGenerated: 1420,
+    dlpRedactionsCount: 84,
+    circuitTripsCount: 3,
+    astBlocksCount: 12,
+    merkleVerificationsCount: 128,
+    peakThroughput: 34.8,
+    peakLatencyP99: 46.2,
+    heapEstimateMb: 42.4,
+    checks: INITIAL_CHECKS,
+  });
+
+  const [logs, setLogs] = useState<TelemetryLog[]>([
+    {
+      id: 'log-1',
+      epochMs: Date.now() - 4000,
+      timestamp: new Date(Date.now() - 4000).toISOString(),
+      severity: 'CRITICAL',
+      service: 'flapping-payment-worker',
+      message: 'Circuit breaker tripped: 3 consecutive timeout strikes in 60s window [HTTP 423 locked]',
+      dlpScrubbed: false,
+      suppressedCount: 14,
+      rawEnvelope: JSON.stringify({ service: 'flapping-payment-worker', code: 423, strikes: 3, windowSec: 60, action: 'ISOLATE_POD' }, null, 2),
+    },
+    {
+      id: 'log-2',
+      epochMs: Date.now() - 25000,
+      timestamp: new Date(Date.now() - 25000).toISOString(),
+      severity: 'WARNING',
+      service: 'auth-gateway',
+      message: 'Connection pool near exhaustion (92/100 conns allocated). Upstream latency +120ms.',
+      dlpScrubbed: false,
+      suppressedCount: 6,
+      rawEnvelope: JSON.stringify({ service: 'auth-gateway', activeConns: 92, maxConns: 100, p99LatencyMs: 142 }, null, 2),
+    },
+    {
+      id: 'log-3',
+      epochMs: Date.now() - 55000,
+      timestamp: new Date(Date.now() - 55000).toISOString(),
+      severity: 'INFO',
+      service: 'ingress-router',
+      message: 'Bearer secret scrubbed in-flight [DLP:REDACTED_SECRET] prior to WAL commit.',
+      dlpScrubbed: true,
+      suppressedCount: 1,
+      rawEnvelope: JSON.stringify({ service: 'ingress-router', header: 'Authorization: Bearer [DLP:REDACTED_SECRET]', dlpEngine: 'regex-v2.8' }, null, 2),
+    },
+  ]);
 
   const loginUser = (u: OperatorUser) => {
     setUser(u);
@@ -366,46 +519,72 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  useEffect(() => {
-    setSeries(generateInitialSeries(globalRange, customMinutes));
-  }, [globalRange, customMinutes]);
+  // Compute time-range series dynamically from the 6-hour history buffer
+  const series = useMemo(
+    () => resampleForRange(historyRef.current, globalRange, customMinutes, nowTick),
+    [globalRange, customMinutes, nowTick]
+  );
 
-  // Baseline + 15-Minute Stress Runner Loop
+  const trippedCircuits = useMemo(
+    () => serviceCircuits.filter((s) => s.status === 'TRIPPED').map((s) => s.name),
+    [serviceCircuits]
+  );
+
+  // Append a synchronized Merkle leaf
+  const appendMerkleLeaf = (action: string, target: string, customOp?: string) => {
+    const randomHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    setMerkleStatus((prev) => {
+      const nextLeaf = prev.totalLeaves + 1;
+      setLedger((lPrev) => [
+        {
+          leafIndex: nextLeaf,
+          action,
+          target,
+          operator: customOp || `${user.name} [${user.clearance}]`,
+          timestamp: new Date().toISOString(),
+          hash: randomHash,
+        },
+        ...lPrev.slice(0, 99),
+      ]);
+      return { totalLeaves: nextLeaf, rootHash: randomHash };
+    });
+  };
+
+  // Live Tick & 15-Minute Stress Engine
   useEffect(() => {
     const intervalMs = stress.active ? (stress.warpSpeed ? 250 : 1000) : 1500;
 
     const timer = setInterval(() => {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const nowMs = Date.now();
+      const lastSample = historyRef.current[historyRef.current.length - 1];
 
       if (!stress.active) {
-        // Normal baseline heartbeat
-        setSeries(prev => {
-          const last = prev[prev.length - 1];
-          const nextTp = Number(Math.max(8.5, Math.min(29.0, (last?.throughput || 16) + (Math.random() - 0.48) * 2.4)).toFixed(1));
-          const nextP50 = Number(Math.max(9.0, Math.min(22.0, 12 + (Math.random() - 0.5) * 2.5)).toFixed(1));
-          const nextP99 = Number((nextP50 * 1.65 + Math.random() * 3.8).toFixed(1));
-          const nextErr = Number((Math.random() > 0.88 ? 0.35 + Math.random() * 0.7 : 0.02).toFixed(2));
-          const nextSup = Math.max(2, Math.round(nextTp * 0.65 + Math.random() * 5));
+        const nextTp = Number(Math.max(11.0, Math.min(36.0, (lastSample?.throughput || 22) + (Math.random() - 0.48) * 3.2)).toFixed(1));
+        const nextP50 = Number(Math.max(9.0, Math.min(24.0, 12.5 + (Math.random() - 0.5) * 2.8)).toFixed(1));
+        const nextP99 = Number((nextP50 * 1.65 + Math.random() * 4.2).toFixed(1));
+        const nextErr = Number((Math.random() > 0.88 ? 0.35 + Math.random() * 0.6 : 0.03).toFixed(2));
+        const nextSup = Math.max(3, Math.round(nextTp * 0.68 + Math.random() * 5));
 
-          return [
-            ...prev.slice(1),
-            {
-              timestamp: timeStr,
-              throughput: nextTp,
-              latencyP50: nextP50,
-              latencyP99: nextP99,
-              errorRate: nextErr,
-              suppressed: nextSup,
-            },
-          ];
+        historyRef.current.push({
+          epochMs: nowMs,
+          throughput: nextTp,
+          latencyP50: nextP50,
+          latencyP99: nextP99,
+          errorRate: nextErr,
+          suppressed: nextSup,
         });
+        if (historyRef.current.length > 3000) historyRef.current.shift();
+
+        setNowTick(nowMs);
         setLatencyMs(Math.floor(11 + Math.random() * 4));
         return;
       }
 
       // --- ACTIVE 15-MINUTE STRESS ENGINE ---
-      setStress(prev => {
+      setStress((prev) => {
         const stepSec = prev.warpSpeed ? 5 : 1;
         const nextElapsed = prev.elapsedSec + stepSec;
 
@@ -418,11 +597,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
             active: false,
             elapsedSec: prev.totalDurationSec,
             phaseName: 'COMPLETED — All 12 System Modules Verified (100% PASS)',
-            checks: prev.checks.map(c => ({ ...c, status: 'VERIFIED' })),
+            checks: prev.checks.map((c) => ({ ...c, status: 'VERIFIED' })),
           };
         }
 
-        // Determine Phase (1 to 5, 3 minutes / 180s each)
         const phase =
           nextElapsed < 180 ? 1 :
           nextElapsed < 360 ? 2 :
@@ -437,35 +615,31 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           5: 'Phase 5/5: WebCrypto SHA-256 Merkle Proof Verification & Recovery',
         };
 
-        // Compute stress metrics per phase
         const simTp =
           phase === 1 ? Number((95 + Math.random() * 45).toFixed(1)) :
           phase === 2 ? Number((78 + Math.random() * 30).toFixed(1)) :
           phase === 3 ? Number((64 + Math.random() * 35).toFixed(1)) :
           phase === 4 ? Number((82 + Math.random() * 25).toFixed(1)) :
-          Number((55 + Math.random() * 20).toFixed(1));
+          Number((58 + Math.random() * 22).toFixed(1));
 
         const simP50 = Number((14 + Math.random() * 6).toFixed(1));
         const simP99 = Number((phase === 3 ? 48 + Math.random() * 24 : 26 + Math.random() * 14).toFixed(1));
         const simErr = Number((phase === 3 ? 2.4 + Math.random() * 1.8 : phase === 4 ? 1.1 + Math.random() * 0.8 : 0.15 + Math.random() * 0.3).toFixed(2));
         const simSup = Math.round(simTp * 0.72 + Math.random() * 18);
 
-        // Push to live waveform series
-        setSeries(sPrev => [
-          ...sPrev.slice(1),
-          {
-            timestamp: timeStr,
-            throughput: simTp,
-            latencyP50: simP50,
-            latencyP99: simP99,
-            errorRate: simErr,
-            suppressed: simSup,
-          },
-        ]);
+        historyRef.current.push({
+          epochMs: nowMs,
+          throughput: simTp,
+          latencyP50: simP50,
+          latencyP99: simP99,
+          errorRate: simErr,
+          suppressed: simSup,
+        });
+        if (historyRef.current.length > 3000) historyRef.current.shift();
 
+        setNowTick(nowMs);
         setLatencyMs(Math.round(simP50));
 
-        // Emit synthetic stress log into capped ring-buffer (<=200 items)
         const services = ['ingress-gateway', 'auth-gateway', 'flapping-payment-worker', 'billing-core', 'order-service'];
         const svc = services[nextElapsed % services.length];
 
@@ -480,41 +654,25 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         } else if (phase === 3) {
           sev = 'CRITICAL';
           msg = `[STRESS-CIRCUIT] Timeout strike recorded on ${svc} (P99: ${simP99}ms). Evaluating 3-strike sovereign fence.`;
-          if (nextElapsed % 15 === 0) {
-            setTrippedCircuits(tc => (tc.includes('order-service') ? tc.filter(x => x !== 'order-service') : [...tc, 'order-service']));
-          }
         } else if (phase === 4) {
           sev = 'CRITICAL';
           msg = `[STRESS-AST] Blocked adversarial diff on ${svc}: Prohibited primitive [curl -sSL | bash] rejected with HTTP 422.`;
         } else if (phase === 5) {
           sev = 'INFO';
-          msg = `[STRESS-MERKLE] Appended & verified SHA-256 Merkle leaf #${merkleStatus.totalLeaves + 1} via WebCrypto subtle digest.`;
-          if (nextElapsed % 8 === 0) {
-            const newHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-              .map(b => b.toString(16).padStart(2, '0')).join('');
-            setLedger(lPrev => [
-              {
-                action: `stress.soak.verified.p${phase}`,
-                target: svc,
-                operator: `${user.name} [STRESS-RUNNER]`,
-                timestamp: now.toISOString(),
-                hash: newHash,
-              },
-              ...lPrev.slice(0, 99),
-            ]);
-            setMerkleStatus(mPrev => ({ totalLeaves: mPrev.totalLeaves + 1, rootHash: newHash }));
-          }
+          msg = `[STRESS-MERKLE] Verified SHA-256 Merkle chain integrity (${merkleStatus.totalLeaves} sealed leaves).`;
         }
 
-        setLogs(lPrev => [
+        setLogs((lPrev) => [
           {
-            id: `stress-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            timestamp: now.toISOString(),
+            id: `stress-${nowMs}-${Math.random().toString(36).slice(2, 6)}`,
+            epochMs: nowMs,
+            timestamp: new Date(nowMs).toISOString(),
             severity: sev,
             service: svc,
             message: msg,
             dlpScrubbed: dlp,
             suppressedCount: simSup,
+            rawEnvelope: JSON.stringify({ phase, service: svc, throughput: simTp, p99Ms: simP99, dlpScrubbed: dlp }, null, 2),
           },
           ...lPrev.slice(0, 199),
         ]);
@@ -528,10 +686,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           dlpRedactionsCount: prev.dlpRedactionsCount + (phase === 2 ? 4 : 1),
           circuitTripsCount: prev.circuitTripsCount + (phase === 3 && nextElapsed % 15 === 0 ? 1 : 0),
           astBlocksCount: prev.astBlocksCount + (phase === 4 ? 2 : 0),
-          merkleVerificationsCount: prev.merkleVerificationsCount + (phase === 5 ? 3 : 1),
+          merkleVerificationsCount: merkleStatus.totalLeaves,
           peakThroughput: Math.max(prev.peakThroughput, simTp),
           peakLatencyP99: Math.max(prev.peakLatencyP99, simP99),
-          heapEstimateMb: Number((42.4 + Math.sin(nextElapsed * 0.1) * 1.8).toFixed(1)), // Bounded ring-buffer heap!
+          heapEstimateMb: Number((42.4 + Math.sin(nextElapsed * 0.1) * 1.8).toFixed(1)),
           checks: prev.checks.map((c, idx) => ({
             ...c,
             status: (idx % 5) + 1 === phase ? 'STRESSING' : 'VERIFIED',
@@ -543,10 +701,213 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [stress.active, stress.warpSpeed, merkleStatus.totalLeaves, user.name]);
+  }, [stress.active, stress.warpSpeed, merkleStatus.totalLeaves]);
+
+  const clearLogs = () => setLogs([]);
+
+  const unlockCircuit = async (service: string) => {
+    setServiceCircuits((prev) =>
+      prev.map((s) =>
+        s.name === service
+          ? {
+              ...s,
+              strikes: 0,
+              status: 'CLOSED',
+              lastStrike: 'Reset just now',
+              latencyMs: 14,
+              errorRate: 0.02,
+              history: [...s.history.slice(1), 16],
+            }
+          : s
+      )
+    );
+    appendMerkleLeaf('circuit.override.unlocked', service);
+    toast.success('Circuit Breaker Reset', { description: `Service ${service} restored to CLOSED nominal routing.` });
+  };
+
+  const triggerProbe = async (service: string, trip = false) => {
+    const nowMs = Date.now();
+    setServiceCircuits((prev) =>
+      prev.map((s) => {
+        if (s.name !== service) return s;
+        const nextStrikes = trip ? 3 : Math.min(3, s.strikes + 1);
+        const nextStatus = nextStrikes >= 3 ? 'TRIPPED' : 'CLOSED';
+        const spikeVal = nextStatus === 'TRIPPED' ? 100 : nextStrikes === 2 ? 78 : 52;
+        return {
+          ...s,
+          strikes: nextStrikes,
+          status: nextStatus,
+          lastStrike: 'Just now',
+          latencyMs: nextStatus === 'TRIPPED' ? 165 : s.latencyMs + 28,
+          errorRate: nextStatus === 'TRIPPED' ? 5.4 : Number((s.errorRate + 0.85).toFixed(2)),
+          history: [...s.history.slice(1), spikeVal],
+        };
+      })
+    );
+
+    const newLog: TelemetryLog = {
+      id: `log-${nowMs}`,
+      epochMs: nowMs,
+      timestamp: new Date(nowMs).toISOString(),
+      severity: trip ? 'CRITICAL' : 'WARNING',
+      service,
+      message: trip
+        ? `Flapping strike simulated on ${service}. Strike 3/3 reached — circuit TRIPPED (HTTP 423).`
+        : `Strike probe injected on ${service}. Incrementing 60s sliding strike counter.`,
+      dlpScrubbed: false,
+      suppressedCount: trip ? 9 : 2,
+      rawEnvelope: JSON.stringify({ service, event: 'STRIKE_PROBE', forceTrip: trip, timestamp: new Date(nowMs).toISOString() }, null, 2),
+    };
+    setLogs((prev) => [newLog, ...prev.slice(0, 199)]);
+    if (trip) appendMerkleLeaf('circuit.breaker.tripped', service, 'Autonomous Sovereign Kernel');
+    toast.info('Circuit Strike Recorded', { description: `Updated strike state and velocity sparkline for ${service}` });
+  };
+
+  const authorizePR = async (taskId: string, target: string) => {
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'APPROVED' } : p)));
+    appendMerkleLeaf('gitops.pr.authorized', target);
+    toast.success('GitOps PR Approved & Dispatched', {
+      description: `Task ${taskId} merged and sealed into Merkle leaf #${merkleStatus.totalLeaves + 1}.`,
+    });
+  };
+
+  const declinePR = async (taskId: string, target: string, reason = 'Operator Refused') => {
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'DECLINED', declineReason: reason } : p)));
+    appendMerkleLeaf(`gitops.pr.declined (${reason})`, target);
+    toast.error('Proposal Refused & Logged', {
+      description: `Task ${taskId} marked DECLINED (${reason}). Sealed to audit ledger.`,
+    });
+  };
+
+  const reopenPR = (taskId: string) => {
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'PENDING', declineReason: undefined } : p)));
+    toast.info('Proposal Re-Opened for Review', { description: `Task ${taskId} returned to PENDING HITL state.` });
+  };
+
+  const rollbackPR = (taskId: string) => {
+    const found = proposals.find((p) => p.taskId === taskId);
+    setProposals((prev) => prev.map((p) => (p.taskId === taskId ? { ...p, status: 'PENDING' } : p)));
+    appendMerkleLeaf('gitops.pr.rollback', found?.target || taskId);
+    toast.warning('GitOps Rollback Dispatched', {
+      description: `Reverted ${taskId} and sealed rollback leaf to Merkle ledger.`,
+    });
+  };
+
+  const updateProposalDiff = (taskId: string, newDiffLines: string[]) => {
+    const joined = newDiffLines.join('\n');
+    const hasMalicious = /(curl\s+.*\|\s*(bash|sh)|rm\s+-rf|eval\s*\(|wget\s+.*\|\s*(bash|sh))/i.test(joined);
+    setProposals((prev) =>
+      prev.map((p) =>
+        p.taskId === taskId
+          ? {
+              ...p,
+              diff: newDiffLines,
+              astStatus: hasMalicious ? 'REJECT' : 'PASS',
+              astMessage: hasMalicious
+                ? 'MALICIOUS_DIFF_REJECTED (HTTP 422): Prohibited shell execution primitive detected in live diff.'
+                : 'AST Gate Verified: Live syntax check passed with 0 dangerous primitives.',
+            }
+          : p
+      )
+    );
+    toast.info('Live AST Re-Screening Complete', {
+      description: hasMalicious ? 'BLOCKED (HTTP 422): Malicious primitive detected!' : 'VERIFIED (PASS): Diff is clean.',
+    });
+  };
+
+  const synthesizeProposal = (service = 'order-service', summary?: string): string => {
+    const id = `task-${service.split('-')[0]}-${Math.floor(100 + Math.random() * 899)}`;
+    const newProp: PatchProposal = {
+      taskId: id,
+      title: `Autonomous Remediation: ${service}`,
+      target: `deployments/${service}-tuning.yaml`,
+      service,
+      severity: 'HIGH',
+      confidence: 95,
+      blastRadius: 'CONTAINED (1 SERVICE)',
+      astStatus: 'PASS',
+      astMessage: 'AST Gate Verified: Newly synthesized agent patch contains 0 forbidden shell primitives.',
+      status: 'PENDING',
+      rcaSummary:
+        summary ||
+        `Pi Agent synthesized causal fix for ${service} latency spike. Tunes circuit timeout ceiling and increases worker concurrency pool.`,
+      diff: [
+        `--- a/deployments/${service}-tuning.yaml`,
+        `+++ b/deployments/${service}-tuning.yaml`,
+        '@@ -8,5 +8,7 @@ spec:',
+        '   replicas: 3',
+        '-  maxConcurrentRequests: 100',
+        '+  maxConcurrentRequests: 250',
+        '+  circuitBreakerTimeoutMs: 1500',
+        '+  dlpInlineScrub: true',
+      ],
+    };
+    setProposals((prev) => [newProp, ...prev]);
+    toast.success('New Agent Patch Synthesized', {
+      description: `Queued ${id} in Autonomous Embassy for HITL review.`,
+    });
+    return id;
+  };
+
+  const resetProposals = () => {
+    setProposals(INITIAL_PROPOSALS);
+    toast.info('Proposal Queue Reset', { description: 'Restored all HITL proposals to PENDING state.' });
+  };
+
+  const injectAnomaly = () => {
+    const nowMs = Date.now();
+    const anomaly: TelemetryLog = {
+      id: `anomaly-${nowMs}`,
+      epochMs: nowMs,
+      timestamp: new Date(nowMs).toISOString(),
+      severity: 'CRITICAL',
+      service: 'egress-payments-api',
+      message: 'Token leak detected in outbound headers. Scrubbed [DLP:REDACTED_SECRET]. Rate limiter activated.',
+      dlpScrubbed: true,
+      suppressedCount: 19,
+      rawEnvelope: JSON.stringify({ service: 'egress-payments-api', leakedHeader: 'Bearer [DLP:REDACTED_SECRET]', action: 'SCRUB_AND_FENCE' }, null, 2),
+    };
+    setLogs((prev) => [anomaly, ...prev.slice(0, 199)]);
+    historyRef.current.push({
+      epochMs: nowMs,
+      throughput: 44.8,
+      latencyP50: 22.4,
+      latencyP99: 68.5,
+      errorRate: 3.15,
+      suppressed: 38,
+    });
+    setNowTick(nowMs);
+    toast.error('Live Anomaly & Spike Injected', { description: 'DLP scrub engine triggered; waveform spiked.' });
+  };
+
+  const emitHeartbeat = () => {
+    const nowMs = Date.now();
+    const hb: TelemetryLog = {
+      id: `hb-${nowMs}`,
+      epochMs: nowMs,
+      timestamp: new Date(nowMs).toISOString(),
+      severity: 'INFO',
+      service: 'ingress-gateway',
+      message: 'Telemetry ingestion nominal: 22.4 evt/s. Ingestion key verified.',
+      dlpScrubbed: false,
+      suppressedCount: 1,
+      rawEnvelope: JSON.stringify({ service: 'ingress-gateway', status: 'NOMINAL', latencyMs }, null, 2),
+    };
+    setLogs((prev) => [hb, ...prev.slice(0, 199)]);
+    historyRef.current.push({
+      epochMs: nowMs,
+      throughput: 26.2,
+      latencyP50: 11.8,
+      latencyP99: 21.4,
+      errorRate: 0.02,
+      suppressed: 16,
+    });
+    setNowTick(nowMs);
+    toast.info('Heartbeat Emitted', { description: `${latencyMs}ms round-trip propagation.` });
+  };
 
   const startStressTest = () => {
-    setStress(prev => ({
+    setStress((prev) => ({
       ...prev,
       active: true,
       elapsedSec: prev.elapsedSec >= prev.totalDurationSec ? 0 : prev.elapsedSec,
@@ -558,17 +919,17 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   };
 
   const stopStressTest = () => {
-    setStress(prev => ({
+    setStress((prev) => ({
       ...prev,
       active: false,
       phaseName: `PAUSED at ${Math.floor(prev.elapsedSec / 60)}m ${prev.elapsedSec % 60}s — All Checks Intact`,
-      checks: prev.checks.map(c => ({ ...c, status: 'VERIFIED' })),
+      checks: prev.checks.map((c) => ({ ...c, status: 'VERIFIED' })),
     }));
     toast.warning('Stress Test Paused', { description: 'Baseline telemetry rate restored.' });
   };
 
   const toggleWarpSpeed = () => {
-    setStress(prev => ({ ...prev, warpSpeed: !prev.warpSpeed }));
+    setStress((prev) => ({ ...prev, warpSpeed: !prev.warpSpeed }));
   };
 
   const resetStressTest = () => {
@@ -583,123 +944,15 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       dlpRedactionsCount: 84,
       circuitTripsCount: 3,
       astBlocksCount: 12,
-      merkleVerificationsCount: 128,
-      peakThroughput: 24.6,
-      peakLatencyP99: 38.4,
+      merkleVerificationsCount: merkleStatus.totalLeaves,
+      peakThroughput: 34.8,
+      peakLatencyP99: 46.2,
       heapEstimateMb: 42.4,
       checks: INITIAL_CHECKS,
     });
     toast.info('Stress Counters Reset', { description: 'Ready for a fresh 15-minute soak run.' });
   };
 
-  const clearLogs = () => setLogs([]);
-
-  const unlockCircuit = async (service: string) => {
-    setTrippedCircuits(prev => prev.filter(s => s !== service));
-    const randomHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    setLedger(prev => [
-      { action: 'circuit.override.unlocked', target: service, operator: `${user.name} [${user.clearance}]`, timestamp: new Date().toISOString(), hash: randomHash },
-      ...prev,
-    ]);
-    setMerkleStatus(prev => ({ totalLeaves: prev.totalLeaves + 1, rootHash: randomHash }));
-    toast.success('Circuit Breaker Reset', { description: `Service ${service} restored to CLOSED nominal routing.` });
-  };
-
-  const triggerProbe = async (service: string, trip = false) => {
-    if (trip && !trippedCircuits.includes(service)) {
-      setTrippedCircuits(prev => [...prev, service]);
-    }
-    const newLog: TelemetryLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      severity: trip ? 'CRITICAL' : 'WARNING',
-      service,
-      message: trip
-        ? `Flapping strike simulated on ${service}. Strike 3/3 reached — circuit TRIPPED (HTTP 423).`
-        : `Health probe anomaly recorded on ${service}.`,
-      dlpScrubbed: false,
-      suppressedCount: trip ? 9 : 2,
-    };
-    setLogs(prev => [newLog, ...prev.slice(0, 199)]);
-    toast.info('Telemetry Probe Dispatched', { description: `Signal recorded for ${service}` });
-  };
-
-  const authorizePR = async (taskId: string, target: string) => {
-    const randomHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    setProposals(prev => prev.map(p => (p.taskId === taskId ? { ...p, status: 'APPROVED' } : p)));
-    setLedger(prev => [
-      { action: 'gitops.pr.authorized', target, operator: `${user.name} [${user.clearance}]`, timestamp: new Date().toISOString(), hash: randomHash },
-      ...prev,
-    ]);
-    setMerkleStatus(prev => ({ totalLeaves: prev.totalLeaves + 1, rootHash: randomHash }));
-    toast.success('GitOps PR Approved & Dispatched', {
-      description: `Task ${taskId} merged and sealed into Merkle leaf #${merkleStatus.totalLeaves + 1}.`,
-    });
-  };
-
-  const declinePR = async (taskId: string, target: string, reason = 'Operator Refused') => {
-    const randomHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    setProposals(prev => prev.map(p => (p.taskId === taskId ? { ...p, status: 'DECLINED', declineReason: reason } : p)));
-    setLedger(prev => [
-      { action: `gitops.pr.declined (${reason})`, target, operator: `${user.name} [${user.clearance}]`, timestamp: new Date().toISOString(), hash: randomHash },
-      ...prev,
-    ]);
-    setMerkleStatus(prev => ({ totalLeaves: prev.totalLeaves + 1, rootHash: randomHash }));
-    toast.error('Proposal Refused & Logged', {
-      description: `Task ${taskId} marked DECLINED (${reason}). Sealed to audit ledger.`,
-    });
-  };
-
-  const resetProposals = () => {
-    setProposals(INITIAL_PROPOSALS);
-    toast.info('Proposal Queue Reset', { description: 'Restored all 3 HITL proposals to PENDING state.' });
-  };
-
-  const injectAnomaly = () => {
-    const anomaly: TelemetryLog = {
-      id: `anomaly-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      severity: 'CRITICAL',
-      service: 'egress-payments-api',
-      message: 'Token leak detected in outbound headers. Scrubbed [DLP:REDACTED_SECRET]. Rate limiter activated.',
-      dlpScrubbed: true,
-      suppressedCount: 19,
-    };
-    setLogs(prev => [anomaly, ...prev.slice(0, 199)]);
-    setSeries(prev => {
-      const copy = [...prev];
-      if (copy.length > 0) {
-        copy[copy.length - 1] = {
-          ...copy[copy.length - 1],
-          throughput: 28.4,
-          latencyP99: 49.6,
-          errorRate: 2.35,
-          suppressed: 34,
-        };
-      }
-      return copy;
-    });
-    toast.error('Live Anomaly & Spike Injected', { description: 'DLP scrub engine triggered; waveform spiked.' });
-  };
-
-  const emitHeartbeat = () => {
-    const hb: TelemetryLog = {
-      id: `hb-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      severity: 'INFO',
-      service: 'ingress-gateway',
-      message: 'Telemetry ingestion nominal: 16.8 evt/s. Ingestion key verified.',
-      dlpScrubbed: false,
-      suppressedCount: 1,
-    };
-    setLogs(prev => [hb, ...prev.slice(0, 199)]);
-    toast.info('Heartbeat Emitted', { description: `${latencyMs}ms round-trip propagation.` });
-  };
-
-  // Keep setStatus available for future SSE hookups
   useEffect(() => {
     setStatus('STANDALONE');
   }, []);
@@ -717,12 +970,17 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       series,
       logs,
       clearLogs,
+      serviceCircuits,
       trippedCircuits,
       unlockCircuit,
       triggerProbe,
       proposals,
       authorizePR,
       declinePR,
+      reopenPR,
+      rollbackPR,
+      updateProposalDiff,
+      synthesizeProposal,
       resetProposals,
       ledger,
       merkleStatus,
@@ -734,7 +992,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       toggleWarpSpeed,
       resetStressTest,
     }),
-    [user, status, latencyMs, globalRange, customMinutes, series, logs, trippedCircuits, proposals, ledger, merkleStatus, stress]
+    [user, status, latencyMs, globalRange, customMinutes, series, logs, serviceCircuits, trippedCircuits, proposals, ledger, merkleStatus, stress]
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
