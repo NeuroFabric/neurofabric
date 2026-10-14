@@ -48,7 +48,6 @@ export function UserAccessPortal() {
   const [search, setSearch] = useState('');
   const [selectedUserId, setSelectedUserId] = useState<string>(iamUsers[0]?.id || 'iam-1');
 
-  // New User Provisioning Form State
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState('Senior Site Reliability Engineer');
@@ -120,7 +119,6 @@ export function UserAccessPortal() {
 
   return (
     <div className="space-y-6 font-sans">
-      {/* Top KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono">
         <div className="p-5 rounded-2xl nf-card">
           <div className="text-[10px] text-slate-400 uppercase font-bold">Provisioned Identities</div>
@@ -151,7 +149,6 @@ export function UserAccessPortal() {
         </div>
       </div>
 
-      {/* Portal Navigation Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
         <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
           <button
@@ -220,10 +217,8 @@ export function UserAccessPortal() {
         </div>
       </div>
 
-      {/* TAB 1: OPERATOR DIRECTORY & GRANULAR PERMISSION INSPECTOR */}
       {activeTab === 'DIRECTORY' && (
         <div className="grid lg:grid-cols-12 gap-6">
-          {/* Left 7 Cols: Directory List */}
           <div className="lg:col-span-7 space-y-3">
             {filteredUsers.map((u) => {
               const isSelected = u.id === selectedRecord.id;
@@ -276,7 +271,6 @@ export function UserAccessPortal() {
             })}
           </div>
 
-          {/* Right 5 Cols: Selected Operator Access & Permission Controller */}
           <div className="lg:col-span-5">
             <div className="p-6 rounded-2xl nf-card space-y-5 sticky top-6">
               <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -298,7 +292,6 @@ export function UserAccessPortal() {
                 </span>
               </div>
 
-              {/* Clearance Level Selector */}
               <div className="space-y-1.5 font-mono text-xs">
                 <label className="text-[10px] text-slate-400 block font-bold uppercase">
                   ASSIGNED RBAC CLEARANCE TIER
@@ -327,7 +320,6 @@ export function UserAccessPortal() {
                 </div>
               </div>
 
-              {/* Granular Module Permissions */}
               <div className="space-y-2 font-mono text-xs">
                 <label className="text-[10px] text-slate-400 block font-bold uppercase">
                   GRANULAR CAPABILITY SCOPES (CLICK TO TOGGLE)
@@ -365,7 +357,6 @@ export function UserAccessPortal() {
                 </div>
               </div>
 
-              {/* JIT Elevation & Account Lifecycle Actions */}
               <div className="pt-3 border-t border-white/10 space-y-2.5 font-mono text-xs">
                 <button
                   onClick={() => grantJitElevation(selectedRecord.id, 30)}
@@ -396,7 +387,6 @@ export function UserAccessPortal() {
         </div>
       )}
 
-      {/* TAB 2: PROVISION / INVITE NEW USER */}
       {activeTab === 'PROVISION' && (
         <form onSubmit={handleProvisionSubmit} className="p-6 rounded-2xl nf-card max-w-3xl space-y-5 font-mono text-xs">
           <div className="border-b border-white/10 pb-3">
@@ -521,7 +511,6 @@ export function UserAccessPortal() {
         </form>
       )}
 
-      {/* TAB 3: PENDING ACCESS REQUESTS QUEUE */}
       {activeTab === 'REQUESTS' && (
         <div className="space-y-3 font-mono text-xs">
           {accessRequests.map((req) => (
@@ -575,7 +564,6 @@ export function UserAccessPortal() {
         </div>
       )}
 
-      {/* TAB 4: RBAC POLICY MATRIX */}
       {activeTab === 'MATRIX' && (
         <div className="rounded-2xl nf-card overflow-hidden font-mono text-xs">
           <div className="p-4 bg-[#101420] grid grid-cols-6 text-[10px] text-slate-400 uppercase font-bold border-b border-white/10">
@@ -636,4 +624,3 @@ export function AccessManagementPage() {
     </div>
   );
 }
-

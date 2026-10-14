@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Toaster } from 'sonner';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
-import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
+import { PrivacyPolicyPage, TermsPage, RefundPolicyPage, CookiesPolicyPage } from './pages/LegalPages';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { SecurityPosturePage } from './pages/SecurityPosturePage';
 import { AccessManagementPage } from './pages/AccessManagementPage';
@@ -32,7 +32,6 @@ const pageVariants: any = {
   exit: { opacity: 0, y: -8, filter: 'blur(3px)', transition: { duration: 0.15, ease: 'easeIn' } },
 };
 
-// Strict Zero-Trust Route Guard: Requires explicit login completion (isAuthenticated === true)
 function RequireAdminAuth({ children }: { children: ReactNode }) {
   const { isAuthenticated, user } = useTelemetry();
   const location = useLocation();
@@ -61,11 +60,17 @@ function AuthenticatedWorkspace() {
   return (
     <RequireAdminAuth>
       <div className="flex h-screen bg-[#050609] text-slate-100 overflow-hidden select-none">
+        <a
+          href="#main-cockpit-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-xl focus:bg-emerald-400 focus:text-slate-950 focus:font-bold"
+        >
+          Skip to main content
+        </a>
         <CommandPalette isOpen={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <Sidebar mobileOpen={mobileMenuOpen} onCloseMobile={() => setMobileMenuOpen(false)} />
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Topbar onOpenMobileMenu={() => setMobileMenuOpen(true)} />
-          <main className="flex-1 overflow-y-auto relative bg-[#050609]">
+          <main id="main-cockpit-content" className="flex-1 overflow-y-auto relative bg-[#050609]">
             <AnimatePresence mode="wait">
               <motion.div
                 key={location.pathname}
@@ -112,6 +117,8 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />
+            <Route path="/refund" element={<RefundPolicyPage />} />
+            <Route path="/cookies" element={<CookiesPolicyPage />} />
             <Route path="/*" element={<AuthenticatedWorkspace />} />
           </Routes>
         </BrowserRouter>

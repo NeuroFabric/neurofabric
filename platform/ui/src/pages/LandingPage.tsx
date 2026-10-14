@@ -1,8 +1,8 @@
 ﻿import { useState, type MouseEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import { Logo } from '../components/common/Logo';
 import { useTelemetry } from '../context/TelemetryContext';
 import { toast } from 'sonner';
-import { Logo } from '../components/common/Logo';
 import {
   ShieldCheck,
   Zap,
@@ -70,21 +70,24 @@ function Interactive3DCard({
 export function LandingPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useTelemetry();
+  const [simStep, setSimStep] = useState<number>(0);
+
   const goProtected = (targetPath: string) => {
     if (!isAuthenticated) {
-      toast.info('Authentication Required', { description: 'Please sign in with Google or your provisioned corporate email first.' });
+      toast.info('Authentication Required', {
+        description: 'Please sign in with Google or your provisioned corporate email first.',
+      });
       navigate('/login?redirect=' + encodeURIComponent(targetPath));
     } else {
       navigate(targetPath);
     }
   };
-  const [simStep, setSimStep] = useState<number>(0);
 
   const simStages = [
     {
       title: '1. In-Flight Edge Telemetry & DLP Scrub',
       status: 'NOMINAL (14ms)',
-      desc: 'Intercepting high-throughput edge telemetry on port 8080. Bearer tokens, GitHub PATs, and AWS secret keys are redacted in-flight before ever hitting disk.',
+      desc: 'Intercepting high-throughput edge telemetry on port 8080. Bearer tokens, GitHub PATs, Aadhaar/PAN PII, and AWS secret keys are redacted in-flight before hitting disk.',
       log: '[EDGE:8080] POST /ingest -> Redacted [DLP:REDACTED_SECRET] -> EventBridge SSE',
       color: 'text-emerald-400',
     },
@@ -117,7 +120,6 @@ export function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#050609] text-slate-100 flex flex-col font-sans select-none overflow-x-hidden">
-      {/* Ambient Grid Background */}
       <div
         className="fixed inset-0 pointer-events-none opacity-20"
         style={{
@@ -128,13 +130,12 @@ export function LandingPage() {
         }}
       />
 
-      {/* Sticky Header */}
       <header className="sticky top-0 z-40 h-16 bg-[#050609]/90 backdrop-blur-md border-b border-white/10 px-8 flex items-center justify-between">
         <Logo size="md" />
 
         <nav className="hidden md:flex items-center space-x-8 text-xs font-medium text-slate-300">
           <button onClick={() => scrollToSection('benefits')} className="hover:text-emerald-400 transition">
-            Benefits & ROI
+            Benefits &amp; ROI
           </button>
           <button onClick={() => scrollToSection('comparison')} className="hover:text-emerald-400 transition">
             Before vs. NeuroFabric
@@ -158,23 +159,22 @@ export function LandingPage() {
             onClick={() => goProtected('/overview')}
             className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 text-slate-950 flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
           >
-            <span>Launch Live Console</span>
+            <span>Authenticate &amp; Launch Console</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
       </header>
 
-      {/* Hero Section */}
-      <main className="relative z-10 flex-1 max-w-7xl mx-auto px-8 pt-16 pb-24 flex flex-col items-center text-center">
+      <main className="relative z-10 flex-1 max-w-7xl mx-auto px-8 pt-16 pb-20 flex flex-col items-center text-center">
         <div className="inline-flex items-center space-x-2 px-3.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/30 text-[11px] font-mono text-emerald-300 mb-6 shadow-inner">
           <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
-          <span>Closed-Loop SRE Remediation & Zero-Trust Telemetry Mesh</span>
+          <span>Closed-Loop SRE Remediation &amp; Zero-Trust Telemetry Mesh</span>
         </div>
 
         <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white max-w-4xl leading-[1.1]">
           Automated Incident Remediation{' '}
           <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
-            Without Hallucination Blindspots
+            With Deterministic Safety Gates
           </span>
         </h1>
 
@@ -184,37 +184,31 @@ export function LandingPage() {
           into an immutable SHA-256 Merkle ledger.
         </p>
 
+        {/* Single Clear Primary Call to Action */}
         <div className="flex flex-wrap items-center justify-center gap-4 mt-8">
           <button
             onClick={() => goProtected('/overview')}
-            className="px-6 py-3.5 rounded-xl font-mono text-xs font-bold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 text-slate-950 flex items-center space-x-2 transition shadow-xl shadow-emerald-500/25"
+            className="px-7 py-3.5 rounded-xl font-mono text-xs font-bold bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-300 hover:to-teal-400 text-slate-950 flex items-center space-x-2 transition shadow-xl shadow-emerald-500/25"
           >
-            <span>Enter Command Center</span>
+            <span>Sign In to Command Center</span>
             <ArrowRight className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => goProtected('/integrations')}
-            className="px-6 py-3.5 rounded-xl font-mono text-xs font-bold bg-[#11141D] border border-white/10 hover:border-white/30 text-slate-200 transition"
-          >
-            Connect Ingestion (REST / OTel)
           </button>
         </div>
 
-        {/* SECTION 1: CORE BENEFITS & ROI */}
         <section id="benefits" className="w-full mt-24 text-left">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8 border-b border-white/10 pb-5">
             <div>
               <div className="flex items-center space-x-2 font-mono text-xs text-emerald-400 font-bold uppercase tracking-wider">
                 <Sparkles className="w-4 h-4" />
-                <span>Enterprise Value & SRE ROI</span>
+                <span>Enterprise Value &amp; Operational Impact</span>
               </div>
               <h2 className="text-2xl font-bold text-white tracking-tight mt-1">
-                What Your Engineering Team Gains After Deploying NeuroFabric
+                What Engineering Teams Gain After Deploying NeuroFabric
               </h2>
             </div>
             <div className="flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-400/30 text-xs font-mono text-emerald-300 font-bold">
               <TrendingDown className="w-3.5 h-3.5" />
-              <span>Saves ~18.5 On-Call Hours Per Engineer / Month</span>
+              <span>Measured 60s Sliding Window Alert Deduplication</span>
             </div>
           </div>
 
@@ -224,14 +218,14 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                   <TrendingDown className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">94.2% Alert Noise Suppression</h3>
+                <h3 className="font-bold text-base text-white">Sliding-Window Burst Suppression</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Eliminates alert fatigue. The 60-second sliding dedup window collapses cascading retry storms and duplicate microservice spikes into a single actionable incident context.
+                  The 60-second sliding dedup window collapses cascading retry storms and duplicate microservice spikes into a single correlated incident context.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
-                <span className="text-slate-400">PAGER DUTY FATIGUE</span>
-                <span className="text-emerald-400 font-bold">NEAR ZERO</span>
+                <span className="text-slate-400">DEDUP WINDOW</span>
+                <span className="text-emerald-400 font-bold">60 SECONDS</span>
               </div>
             </Interactive3DCard>
 
@@ -240,14 +234,14 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
                   <Clock className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">&lt;90s Mean Time to Resolution</h3>
+                <h3 className="font-bold text-base text-white">Automated RCA &amp; Diff Synthesis</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Causal root cause analysis and declarative GitOps patches are synthesized by the Embassy diagnostic agent in seconds, ready for one-click operator verification.
+                  Causal root cause analysis and declarative GitOps patches are synthesized by the Embassy diagnostic agent, ready for operator verification.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
-                <span className="text-slate-400">MTTR ACCELERATION</span>
-                <span className="text-cyan-300 font-bold">14.8x FASTER</span>
+                <span className="text-slate-400">WORKFLOW MODE</span>
+                <span className="text-cyan-300 font-bold">HUMAN-IN-THE-LOOP</span>
               </div>
             </Interactive3DCard>
 
@@ -256,14 +250,14 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">Zero Prompt Injection Hallucinations</h3>
+                <h3 className="font-bold text-base text-white">Fail-Closed AST Security Gate</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  AI suggestions never touch production without deterministic AST screening. Prohibited shell escapes like <code className="text-rose-400">curl | bash</code> and <code className="text-rose-400">rm -rf</code> are rejected with HTTP 422 before human review.
+                  AI suggestions never touch production without deterministic AST screening. Prohibited shell escapes like <code className="text-rose-400">curl | bash</code> and <code className="text-rose-400">rm -rf</code> fail closed with HTTP 422.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
                 <span className="text-slate-400">SAFETY FENCE</span>
-                <span className="text-purple-300 font-bold">100% DETERMINISTIC</span>
+                <span className="text-purple-300 font-bold">FAIL-CLOSED (HTTP 422)</span>
               </div>
             </Interactive3DCard>
 
@@ -272,14 +266,14 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
                   <Lock className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">Zero Credential Leaks on Disk</h3>
+                <h3 className="font-bold text-base text-white">In-Flight DLP &amp; DPDP Redaction</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  High-speed regex token scrubbers redact AWS access keys, GitHub PATs, and Bearer tokens in-flight (&lt;1.2ms overhead). Raw secrets never touch your logs or telemetry databases.
+                  Regex token scrubbers redact AWS keys, GitHub PATs, Bearer tokens, Aadhaar, PAN, GSTIN, and UPI identifiers in-flight before WAL persistence.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
                 <span className="text-slate-400">DLP ENFORCEMENT</span>
-                <span className="text-amber-300 font-bold">LINE-RATE</span>
+                <span className="text-amber-300 font-bold">LINE-RATE REGEX</span>
               </div>
             </Interactive3DCard>
 
@@ -288,14 +282,14 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
                   <Zap className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">Automated Circuit Isolation</h3>
+                <h3 className="font-bold text-base text-white">3-Strike Circuit Isolation</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Stop cascade retry storms before they take down your entire cluster. 3 strikes within 60 seconds automatically trips the circuit breaker into an HTTP 423 lock, protecting downstream databases.
+                  3 timeout strikes within 60 seconds automatically trips the service circuit breaker into an HTTP 423 lock, protecting downstream databases.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
                 <span className="text-slate-400">CASCADE PROTECTION</span>
-                <span className="text-rose-300 font-bold">AUTOMATIC</span>
+                <span className="text-rose-300 font-bold">HTTP 423 LOCK</span>
               </div>
             </Interactive3DCard>
 
@@ -304,102 +298,76 @@ export function LandingPage() {
                 <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
                   <Database className="w-5 h-5" />
                 </div>
-                <h3 className="font-bold text-base text-white">Cryptographic Audit Compliance</h3>
+                <h3 className="font-bold text-base text-white">Per-User RLS &amp; Merkle Auditing</h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Pass SOC 2, ISO 27001, and NIST SP 800-218 audits effortlessly. Every operator authorization, refusal, and circuit trip is sealed into an append-only SHA-256 Merkle chain mathematically verifiable in the browser.
+                  Every operator approval, refusal, and IAM change is scoped by per-user Row-Level Security and chained into an append-only SHA-256 Merkle ledger.
                 </p>
               </div>
               <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-between font-mono text-[11px]">
                 <span className="text-slate-400">AUDIT PROOF</span>
-                <span className="text-teal-300 font-bold">TAMPER-EVIDENT</span>
+                <span className="text-teal-300 font-bold">SHA-256 + PER-USER RLS</span>
               </div>
             </Interactive3DCard>
           </div>
         </section>
 
-        {/* SECTION 2: BEFORE VS. AFTER COMPARISON MATRIX */}
         <section id="comparison" className="w-full mt-24 text-left">
           <div className="mb-8 border-b border-white/10 pb-5">
             <span className="text-xs font-mono font-bold uppercase tracking-wider text-emerald-400">
-              Operational Transformation
+              Operational Comparison
             </span>
             <h2 className="text-2xl font-bold text-white tracking-tight mt-1">
-              Traditional 2 AM On-Call vs. Sovereign Closed-Loop with NeuroFabric
+              Manual Incident Playbooks vs. NeuroFabric Closed-Loop Governance
             </h2>
           </div>
 
           <div className="rounded-2xl bg-[#090C14] border border-white/10 overflow-hidden shadow-2xl">
-            <div className="p-4 bg-[#101420] grid grid-cols-12 text-xs font-mono font-bold text-slate-400 uppercase tracking-wider border-b border-white/10">
+            <div className="p-4 bg-[#101420] grid grid-cols-12 text-xs font-mono font-bold text-slate-300 uppercase tracking-wider border-b border-white/10">
               <div className="col-span-3">Incident Dimension</div>
-              <div className="col-span-4 text-rose-300">Traditional On-Call Playbook</div>
-              <div className="col-span-5 text-emerald-300">With NeuroFabric Autonomous Closed Loop</div>
+              <div className="col-span-4 text-rose-300">Manual On-Call Playbook</div>
+              <div className="col-span-5 text-emerald-300">With NeuroFabric Closed Loop</div>
             </div>
 
             <div className="divide-y divide-white/10 text-xs font-sans">
               <div className="p-4 grid grid-cols-12 items-center hover:bg-white/[0.02]">
-                <div className="col-span-3 font-mono font-bold text-slate-200">2 AM Alert Storms</div>
-                <div className="col-span-4 text-slate-400 flex items-start space-x-2">
+                <div className="col-span-3 font-mono font-bold text-slate-200">Alert Storms</div>
+                <div className="col-span-4 text-slate-300 flex items-start space-x-2">
                   <X className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>Dozens of fragmented PagerDuty notifications wake up on-call engineers for cascading duplicate failures.</span>
+                  <span>Fragmented notifications across multiple monitoring tools for cascading duplicate failures.</span>
                 </div>
                 <div className="col-span-5 text-emerald-200 flex items-start space-x-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Sliding window dedup collapses 94% of bursts into 1 correlated incident context with automated circuit fencing.</span>
+                  <span>60s sliding window dedup collapses duplicate bursts with automated circuit fencing.</span>
                 </div>
               </div>
 
               <div className="p-4 grid grid-cols-12 items-center hover:bg-white/[0.02]">
-                <div className="col-span-3 font-mono font-bold text-slate-200">Root Cause Synthesis</div>
-                <div className="col-span-4 text-slate-400 flex items-start space-x-2">
+                <div className="col-span-3 font-mono font-bold text-slate-200">Patch Safety</div>
+                <div className="col-span-4 text-slate-300 flex items-start space-x-2">
                   <X className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>Engineers spend 45+ minutes piecing together logs across Datadog, Grafana, and terminal traces.</span>
+                  <span>Unscreened AI suggestions risk shell injection or destructive commands in production.</span>
                 </div>
                 <div className="col-span-5 text-emerald-200 flex items-start space-x-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Autonomous Embassy synthesizes causal RCA in seconds with confidence scores and blast radius calculations.</span>
+                  <span>AST Diff Security Gate deterministically rejects prohibited shell primitives with HTTP 422.</span>
                 </div>
               </div>
 
               <div className="p-4 grid grid-cols-12 items-center hover:bg-white/[0.02]">
-                <div className="col-span-3 font-mono font-bold text-slate-200">Patch Safety & Hallucination</div>
-                <div className="col-span-4 text-slate-400 flex items-start space-x-2">
+                <div className="col-span-3 font-mono font-bold text-slate-200">Audit &amp; Data Isolation</div>
+                <div className="col-span-4 text-slate-300 flex items-start space-x-2">
                   <X className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>Generic AI coding assistants suggest unverified commands, risks of remote code execution or bad syntax in prod.</span>
+                  <span>Shared flat log tables and scattered chat histories during post-mortem reviews.</span>
                 </div>
                 <div className="col-span-5 text-emerald-200 flex items-start space-x-2">
                   <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>AST Diff Security Gate deterministically rejects prohibited shell primitives (curl | bash, rm -rf) with HTTP 422.</span>
-                </div>
-              </div>
-
-              <div className="p-4 grid grid-cols-12 items-center hover:bg-white/[0.02]">
-                <div className="col-span-3 font-mono font-bold text-slate-200">Production Deployment</div>
-                <div className="col-span-4 text-slate-400 flex items-start space-x-2">
-                  <X className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>Manual copy-pasting of YAML, dangerous hot-patching directly in production pods with zero rollback trail.</span>
-                </div>
-                <div className="col-span-5 text-emerald-200 flex items-start space-x-2">
-                  <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Automated GitOps Pull Request with progressive canary rollout (10% to 100%) and instant 1-click rollback.</span>
-                </div>
-              </div>
-
-              <div className="p-4 grid grid-cols-12 items-center hover:bg-white/[0.02]">
-                <div className="col-span-3 font-mono font-bold text-slate-200">Audit & Compliance Trail</div>
-                <div className="col-span-4 text-slate-400 flex items-start space-x-2">
-                  <X className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>Lost Slack messages, ephemeral shell histories, difficult to prove who authorized emergency actions.</span>
-                </div>
-                <div className="col-span-5 text-emerald-200 flex items-start space-x-2">
-                  <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Every action is chained into a client-side verified SHA-256 Merkle tree (NIST SP 800-218 and OWASP compliant).</span>
+                  <span>Per-user Row-Level Security (RLS) across all 7 tables + client-verifiable SHA-256 Merkle chain.</span>
                 </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* SECTION 3: 3D ISOMETRIC CLOSED-LOOP SIMULATOR */}
         <section id="simulator" className="w-full mt-24 text-left">
           <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-b from-[#101420] to-[#0A0D15] border border-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.75)]">
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
@@ -411,7 +379,7 @@ export function LandingPage() {
                   </span>
                 </div>
                 <h2 className="text-lg font-bold text-white mt-1">
-                  Click any stage to inspect how NeuroFabric processes live telemetry in 3D
+                  Click any stage to inspect how NeuroFabric processes live telemetry
                 </h2>
               </div>
 
@@ -425,9 +393,9 @@ export function LandingPage() {
                 </button>
                 <button
                   onClick={() => goProtected('/embassy')}
-                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-mono transition"
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-mono transition"
                 >
-                  Open Live HITL Diff
+                  Sign In to Inspect HITL Diff
                 </button>
               </div>
             </div>
@@ -456,7 +424,7 @@ export function LandingPage() {
                         <div className="flex items-center space-x-3">
                           <div
                             className={`w-7 h-7 rounded-lg flex items-center justify-center font-mono text-xs font-bold ${
-                              active ? 'bg-emerald-400 text-slate-950' : 'bg-slate-800 text-slate-400'
+                              active ? 'bg-emerald-400 text-slate-950' : 'bg-slate-800 text-slate-300'
                             }`}
                           >
                             0{idx + 1}
@@ -466,7 +434,7 @@ export function LandingPage() {
                             <div className={`text-[10px] font-mono ${stg.color}`}>{stg.status}</div>
                           </div>
                         </div>
-                        <CheckCircle2 className={`w-4 h-4 ${active ? 'text-emerald-400' : 'text-slate-700'}`} />
+                        <CheckCircle2 className={`w-4 h-4 ${active ? 'text-emerald-400' : 'text-slate-600'}`} />
                       </div>
                     );
                   })}
@@ -486,30 +454,14 @@ export function LandingPage() {
                 </p>
 
                 <div className="p-3.5 rounded-xl bg-[#050609] border border-white/10 text-[11px] text-emerald-400">
-                  <div className="text-[10px] text-slate-500 mb-1 uppercase">Live Kernel Trace</div>
+                  <div className="text-[10px] text-slate-400 mb-1 uppercase">Live Kernel Trace</div>
                   {simStages[simStep].log}
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 pt-2 text-center">
-                  <div className="p-3 rounded-xl bg-[#11141D] border border-slate-800">
-                    <div className="text-[10px] text-slate-500">PROPAGATION</div>
-                    <div className="text-sm font-bold text-white mt-0.5">14.2 ms</div>
-                  </div>
-                  <div className="p-3 rounded-xl bg-[#11141D] border border-slate-800">
-                    <div className="text-[10px] text-slate-500">DLP LEAKS</div>
-                    <div className="text-sm font-bold text-emerald-400 mt-0.5">0 (SCRUBBED)</div>
-                  </div>
-                  <div className="p-3 rounded-xl bg-[#11141D] border border-slate-800">
-                    <div className="text-[10px] text-slate-500">MERKLE STATE</div>
-                    <div className="text-sm font-bold text-cyan-400 mt-0.5">SHA-256 SEALED</div>
-                  </div>
                 </div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* SECTION 4: FOUR SECURITY GUARANTEES */}
         <section id="security" className="w-full mt-24 text-left">
           <div className="flex items-center justify-between mb-8 border-b border-white/10 pb-5">
             <div>
@@ -520,7 +472,7 @@ export function LandingPage() {
             </div>
             <span className="text-xs font-mono text-emerald-400 flex items-center space-x-1">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>NIST SP 800-218 Verified</span>
+              <span>DPDP Rules 2025 &amp; CERT-In Aligned</span>
             </span>
           </div>
 
@@ -531,12 +483,8 @@ export function LandingPage() {
               </div>
               <h3 className="font-bold text-sm text-white">In-Flight DLP Scrubbing</h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                Line-rate regex token scrubbers eliminate AWS secret keys, GitHub PATs, and Bearer tokens before logs hit disk.
+                Line-rate regex token scrubbers redact AWS keys, GitHub PATs, Aadhaar/PAN, and Bearer tokens before logs hit disk.
               </p>
-              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-emerald-400">
-                <span>LATENCY OVERHEAD</span>
-                <span className="font-bold">&lt; 1.2ms</span>
-              </div>
             </Interactive3DCard>
 
             <Interactive3DCard className="p-6">
@@ -545,12 +493,8 @@ export function LandingPage() {
               </div>
               <h3 className="font-bold text-sm text-white">AST Diff Security Gate</h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                Agent patches pass through deterministic AST analysis. Dangerous commands (curl piping, rm -rf) are rejected with HTTP 422.
+                Agent patches pass through deterministic AST analysis. Dangerous commands (curl piping, rm -rf) fail closed with HTTP 422.
               </p>
-              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-purple-400">
-                <span>SHELL ESCAPES</span>
-                <span className="font-bold">BLOCKED</span>
-              </div>
             </Interactive3DCard>
 
             <Interactive3DCard className="p-6">
@@ -559,12 +503,8 @@ export function LandingPage() {
               </div>
               <h3 className="font-bold text-sm text-white">Anti-Flapping Breaker</h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                Three strikes within 60 seconds automatically trips the circuit breaker, isolating degraded microservices from mutating state.
+                Three strikes within 60 seconds automatically trips the circuit breaker, isolating degraded microservices with HTTP 423.
               </p>
-              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-rose-400">
-                <span>FENCE LOCK</span>
-                <span className="font-bold">HTTP 423</span>
-              </div>
             </Interactive3DCard>
 
             <Interactive3DCard className="p-6">
@@ -575,42 +515,32 @@ export function LandingPage() {
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
                 Every human authorization, refusal, and rollback is sealed into an immutable SHA-256 Merkle chain verifiable via WebCrypto.
               </p>
-              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-amber-400">
-                <span>AUDIT CRYPTO</span>
-                <span className="font-bold">SHA-256 WAL</span>
-              </div>
             </Interactive3DCard>
           </div>
         </section>
 
-        {/* CTA BANNER */}
-        <section className="w-full mt-24 p-8 rounded-3xl bg-gradient-to-r from-emerald-950/60 via-[#101420] to-teal-950/60 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-6 text-left shadow-2xl">
-          <div>
-            <h3 className="text-2xl font-extrabold text-white">Ready to Harden Your Production Incidents?</h3>
-            <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
-              Experience the 15-minute autonomous stress test or connect your Kubernetes cluster with our OpenTelemetry exporter in under 5 minutes.
-            </p>
+        {/* Registered Corporate & Legal Compliance Footer */}
+        <footer className="w-full mt-20 pt-8 border-t border-white/10 text-left font-sans text-xs text-slate-300 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="font-bold text-white">NeuroFabric Sovereign Systems Pvt. Ltd.</div>
+              <div className="text-[11px] text-slate-300 mt-0.5">
+                Registered Office: Khanpur, New Delhi, Delhi 110062, India • DPO &amp; Grievance Officer: Rishabh Sharma (dpo@neurofabric.io)
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-5 font-mono text-[11px] text-emerald-400">
+              <Link to="/privacy" className="hover:underline">Privacy Policy</Link>
+              <Link to="/terms" className="hover:underline">Terms &amp; Conditions</Link>
+              <Link to="/refund" className="hover:underline">Refund Policy</Link>
+              <Link to="/cookies" className="hover:underline">Cookies Policy</Link>
+              <Link to="/login" className="hover:underline">Operator Sign-In</Link>
+            </div>
           </div>
-          <div className="flex items-center space-x-3">
-            <button
-              onClick={() => goProtected('/overview')}
-              className="px-6 py-3 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-mono font-bold text-xs flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
-            >
-              <span>Launch Live Console</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => goProtected('/integrations')}
-              className="px-5 py-3 rounded-xl bg-[#090C14] hover:bg-slate-800 border border-white/10 text-slate-200 font-mono font-bold text-xs transition"
-            >
-              View Ingestion APIs
-            </button>
+          <div className="text-[10px] font-mono text-slate-400">
+            © 2026 NeuroFabric Sovereign Systems Pvt. Ltd. All vector illustrations are original first-party MIT assets. Zero third-party tracking scripts or fake testimonials.
           </div>
-        </section>
+        </footer>
       </main>
     </div>
   );
 }
-
-
-

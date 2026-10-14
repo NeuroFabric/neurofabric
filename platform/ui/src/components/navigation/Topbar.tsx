@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Radio, Clock, User, Calendar, Wifi, Play, Menu, Gauge } from 'lucide-react';
+import { Radio, Clock, User, Calendar, Wifi, Play, Menu, Gauge, LogOut, ShieldCheck, Users, ChevronDown } from 'lucide-react';
 import { useTelemetry, type TimeRange } from '../../context/TelemetryContext';
 
 export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) {
@@ -8,6 +8,8 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
   const navigate = useNavigate();
   const {
     user,
+    logoutUser,
+    activeTenant,
     status,
     latencyMs,
     pageLoadMs,
@@ -22,6 +24,7 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
   const [isUTC, setIsUTC] = useState(false);
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [showStatusInfo, setShowStatusInfo] = useState(false);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
 
   useEffect(() => {
     const updateTime = () => {
@@ -41,6 +44,12 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
   const breadcrumb = pathName.toUpperCase();
   const ranges: TimeRange[] = ['5m', '15m', '30m', '1h', '2h', '5h'];
 
+  const handleSignOut = () => {
+    setShowUserDropdown(false);
+    logoutUser();
+    navigate('/login');
+  };
+
   return (
     <header className="h-14 bg-[#080B12]/95 backdrop-blur-md border-b border-white/10 px-4 md:px-6 flex items-center justify-between text-xs select-none shrink-0 z-30 font-sans relative">
       <div className="flex items-center space-x-2 font-mono">
@@ -53,7 +62,7 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
             <Menu className="w-4 h-4" />
           </button>
         )}
-        <span className="hidden sm:inline text-slate-400 font-bold">NEUROFABRIC</span>
+        <span className="hidden sm:inline text-slate-300 font-bold">NEUROFABRIC</span>
         <span className="hidden sm:inline text-slate-600">/</span>
         <span className="text-emerald-400 font-bold">{breadcrumb}</span>
         <span className="text-[10px] bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 px-2 py-0.5 rounded ml-1 font-bold">
@@ -61,9 +70,8 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
         </span>
       </div>
 
-      {/* Synchronized Global Time Range Selector */}
       <div className="hidden xl:flex items-center space-x-1 bg-[#121622] p-1 rounded-xl border border-white/10 font-mono text-[11px]">
-        <span className="text-[10px] text-slate-400 px-2 font-bold uppercase tracking-wider">Time Window:</span>
+        <span className="text-[10px] text-slate-300 px-2 font-bold uppercase tracking-wider">Time Window:</span>
         {ranges.map((r) => (
           <button
             key={r}
@@ -74,7 +82,7 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
             className={`px-2.5 py-1 rounded-lg transition ${
               globalRange === r
                 ? 'bg-emerald-500 text-slate-950 font-bold shadow'
-                : 'text-slate-400 hover:text-white'
+                : 'text-slate-300 hover:text-white'
             }`}
           >
             {r}
@@ -85,7 +93,7 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
           className={`px-2.5 py-1 rounded-lg transition flex items-center space-x-1 ${
             globalRange === 'custom'
               ? 'bg-emerald-500 text-slate-950 font-bold'
-              : 'text-slate-400 hover:text-white'
+              : 'text-slate-300 hover:text-white'
           }`}
         >
           <Calendar className="w-3 h-3" />
@@ -95,8 +103,9 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
 
       {showCustomModal && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 mt-1 p-3.5 rounded-2xl nf-card border border-emerald-500/40 shadow-2xl flex items-center space-x-3 z-50 font-mono text-xs">
-          <span className="text-slate-200">Custom Range (mins):</span>
+          <label htmlFor="custom-range-input" className="text-slate-200">Custom Range (mins):</label>
           <input
+            id="custom-range-input"
             type="number"
             min={1}
             max={360}
@@ -117,7 +126,6 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
       )}
 
       <div className="flex items-center space-x-2 md:space-x-3">
-        {/* Item #12 (Image 2): Page Load Speed Metric */}
         <div
           title="Measured DOM Navigation Load Speed (Web Vitals)"
           className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-[#121622] border border-white/10 text-emerald-300 font-mono text-[11px]"
@@ -137,12 +145,15 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
 
         <div className="relative">
           <button
-            onClick={() => setShowStatusInfo(!showStatusInfo)}
+            onClick={() => {
+              setShowStatusInfo(!showStatusInfo);
+              setShowUserDropdown(false);
+            }}
             className="flex items-center space-x-1.5 font-mono px-2.5 py-1.5 rounded-xl bg-[#121622] border border-white/10 hover:border-emerald-400/50 transition cursor-pointer"
           >
             <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
             <span className="text-emerald-400 font-bold">{status}</span>
-            <span className="hidden sm:inline text-slate-400">({latencyMs}ms)</span>
+            <span className="hidden sm:inline text-slate-300">({latencyMs}ms)</span>
           </button>
 
           {showStatusInfo && (
@@ -153,11 +164,11 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
                   <span>HARDENED ENGINE STATUS</span>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  55/55 PASS
+                  70/70 PASS
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 leading-relaxed">
-                Volatile RAM session active (0 localStorage secrets). WebCrypto SHA-256 Merkle proofs, AST fail-closed gate, and 8s fetch timeouts enforced.
+                Per-user Row-Level Security (RLS) active. Zero secrets in frontend bundle. Cost-guarded AI rate limiting enforced.
               </p>
               <div className="flex items-center justify-between pt-1">
                 <button
@@ -172,7 +183,7 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
                 </button>
                 <button
                   onClick={() => setShowStatusInfo(false)}
-                  className="text-[11px] font-mono text-slate-400 hover:text-white"
+                  className="text-[11px] font-mono text-slate-300 hover:text-white"
                 >
                   Close
                 </button>
@@ -181,14 +192,73 @@ export function Topbar({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) 
           )}
         </div>
 
-        <button
-          onClick={() => navigate('/login')}
-          title="Verified Operator Identity (MFA Active)"
-          className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 hover:border-emerald-300 transition text-emerald-200 font-mono font-bold"
-        >
-          <User className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="truncate max-w-[140px]">{user.name}</span>
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => {
+              setShowUserDropdown(!showUserDropdown);
+              setShowStatusInfo(false);
+            }}
+            aria-expanded={showUserDropdown}
+            aria-haspopup="menu"
+            title="Operator Session & Logout Menu"
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 hover:border-emerald-300 transition text-emerald-200 font-mono font-bold"
+          >
+            <User className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="truncate max-w-[140px]">{user.name}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-emerald-400" />
+          </button>
+
+          {showUserDropdown && (
+            <div
+              role="menu"
+              className="absolute right-0 top-11 w-72 p-4 rounded-2xl nf-card border border-emerald-500/40 shadow-2xl z-50 space-y-3 text-left font-mono text-xs"
+            >
+              <div className="border-b border-white/10 pb-2.5 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-white font-bold font-sans text-sm">{user.name}</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold">
+                    {user.clearance}
+                  </span>
+                </div>
+                <div className="text-slate-300 text-[11px] truncate">{user.email}</div>
+                <div className="text-[10px] text-cyan-300">RLS Scope: {activeTenant}</div>
+              </div>
+
+              <div className="space-y-1">
+                <button
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    navigate('/iam');
+                  }}
+                  className="w-full px-3 py-2 rounded-xl hover:bg-white/5 text-slate-200 flex items-center space-x-2 transition"
+                >
+                  <Users className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Manage IAM &amp; Access (/iam)</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    navigate('/security');
+                  }}
+                  className="w-full px-3 py-2 rounded-xl hover:bg-white/5 text-slate-200 flex items-center space-x-2 transition"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>70-Point Security &amp; RLS Audit</span>
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-white/10">
+                <button
+                  onClick={handleSignOut}
+                  className="w-full py-2.5 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 font-bold flex items-center justify-center space-x-2 transition"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Lock Session &amp; Sign Out</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

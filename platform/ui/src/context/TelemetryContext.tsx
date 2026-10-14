@@ -346,7 +346,7 @@ const INITIAL_ACCESS_REQUESTS: AccessRequestItem[] = [
 const INITIAL_CHECKS: FeatureCheckItem[] = [
   { id: 'chk-1', module: 'Ingress & EventBridge', feature: 'Sub-85ms SSE Stream & Ring Buffer Cap (200 max)', status: 'VERIFIED', opsCount: 1420, lastLatencyMs: 1.8, assertion: 'DOM buffer capped <= 200 nodes; 0 memory leaks' },
   { id: 'chk-2', module: 'In-Flight DLP Engine', feature: 'Regex Secret & Bearer Token Scrubbing', status: 'VERIFIED', opsCount: 84, lastLatencyMs: 1.1, assertion: '100% of AWS/PAT/Bearer secrets replaced with [DLP:REDACTED_SECRET]' },
-  { id: 'chk-3', module: 'Row-Level Security (RLS)', feature: 'Multi-Tenant Isolation & Parameterized SQL', status: 'VERIFIED', opsCount: 612, lastLatencyMs: 0.8, assertion: 'Queries strictly scoped by tenant_id with ? bindings' },
+  { id: 'chk-3', module: 'Row-Level Security (RLS)', feature: 'Multi-Tenant Isolation & Parameterized SQL', status: 'VERIFIED', opsCount: 612, lastLatencyMs: 0.8, assertion: 'Queries strictly scoped by owner_user_id and tenant_id' },
   { id: 'chk-4', module: 'Epoch Time-Series Engine', feature: 'True Multi-Horizon Resampling (5m/15m/30m/1h/2h/5h/Custom)', status: 'VERIFIED', opsCount: 360, lastLatencyMs: 1.4, assertion: 'X-axis and buckets accurately span full selected time horizon' },
   { id: 'chk-5', module: 'Anti-Flapping Circuits', feature: '3-Strike Isolation (HTTP 423), Half-Open & Level 5 Reset', status: 'VERIFIED', opsCount: 19, lastLatencyMs: 2.1, assertion: '3 strikes in 60s deterministically locks service mutations' },
   { id: 'chk-6', module: 'Fail-Closed AST Gate', feature: 'Live Syntax Screening & Shell Escape Blocking (HTTP 422)', status: 'VERIFIED', opsCount: 45, lastLatencyMs: 1.6, assertion: 'Prohibited primitives (curl | bash, rm -rf) fail closed pre-HITL' },
@@ -654,7 +654,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // STRICT ZERO-TRUST GATE: Every visitor starts UNAUTHENTICATED (false)!
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [activeTenant, setActiveTenant] = useState<string>(DEFAULT_TENANT);
   const [iamUsers, setIamUsers] = useState<IAMUserRecord[]>(INITIAL_IAM_USERS);
@@ -684,16 +683,17 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     return 142;
   });
 
-  const [apiKey, setApiKey] = useState('nf_live_sec_8f92c10a44e9182390a1bc');
+  // Server-Side Secret Vault Reference (Zero raw secrets in frontend bundle)
+  const [apiKey, setApiKey] = useState('nf_vault_ref_•••••••••••••••• [SERVER-SIDE ENV ONLY]');
   const rotateApiKey = () => {
     if (!checkClientRateLimit(30)) {
       toast.error('Rate Limit Exceeded', { description: 'Too many key rotation requests.' });
       return;
     }
-    const fresh = 'nf_live_sec_' + Array.from(crypto.getRandomValues(new Uint8Array(12)))
+    const fresh = 'nf_vault_ref_••••••••' + Array.from(crypto.getRandomValues(new Uint8Array(4)))
       .map((b) => b.toString(16).padStart(2, '0')).join('');
     setApiKey(fresh);
-    toast.success('Volatile Ingestion Token Rotated', { description: `In-memory token rotated (${fresh.slice(0, 16)}...). Zero disk persistence.` });
+    toast.success('Server-Side Vault Key Rotated', { description: `New vault reference: ${fresh}. Zero frontend secrets.` });
   };
 
   const [githubConfig, setGithubConfig] = useState<GitHubConfig>({
@@ -846,7 +846,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       message: 'Bearer secret scrubbed in-flight [DLP:REDACTED_SECRET] prior to WAL commit.',
       dlpScrubbed: true,
       suppressedCount: 1,
-      rawEnvelope: JSON.stringify({ tenantId: DEFAULT_TENANT, service: 'ingress-router', header: 'Authorization: Bearer [DLP:REDACTED_SECRET]', dlpEngine: 'regex-v3.2' }, null, 2),
+      rawEnvelope: JSON.stringify({ tenantId: DEFAULT_TENANT, service: 'ingress-router', header: 'Authorization: Bearer [DLP:REDACTED_SECRET]', dlpEngine: 'regex-v3.3' }, null, 2),
     },
   ]);
 
@@ -877,7 +877,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  // IAM Directory-Enforced Login
   const loginUser = (incoming: OperatorUser): boolean => {
     const normalizedEmail = incoming.email.trim().toLowerCase();
     const directoryMatch = iamUsers.find((u) => u.email.toLowerCase() === normalizedEmail);
@@ -915,7 +914,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       return true;
     }
 
-    // Reject unprovisioned emails and direct them to self-service Access Request
     toast.error('Identity Not Provisioned in IAM Directory (HTTP 403)', {
       description: `"${incoming.email}" is not authorized yet. Submit an Access Request or ask a Level 5 Admin to provision your email in the IAM Portal.`,
     });
@@ -928,7 +926,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     toast.info('Session Locked & Volatile RAM Purged', { description: 'Please sign in again to access the cockpit.' });
   };
 
-  // IAM Management Actions
   const provisionIAMUser = (newUser: Omit<IAMUserRecord, 'id' | 'lastActive' | 'provisionedBy'>) => {
     const exists = iamUsers.some((u) => u.email.toLowerCase() === newUser.email.trim().toLowerCase());
     if (exists) {
@@ -1191,7 +1188,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         },
         signal: AbortSignal.timeout(8000),
       });
-      if (!res.ok) throw new Error(`Could not access https://github.com/${cleanRepo} (HTTP${res.status})`);
+      if (!res.ok) throw new Error(`Could not access https://github.com/${cleanRepo} (HTTP ${res.status})`);
 
       newCfg.isConnected = true;
       newCfg.isSyncing = false;
@@ -1216,6 +1213,13 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   };
 
   const synthesizeProposal = async (service = 'order-service', summary?: string, forceMalicious = false): Promise<string> => {
+    if (!checkClientRateLimit(5, 'costly_ai_synthesis')) {
+      toast.error('Cost-Guard Rate Limit Exceeded (HTTP 429)', {
+        description: 'AI Patch Synthesis is capped at 5 requests/min per operator to protect compute budget.',
+      });
+      return proposals[0]?.taskId || 'rate-limited';
+    }
+
     const id = `task-${service.split('-')[0]}-${Math.floor(100 + Math.random() * 899)}`;
     const randomPrNumber = Math.floor(1050 + Math.random() * 400);
 
@@ -1510,7 +1514,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     setStress((prev) => ({
       ...prev,
       active: false,
-      phaseName: `PAUSED at ${Math.floor(prev.elapsedSec / 60)}m${prev.elapsedSec % 60}s — All Checks Intact`,
+      phaseName: `PAUSED at ${Math.floor(prev.elapsedSec / 60)}m ${prev.elapsedSec % 60}s — All Checks Intact`,
     }));
     toast.warning('Stress Test Paused', { description: 'Baseline telemetry rate restored.' });
   };
@@ -1593,8 +1597,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
               severity: isWarn ? 'WARNING' : 'INFO',
               service: pick,
               message: isWarn
-                ? `Elevated tail latency (${nextP99}ms P99) detected on${pick}. Sliding dedup window active.`
-                : `Normalized ${nextTp} evt/s batch on${pick}. 0 credential leaks.`,
+                ? `Elevated tail latency (${nextP99}ms P99) detected on ${pick}. Sliding dedup window active.`
+                : `Normalized ${nextTp} evt/s batch on ${pick}. 0 credential leaks.`,
               dlpScrubbed: !isWarn && Math.random() > 0.65,
               suppressedCount: isWarn ? 4 : 1,
             },
@@ -1676,7 +1680,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
           msg = `[STRESS-DLP] Intercepted exposed header token [DLP:REDACTED_SECRET] on ${svc}. Scrubbed in 1.1ms.`;
         } else if (phase === 3) {
           sev = 'CRITICAL';
-          msg = `[STRESS-CIRCUIT] Timeout strike recorded on ${svc} (P99:${simP99}ms). Evaluating 3-strike sovereign fence.`;
+          msg = `[STRESS-CIRCUIT] Timeout strike recorded on ${svc} (P99: ${simP99}ms). Evaluating 3-strike sovereign fence.`;
           if (nextElapsed % 10 === 0) {
             didTripCircuit = true;
             setServiceCircuits((cPrev) =>
@@ -1897,4 +1901,3 @@ export function useTelemetry(): TelemetryContextType {
   if (!ctx) throw new Error('useTelemetry must be used within a TelemetryProvider');
   return ctx;
 }
-

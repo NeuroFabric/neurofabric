@@ -1,58 +1,22 @@
-﻿// NeuroFabric Sovereign Security & Indian Regulatory Enforcement Engine
-// Enforces: 55-Point SecOps Checklist + DPDP Rules 2025 (G.S.R. 846(E)) + CERT-In 70B + IT Rules 2026 (G.S.R. 120(E)) + SEBI CSCRF
-
-export interface DlpScrubResult {
+﻿export interface DlpScrubResult {
   clean: string;
   scrubbed: boolean;
   redactedTypes: string[];
 }
 
-// Item #9 + DPDP Act 2023 Sec 8(5): In-Flight Global Secret & Indian PII Scrubber
 export function scrubIndianAndGlobalPII(raw: string): DlpScrubResult {
   const redactedTypes: string[] = [];
   let text = raw;
 
   const rules: Array<{ name: string; regex: RegExp; replacement: string }> = [
-    {
-      name: 'AWS_ACCESS_KEY',
-      regex: /\bAKIA[0-9A-Z]{16}\b/g,
-      replacement: '[DLP:REDACTED_AWS_KEY]',
-    },
-    {
-      name: 'GITHUB_PAT',
-      regex: /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g,
-      replacement: '[DLP:REDACTED_GITHUB_PAT]',
-    },
-    {
-      name: 'BEARER_SECRET',
-      regex: /(Bearer\s+[A-Za-z0-9\-._~+/]+=*|sk_live_[A-Za-z0-9]+)/g,
-      replacement: '[DLP:REDACTED_SECRET]',
-    },
-    {
-      name: 'INDIA_AADHAAR_UIDAI',
-      regex: /\b[2-9]{1}[0-9]{3}\s?[0-9]{4}\s?[0-9]{4}\b/g,
-      replacement: '[DLP:REDACTED_AADHAAR]',
-    },
-    {
-      name: 'INDIA_PAN_TAX',
-      regex: /\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b/g,
-      replacement: '[DLP:REDACTED_PAN]',
-    },
-    {
-      name: 'INDIA_GSTIN',
-      regex: /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b/g,
-      replacement: '[DLP:REDACTED_GSTIN]',
-    },
-    {
-      name: 'INDIA_UPI_VPA',
-      regex: /\b[a-zA-Z0-9.\-_]{2,256}@(okaxis|okhdfcbank|okicici|oksbi|ybl|paytm|upi|ibl)\b/gi,
-      replacement: '[DLP:REDACTED_UPI_ID]',
-    },
-    {
-      name: 'INDIA_MOBILE_E164',
-      regex: /(\+91[\-\s]?)?[6-9]\d{9}\b/g,
-      replacement: '[DLP:REDACTED_IN_MOBILE]',
-    },
+    { name: 'AWS_ACCESS_KEY', regex: /\bAKIA[0-9A-Z]{16}\b/g, replacement: '[DLP:REDACTED_AWS_KEY]' },
+    { name: 'GITHUB_PAT', regex: /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, replacement: '[DLP:REDACTED_GITHUB_PAT]' },
+    { name: 'BEARER_SECRET', regex: /(Bearer\s+[A-Za-z0-9\-._~+/]+=*|sk_live_[A-Za-z0-9]+)/g, replacement: '[DLP:REDACTED_SECRET]' },
+    { name: 'INDIA_AADHAAR_UIDAI', regex: /\b[2-9]{1}[0-9]{3}\s?[0-9]{4}\s?[0-9]{4}\b/g, replacement: '[DLP:REDACTED_AADHAAR]' },
+    { name: 'INDIA_PAN_TAX', regex: /\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b/g, replacement: '[DLP:REDACTED_PAN]' },
+    { name: 'INDIA_GSTIN', regex: /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b/g, replacement: '[DLP:REDACTED_GSTIN]' },
+    { name: 'INDIA_UPI_VPA', regex: /\b[a-zA-Z0-9.\-_]{2,256}@(okaxis|okhdfcbank|okicici|oksbi|ybl|paytm|upi|ibl)\b/gi, replacement: '[DLP:REDACTED_UPI_ID]' },
+    { name: 'INDIA_MOBILE_E164', regex: /(\+91[\-\s]?)?[6-9]\d{9}\b/g, replacement: '[DLP:REDACTED_IN_MOBILE]' },
   ];
 
   for (const r of rules) {
@@ -62,14 +26,9 @@ export function scrubIndianAndGlobalPII(raw: string): DlpScrubResult {
     }
   }
 
-  return {
-    clean: text,
-    scrubbed: redactedTypes.length > 0,
-    redactedTypes,
-  };
+  return { clean: text, scrubbed: redactedTypes.length > 0, redactedTypes };
 }
 
-// Item #12: Block XSS & HTML Injection
 export function sanitizeXSS(raw: string): { clean: string; blocked: boolean; threats: string[] } {
   const threats: string[] = [];
   if (/<script\b[^>]*>/i.test(raw)) threats.push('Blocked <script> tag');
@@ -86,7 +45,6 @@ export function sanitizeXSS(raw: string): { clean: string; blocked: boolean; thr
   return { clean, blocked: threats.length > 0, threats };
 }
 
-// Item #5: Hash Passwords with WebCrypto PBKDF2-HMAC-SHA256 (100,000 iterations)
 export async function hashPasswordPBKDF2(password: string, emailSalt: string): Promise<string> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -99,7 +57,7 @@ export async function hashPasswordPBKDF2(password: string, emailSalt: string): P
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt: enc.encode(`neurofabric-salt-2026:${emailSalt.toLowerCase()}`),
+      salt: enc.encode(`neurofabric-salt-2026:${emailSalt.trim().toLowerCase()}`),
       iterations: 100000,
       hash: 'SHA-256',
     },
@@ -111,29 +69,28 @@ export async function hashPasswordPBKDF2(password: string, emailSalt: string): P
     .join('');
 }
 
-// Item #10 & #3: Parameterized SQL Builder & Row-Level Security (RLS) Enforcer
 export function buildParameterizedQuery(
   tenantId: string,
   serviceFilter: string,
-  searchKeyword: string
+  searchKeyword: string,
+  ownerUserId = 'iam-1'
 ): { sql: string; params: string[]; injectionAttemptBlocked: boolean; sanitizedKeyword: string } {
   const sqliPattern = /('|--|;|\b(DROP|DELETE|UNION|INSERT|UPDATE|ALTER|EXEC)\b)/gi;
   const injectionAttemptBlocked = sqliPattern.test(searchKeyword) || sqliPattern.test(serviceFilter);
   const sanitizedKeyword = searchKeyword.replace(sqliPattern, '').trim();
 
-  const sql = `SELECT id, timestamp, severity, service, message FROM telemetry_wal WHERE tenant_id = ? AND (? = 'ALL' OR service = ?) AND message LIKE ? ORDER BY epoch_ms DESC LIMIT 200;`;
-  const params = [tenantId, serviceFilter, serviceFilter, `%${sanitizedKeyword}%`];
+  const sql = `SELECT id, timestamp, severity, service, message FROM telemetry_logs WHERE owner_user_id = ? AND tenant_id = ? AND (? = 'ALL' OR service = ?) AND message LIKE ? ORDER BY epoch_ms DESC LIMIT 200;`;
+  const params = [ownerUserId, tenantId, serviceFilter, serviceFilter, `%${sanitizedKeyword}%`];
 
   return { sql, params, injectionAttemptBlocked, sanitizedKeyword };
 }
 
-// Item #13: Validate Uploads (Allowlist MIME types, extensions, path traversal & 2MB size cap)
 export function validateUploadFile(
   fileName: string,
   mimeType: string,
   sizeBytes: number
 ): { valid: boolean; reason: string } {
-  const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+  const MAX_BYTES = 2 * 1024 * 1024;
   const allowedExt = /\.(json|yaml|yml|log|csv|txt)$/i;
   const allowedMimes = new Set([
     'application/json',
@@ -160,7 +117,6 @@ export function validateUploadFile(
   return { valid: true, reason: 'UPLOAD_VERIFIED: File extension, MIME signature, and size within sovereign bounds.' };
 }
 
-// Items #14 & #59: Webhook HMAC-SHA256 Verification + 300s Replay Window + Nonce Cache
 const processedWebhookNonces = new Set<string>();
 
 export async function verifyWebhookPayload(
@@ -219,9 +175,9 @@ export async function verifyWebhookPayload(
   };
 }
 
-// Item #69: Open Redirect Sanitizer
 const ALLOWED_INTERNAL_PATHS = new Set([
   '/overview',
+  '/iam',
   '/stress',
   '/alerts',
   '/telemetry',
@@ -235,6 +191,8 @@ const ALLOWED_INTERNAL_PATHS = new Set([
   '/roadmap',
   '/privacy',
   '/terms',
+  '/refund',
+  '/cookies',
 ]);
 
 export function sanitizeRedirectPath(rawTarget: string | null | undefined): string {
@@ -253,21 +211,23 @@ export function sanitizeRedirectPath(rawTarget: string | null | undefined): stri
   return ALLOWED_INTERNAL_PATHS.has(basePath) ? basePath : '/overview';
 }
 
-// Item #15: Client Action Rate Limiter
-const actionTimestamps: number[] = [];
-export function checkClientRateLimit(maxPerMinute = 60): boolean {
+const rateBuckets = new Map<string, number[]>();
+
+export function checkClientRateLimit(maxPerMinute = 60, bucketKey = 'standard'): boolean {
   const now = Date.now();
-  while (actionTimestamps.length > 0 && now - actionTimestamps[0] > 60_000) {
-    actionTimestamps.shift();
+  const timestamps = rateBuckets.get(bucketKey) || [];
+  while (timestamps.length > 0 && now - timestamps[0] > 60_000) {
+    timestamps.shift();
   }
-  if (actionTimestamps.length >= maxPerMinute) {
+  if (timestamps.length >= maxPerMinute) {
+    rateBuckets.set(bucketKey, timestamps);
     return false;
   }
-  actionTimestamps.push(now);
+  timestamps.push(now);
+  rateBuckets.set(bucketKey, timestamps);
   return true;
 }
 
-// CERT-In Section 70B IT Act 6-Hour Incident Reporting Generator
 export function generateCertInReport(params: {
   operator: string;
   tenantId: string;
@@ -286,9 +246,11 @@ export function generateCertInReport(params: {
     retentionPolicy: {
       certInRollingRetentionDays: 180,
       dpdpRule6RetentionDays: 365,
-      immutableStorageMode: 'SQLite WAL + SHA-256 Merkle Tree',
+      immutableStorageMode: 'SQLite WAL + SHA-256 Merkle Tree + Per-User RLS',
     },
     reportingEntity: {
+      legalEntity: 'NeuroFabric Sovereign Systems Pvt. Ltd.',
+      registeredOffice: 'New Delhi, Delhi 110062, India',
       tenantId: params.tenantId,
       designatedOfficer: params.operator,
       dpdpRole: 'Significant Data Fiduciary (SDF) — Section 10',
@@ -303,7 +265,6 @@ export function generateCertInReport(params: {
   };
 }
 
-// SEBI CSCRF Annexure-A Item 9: CycloneDX Software Bill of Materials (SBOM)
 export function generateCycloneDxSbom() {
   return {
     bomFormat: 'CycloneDX',
@@ -320,7 +281,7 @@ export function generateCycloneDxSbom() {
       component: {
         type: 'application',
         name: 'neurofabric-sovereign-cockpit',
-        version: '3.2.0-india-gov-hardened',
+        version: '3.3.0-zero-trust',
       },
     },
     components: [
