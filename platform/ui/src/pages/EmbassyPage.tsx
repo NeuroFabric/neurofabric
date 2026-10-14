@@ -18,6 +18,8 @@ import {
   Layers,
   ExternalLink,
   Key,
+  Activity,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { InfoTooltip } from '../components/common/Tooltip';
@@ -55,6 +57,7 @@ export function EmbassyPage() {
 
   const [queueFilter, setQueueFilter] = useState<'ALL' | 'PENDING' | 'BLOCKED' | 'ACTIONED'>('ALL');
   const [selectedId, setSelectedId] = useState<string>(proposals[0]?.taskId || 'task-auth-gw-892');
+  const [rcaTab, setRcaTab] = useState<'TELEMETRY' | 'CAUSAL_TREE' | 'CANARY_SPLIT'>('TELEMETRY');
   const [taskToken, setTaskToken] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
   const [showDeclineReasons, setShowDeclineReasons] = useState(false);
@@ -96,7 +99,7 @@ export function EmbassyPage() {
   const handleApprove = async () => {
     if (current.astStatus === 'REJECT') {
       toast.error('AST Gate Policy Lock (HTTP 422)', {
-        description: 'Cannot dispatch a proposal containing prohibited shell primitives. Click "Sanitize Malicious Line" first.',
+        description: 'Cannot dispatch a proposal containing prohibited shell primitives.',
       });
       return;
     }
@@ -140,16 +143,19 @@ export function EmbassyPage() {
   ];
 
   const pendingCount = proposals.filter((p) => p.status === 'PENDING').length;
+  const canaryPct = current.canaryPercentage || 10;
+  const baselinePct = 100 - canaryPct;
 
   return (
     <div className="p-8 space-y-6 max-w-7xl font-sans">
+      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
             <h1 className="text-2xl font-bold text-white tracking-tight">
               Autonomous Embassy — GitOps Patch Review (HITL)
             </h1>
-            <InfoTooltip content="Human-in-the-Loop review for pull requests. Connect your actual GitHub repo via PAT to sync, screen, and merge real pull requests on github.com." />
+            <InfoTooltip content="Human-in-the-Loop GitOps review. Connect your GitHub repository to screen, deploy canary traffic, and merge real pull requests on github.com." />
           </div>
 
           <div className="flex items-center space-x-3 mt-1 text-xs">
@@ -169,9 +175,15 @@ export function EmbassyPage() {
                 <span className="text-slate-400">({githubConfig.branch})</span>
               </span>
             ) : (
-              <span className="text-slate-400 font-mono flex items-center space-x-1.5">
+              <span className="text-slate-400 font-mono flex items-center space-x-2">
                 <span className="w-2 h-2 rounded-full bg-amber-400" />
-                <span>Mode: Local Simulation (No GitHub PAT Connected)</span>
+                <span>Target: github.com/{githubConfig.repo} • Mode: Local Simulation</span>
+                <button
+                  onClick={() => setShowGitModal(true)}
+                  className="text-emerald-400 underline hover:text-emerald-300 font-bold ml-1"
+                >
+                  Connect GitHub Token
+                </button>
               </span>
             )}
           </div>
@@ -198,7 +210,7 @@ export function EmbassyPage() {
           ) : (
             <button
               onClick={() => setShowGitModal(true)}
-              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-400/50 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition"
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 border border-emerald-400/50 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition shadow"
             >
               <GitHubIcon className="w-3.5 h-3.5" />
               <span>Connect Live GitHub Repo</span>
@@ -227,7 +239,7 @@ export function EmbassyPage() {
             className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-mono font-bold flex items-center space-x-1.5 transition shadow-lg shadow-emerald-500/20"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>{githubConfig.isConnected ? 'Create Real GitHub PR' : 'Synthesize Patch'}</span>
+            <span>Synthesize Patch</span>
           </button>
           <button
             onClick={resetProposals}
@@ -239,6 +251,7 @@ export function EmbassyPage() {
         </div>
       </div>
 
+      {/* GitHub PAT Connection Modal */}
       {showGitModal && (
         <form
           onSubmit={handleConnectGitHub}
@@ -259,7 +272,9 @@ export function EmbassyPage() {
           </div>
 
           <p className="text-xs text-slate-300 leading-relaxed font-sans">
-            By supplying a GitHub Personal Access Token (classic with <code className="text-emerald-400">repo</code> scope or fine-grained with Pull Requests: Read & Write), the Embassy agent will fetch your actual repository pull requests, screen real diffs, and perform live merges on <code className="text-white">github.com</code>.
+            Paste a GitHub Personal Access Token (PAT) with <code className="text-emerald-400">repo</code> permissions.
+            The Embassy agent will fetch your real open pull requests from <code className="text-white">github.com/{repoInput}</code>,
+            screen their live diffs, and perform merges on GitHub.
           </p>
 
           <div className="grid md:grid-cols-3 gap-4 font-mono text-xs">
@@ -307,7 +322,7 @@ export function EmbassyPage() {
 
           <div className="flex items-center justify-between pt-2">
             <span className="text-[10px] font-mono text-slate-500">
-              Tokens are stored client-side in localStorage and never logged to disk.
+              Tokens remain local to your browser session and are never logged to disk.
             </span>
             <button
               type="submit"
@@ -319,7 +334,9 @@ export function EmbassyPage() {
         </form>
       )}
 
+      {/* 3-Pane Console */}
       <div className="grid lg:grid-cols-12 gap-6">
+        {/* Left Pane (3 Cols): Proposal Queue */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between px-1">
             <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
@@ -342,7 +359,7 @@ export function EmbassyPage() {
             ))}
           </div>
 
-          <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+          <div className="space-y-2.5 max-h-[580px] overflow-y-auto pr-1">
             {filteredQueue.map((prop) => {
               const isSelected = prop.taskId === current.taskId;
               return (
@@ -385,23 +402,22 @@ export function EmbassyPage() {
           </div>
         </div>
 
+        {/* Center Pane (5 Cols): Diff Viewer + AST Banner */}
         <div className="lg:col-span-5 space-y-4">
           <div className="p-4 rounded-2xl nf-card space-y-2 font-mono text-xs">
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <div className="flex items-center space-x-2">
                 <GitPullRequest className="w-4 h-4 text-emerald-400" />
                 <span className="text-white font-bold text-sm">Pull Request #{current.prNumber}</span>
-                {current.githubUrl && (
-                  <a
-                    href={current.githubUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] text-cyan-300 hover:text-white underline flex items-center space-x-1 ml-2"
-                  >
-                    <span>View on GitHub</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
+                <a
+                  href={`https://github.com/${current.repository}/pull/${current.prNumber}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-cyan-300 hover:text-white underline flex items-center space-x-1 ml-2"
+                >
+                  <span>github.com PR</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">
                 Commit: {current.commitSha}
@@ -409,7 +425,7 @@ export function EmbassyPage() {
             </div>
             <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400 pt-1">
               <div>
-                <span className="text-slate-500 block text-[9px]">TARGET REPO</span>
+                <span className="text-slate-500 block text-[9px]">TARGET FLEET</span>
                 <span className="text-white truncate block">{current.repository}</span>
               </div>
               <div>
@@ -473,12 +489,12 @@ export function EmbassyPage() {
                 <textarea
                   value={draftDiff}
                   onChange={(e) => setDraftDiff(e.target.value)}
-                  rows={12}
+                  rows={13}
                   className="w-full bg-[#090C14] border border-emerald-500/40 rounded-xl p-3 font-mono text-xs text-emerald-200 focus:outline-none"
                 />
               </div>
             ) : (
-              <div className="p-4 bg-[#05070B] font-mono text-xs overflow-x-auto leading-relaxed space-y-0.5">
+              <div className="p-4 bg-[#05070B] font-mono text-xs overflow-x-auto leading-relaxed space-y-0.5 max-h-[380px]">
                 {current.diff.map((line, idx) => {
                   const isAdd = line.startsWith('+');
                   const isDel = line.startsWith('-');
@@ -506,6 +522,7 @@ export function EmbassyPage() {
           </div>
         </div>
 
+        {/* Right Pane (4 Cols): Enterprise SRE RCA & Interactive Canary Engine */}
         <div className="lg:col-span-4 space-y-4">
           <div className="p-6 rounded-2xl nf-card space-y-4">
             <div className="flex items-center justify-between">
@@ -526,52 +543,162 @@ export function EmbassyPage() {
             </div>
 
             <div className="text-lg font-bold text-white">{current.title}</div>
-            <p className="text-xs text-slate-300 leading-relaxed">{current.rcaSummary}</p>
 
-            <div className="grid grid-cols-2 gap-3 font-mono text-xs">
-              <div className="p-3 rounded-xl bg-[#090C14] border border-white/10">
-                <div className="text-slate-400 text-[10px]">AGENT CONFIDENCE</div>
-                <div className={`text-lg font-bold mt-1 ${current.confidence > 80 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {current.confidence}%
-                </div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-1.5 overflow-hidden">
-                  <div
-                    style={{ width: `${current.confidence}%` }}
-                    className={`h-full ${current.confidence > 80 ? 'bg-emerald-400' : 'bg-rose-400'}`}
-                  />
-                </div>
-              </div>
-              <div className="p-3 rounded-xl bg-[#090C14] border border-white/10">
-                <div className="text-slate-400 text-[10px]">BLAST RADIUS</div>
-                <div className="text-sm font-bold text-purple-300 mt-1.5">{current.blastRadius}</div>
-              </div>
+            {/* RCA Sub-Navigation Tabs */}
+            <div className="grid grid-cols-3 gap-1 bg-[#090C14] p-1 rounded-xl border border-white/10 font-mono text-[10px]">
+              <button
+                onClick={() => setRcaTab('TELEMETRY')}
+                className={`py-1.5 rounded-lg font-bold transition flex items-center justify-center space-x-1 ${
+                  rcaTab === 'TELEMETRY' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Activity className="w-3 h-3" />
+                <span>Telemetry</span>
+              </button>
+              <button
+                onClick={() => setRcaTab('CAUSAL_TREE')}
+                className={`py-1.5 rounded-lg font-bold transition flex items-center justify-center space-x-1 ${
+                  rcaTab === 'CAUSAL_TREE' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Zap className="w-3 h-3" />
+                <span>5-Whys</span>
+              </button>
+              <button
+                onClick={() => setRcaTab('CANARY_SPLIT')}
+                className={`py-1.5 rounded-lg font-bold transition flex items-center justify-center space-x-1 ${
+                  rcaTab === 'CANARY_SPLIT' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Layers className="w-3 h-3" />
+                <span>Canary ({canaryPct}%)</span>
+              </button>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-[#090C14] border border-white/10 space-y-2 font-mono text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-400 font-bold uppercase flex items-center space-x-1.5">
-                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Canary Progressive Rollout</span>
-                </span>
-                <span className="text-cyan-300 font-bold">{current.canaryPercentage}% Weight</span>
-              </div>
-              <div className="flex items-center space-x-2 pt-1">
-                {[10, 25, 50, 100].map((pct) => (
-                  <button
-                    key={pct}
-                    onClick={() => setCanaryStage(current.taskId, pct)}
-                    className={`flex-1 py-1 rounded text-[10px] font-bold transition ${
-                      current.canaryPercentage === pct
-                        ? 'bg-cyan-500 text-slate-950 shadow'
-                        : 'bg-[#141A29] text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {pct}%
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* TAB 1: REALISTIC TELEMETRY & TRACE CONTEXT */}
+            {rcaTab === 'TELEMETRY' && (
+              <div className="space-y-3 font-mono text-xs animate-in fade-in duration-150">
+                <p className="text-xs text-slate-300 leading-relaxed font-sans">{current.rcaSummary}</p>
 
+                <div className="p-3 rounded-xl bg-[#07090F] border border-white/10 space-y-1.5 text-[11px]">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase">Failure Signature</div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Failing Endpoint:</span>
+                    <span className="text-rose-400 font-bold">POST /v1/auth/tokens/verify</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Downstream Target:</span>
+                    <span className="text-white font-bold">aurora-pg-primary:5432</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Pool Active Sockets:</span>
+                    <span className="text-rose-400 font-bold">100 / 100 (Max Capacity)</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Kernel Sockets in TIME_WAIT:</span>
+                    <span className="text-amber-400 font-bold">4,192 sockets</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div className="p-2.5 rounded-xl bg-[#090C14] border border-white/10">
+                    <span className="text-slate-500 block">BASELINE P99</span>
+                    <span className="text-rose-400 font-bold text-sm">4,850 ms</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#090C14] border border-white/10">
+                    <span className="text-slate-500 block">EXPECTED POST-PATCH</span>
+                    <span className="text-emerald-400 font-bold text-sm">18.4 ms</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: CAUSAL CHAIN & 5-WHYS */}
+            {rcaTab === 'CAUSAL_TREE' && (
+              <div className="p-3.5 rounded-xl bg-[#07090F] border border-white/10 space-y-2.5 font-mono text-[11px] animate-in fade-in duration-150">
+                <div className="text-[10px] text-emerald-400 font-bold uppercase">Autonomous Causal Tree (5-Whys)</div>
+                <div className="space-y-2 text-slate-300 leading-snug">
+                  <div>
+                    <span className="text-slate-500 font-bold">1. Symptom:</span> HTTP 504 Gateway Timeouts surged on user token verification.
+                  </div>
+                  <div>
+                    <span className="text-slate-500 font-bold">2. Trigger:</span> Upstream Redis cache eviction caused query latency to climb from 3ms to 310ms.
+                  </div>
+                  <div>
+                    <span className="text-slate-500 font-bold">3. Bottleneck:</span> <code className="text-rose-400">MAX_IDLE_CONNS: 10</code> forced repeated socket destruction & SSL renegotiations under load.
+                  </div>
+                  <div>
+                    <span className="text-slate-500 font-bold">4. Cascade:</span> Worker goroutines piled up waiting to acquire DB connections until the 5000ms timeout breached.
+                  </div>
+                  <div className="text-emerald-300 font-bold">
+                    <span>5. Remedy:</span> Expanding idle pool to 50 with 2500ms fail-fast ceiling and 1024Mi memory envelope.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: INTERACTIVE CANARY CONTROLLER & TELEMETRY COMPARISON */}
+            {rcaTab === 'CANARY_SPLIT' && (
+              <div className="space-y-3 font-mono text-xs animate-in fade-in duration-150">
+                {/* Traffic Split Slider */}
+                <div className="p-3.5 rounded-xl bg-[#07090F] border border-white/10 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 font-bold uppercase">Traffic Weight Distribution</span>
+                    <span className="text-emerald-400 font-bold">{canaryPct}% Canary</span>
+                  </div>
+
+                  {/* Visual Split Bar */}
+                  <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden flex">
+                    <div style={{ width: `${baselinePct}%` }} className="bg-slate-600 transition-all duration-300" title={`Baseline: ${baselinePct}%`} />
+                    <div style={{ width: `${canaryPct}%` }} className="bg-gradient-to-r from-emerald-400 to-teal-400 transition-all duration-300" title={`Canary: ${canaryPct}%`} />
+                  </div>
+
+                  <div className="flex justify-between text-[10px] text-slate-400 pt-0.5">
+                    <span>Stable v2.8.0 ({baselinePct}%)</span>
+                    <span className="text-emerald-300 font-bold">Canary v2.8.1-patch ({canaryPct}%)</span>
+                  </div>
+
+                  {/* Stage Shift Buttons */}
+                  <div className="grid grid-cols-4 gap-1.5 pt-1">
+                    {[10, 25, 50, 100].map((pct) => (
+                      <button
+                        key={pct}
+                        onClick={() => setCanaryStage(current.taskId, pct)}
+                        className={`py-1.5 rounded-lg text-[10px] font-bold border transition ${
+                          canaryPct === pct
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow'
+                            : 'bg-[#090C14] text-slate-300 border-white/10 hover:text-white'
+                        }`}
+                      >
+                        {pct}% Weight
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Comparative Live Telemetry */}
+                <div className="p-3 rounded-xl bg-[#07090F] border border-white/10 space-y-2 text-[11px]">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase">Canary vs. Baseline Telemetry</div>
+                  <div className="grid grid-cols-2 gap-2 text-center">
+                    <div className="p-2 rounded bg-[#0D111C] border border-white/5">
+                      <div className="text-[9px] text-slate-500">STABLE P99 LATENCY</div>
+                      <div className="text-rose-400 font-bold text-sm mt-0.5">142 ms</div>
+                    </div>
+                    <div className="p-2 rounded bg-[#0D111C] border border-white/5">
+                      <div className="text-[9px] text-slate-500">CANARY P99 LATENCY</div>
+                      <div className="text-emerald-400 font-bold text-sm mt-0.5">18 ms (-87%)</div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between text-[10px] text-slate-400 pt-1">
+                    <span>Canary Error Rate: <strong className="text-emerald-400">0.01%</strong></span>
+                    <span>Safety Gate: <strong className="text-emerald-300">PASSING</strong></span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Merge & Rollback Controls */}
             {current.status === 'APPROVED' && (
               <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-500/50 text-xs font-mono text-emerald-200 space-y-3">
                 <div className="font-bold text-emerald-400 flex items-center space-x-1.5">
@@ -732,3 +859,4 @@ export function EmbassyPage() {
     </div>
   );
 }
+

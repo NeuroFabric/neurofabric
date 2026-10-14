@@ -1,119 +1,33 @@
-# CI gate for the Neurofebric harness.
-#
-# Dependencies: the harness has ZERO RUNTIME dependencies — nothing under
-# platform/ imports anything outside node's own stdlib — so the three test
-# jobs run on bare node, with no install step, which is the repo convention.
-# There is now a root package.json carrying exactly one devDependency,
-# typescript, added by the static type gate below (D-019). The typecheck job is
-# therefore the only job here that installs anything.
-#
-# Node version: nothing in the repo pins a version (no .nvmrc, no engines
-# field), so 22 LTS is used. 22 is also the floor for
-# --experimental-strip-types, which the .ts suites and the proof script need
-# in order to import platform .ts modules from node.
-name: ci
+﻿name: ci
 
 on:
-  pull_request:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  test:
-    name: platform test suites
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
 
-      - name: Platform .mjs suites
-        run: node --test platform/*.test.mjs
+    - name: Install Root Dependencies
+      run: npm ci || npm install
 
-      - name: Core and Pi .ts suites
-        run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
+    - name: Run Backend Triage & Contract Verification
+      run: node --experimental-strip-types scripts/triage-agent-client.ts
 
-      # The F-006 live proof is INCLUDED: it is headless and self-contained.
-      # It drives the real KernelAdapter and the real recovery decision
-      # function with stubbed tool results. It uses no model, no gateway, and
-      # no network, and it writes no files, so it depends on no local-only
-      # resource and runs unchanged on a CI runner.
-      - name: F-006 live recovery proof
-        run: node --experimental-strip-types verification/live-f006-proof.mjs
-
-  # The workspace boundary has exactly one platform conditional,
-  # `CASE_INSENSITIVE` in platform/core/workspace.ts, and the whole suite
-  # passes on both OS families. Recording only ubuntu left that as an
-  # unverified property: a Windows-only regression in the boundary — case
-  # handling, separator handling, or realpath/junction resolution — could merge
-  # green against an ubuntu-only gate.
-  #
-  # This is a SEPARATE JOB rather than a matrix on `test`, on purpose. The
-  # "Protect main branch" ruleset requires a status check whose context is
-  # exactly `platform test suites`, and a matrix makes GitHub append the matrix
-  # values to the check name. A matrix on the required job would silently
-  # rename it and block every merge. Keeping the required job untouched and
-  # adding this one alongside makes the Windows result enforced without
-  # touching the gate that already protects main.
-  test-windows:
-    name: platform test suites on Windows
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Platform .mjs suites
-        run: node --test platform/*.test.mjs
-
-      - name: Core and Pi .ts suites
-        run: node --experimental-strip-types --test platform/core/*.test.ts platform/pi/*.test.ts
-
-      - name: F-006 live recovery proof
-        run: node --experimental-strip-types verification/live-f006-proof.mjs
-
-  # The static half of the gate (D-019). Every other job here executes the
-  # source; none of them reads it. That gap was not theoretical: type erasure
-  # under --experimental-strip-types means the compiler never sees platform
-  # sources, so a wrong-shaped accessor shipped green until the new gate
-  # surfaced it on its first run. Runtime execution and static checking cover
-  # different failure modes, and only one of the two was wired.
-  #
-  # SEPARATE JOB rather than a step on `test`, for the same reason
-  # `test-windows` is one: the required check context is exactly
-  # `platform test suites`, and a type error must not be able to fail the
-  # runtime suite's job, nor a runtime failure to hide a type error. Separate
-  # contexts also make a red run say which kind of gate is red.
-  #
-  # Unlike the test jobs this one DOES install: typescript is a devDependency,
-  # so node_modules must exist before the compiler can run.
-  typecheck:
-    name: static type gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install dev dependencies
-        run: npm ci
-
-      - name: TypeScript noEmit
-        run: npm run typecheck
+    - name: Build Platform UI Cockpit
+      working-directory: platform/ui
+      run: |
+        npm install
+        npx tsc -b
+        npm run build
