@@ -1,0 +1,74 @@
+feat(conductor): the conversation, as a pure function
+
+The chat is the product now, so the decision of what a sentence MEANS cannot live
+inside a string only a browser reads. There would be no way to test it except by
+shipping it and looking at it -- which is exactly how the last two releases
+shipped a dashboard nobody could open and a chart that 404ed, every test green.
+
+So: data in, reply out, pure, tested here in Node. The React page becomes a thin
+renderer over what this returns.
+
+*** WHAT IT IS NOT, SAID IN THE SOURCE AND NOT JUST HERE ***
+
+This is NOT a language model. It is a deterministic intent router over an
+analysis the engine has already computed. That is a real and useful thing --
+"show me the worst hour" genuinely returns the worst hour, from the engine's own
+numbers -- and it is what can be built and verified without inventing an API key
+or pretending a regular expression is intelligence.
+
+The honest consequence: it does not answer arbitrary questions. It routes what it
+recognises, declines the rest, and NEVER invents a figure. An unanswerable
+question returns NO widget at all, because a widget is a number and there is no
+number to give. This module is exactly the tool surface a model would call, so
+that is where one would slot in.
+
+A WIDGET CARRIES DATA, NEVER MARKUP. A widget carrying pre-rendered HTML would put
+an untrusted-data path straight back into the chat -- on the surface that now
+touches every column name in the file, which is a value a user dropped. So a
+widget is a discriminant plus a payload and the renderer owns all the markup. A
+test walks every widget the router can produce and asserts none of them carries
+HTML or markdown.
+
+CORRECTIONS ARE CHECKED FIRST, because "alertType is the category" is a
+statement about the file and not a question, and the parser is the SAME
+`parseCorrection` the browser is given -- one implementation, not two that agree
+until somebody edits one.
+
+*** A REAL BUG, AND IT MADE THE AGENT LOOK BROKEN ***
+
+The first router decided "is this a refused correction?" by looking for a copula
+anywhere in the sentence. So:
+
+    what ARE THE TOP categories?              -> "are the top" matches
+    what IS WRONG with this file?              -> "is wrong" matches
+    what is the customer's lifetime VALUE...   -> "value" is a role
+
+All three were answered with a refusal to map a column. A user asking an
+ordinary question got a correction error, and the reasonable conclusion was that
+the agent was not working.
+
+The rule that fixes it is not more pattern matching. A CORRECTION IS
+DECLARATIVE: it names a column and asserts something about one. Every one of
+those sentences opens with an interrogative, and no amount of shape-matching on
+the rest can distinguish them -- the word they share with a role is an accident
+of English.
+
+The grammar is the real test: a correction ENDS right after the role word. That
+is strictly better than asking whether the trailing word is one the engine
+knows, which was the first attempt and which refused "alert_code is the
+sparklines" -- a perfectly clear correction about a role that does not exist --
+for the wrong reason. And it rejects the broken questions, because they all keep
+going after the copula.
+
+Both halves are pinned: six questions must route as questions, three declarative
+attempts must route as corrections, so the fix cannot degenerate into "stop
+treating copulas as corrections", which would break the refusal the product
+needs.
+
+The greeting leads with the semantic purpose, states how much was read and what
+was found, and ends with an invitation -- because a statement with no question
+at the end of it is a lecture. It hedges visibly when confidence is low, and for
+a file it cannot place it admits that and asks, rather than falling back to the
+old guess because it has nothing else.
+
+Kernel FROZEN. Nothing under platform/core/ touched.

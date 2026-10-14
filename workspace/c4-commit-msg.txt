@@ -1,0 +1,56 @@
+feat(f006): wire the strategy fork to a real novelty comparison
+
+C1 declared the strategy fork and C2 proved the table, but every call site
+omitted the new arguments, so the adapter always read as a repeat and the
+strategy fund could never be spent. C4 passes them for real: strategyCount
+from per-task state, and attemptMatchesLastFailure from comparing the failing
+attempt's signature against the previous failure's.
+
+The anchor is lastFailureSignature: which attempt failed last, for this task,
+recorded when a failure is CLASSIFIED rather than at preflight (an admitted
+call is not a failure, and an anchor that moved on admission would compare an
+attempt against itself), reset on the VALID boundary beside recoveryDepth, and
+cleared on supersession.
+
+NOVELTY IS COMPUTED BEFORE ANY BUDGET IS BOOKED. Which ledger a REPLAN charges
+is knowable only from that comparison, so it has to exist before
+chooseRecoveryDetailed is called. A novel REPLAN is charged to the strategy
+fund; an identical one keeps the pre-existing charge to the replan budget. The
+budget follows the MOVE, which is the distinction C1 preserves.
+
+`undefined` signature means REPEAT, deliberately. A signature is absent when the
+attempt was never prechecked, which is the direct beginToolExecution path the
+kernel's own tests and any embedder that binds its own executions use. There is
+nothing to compare then, and guessing "novel" would spend a strategy change on
+an identity that was never recorded. Unknown identity is the conservative
+direction: it can only preserve today's behaviour. C4.8 pins that this leaves
+the pre-existing replan charging untouched.
+
+Completion criterion (a3) is met by ADAPTER-MEDIATED tests, not by F006.4b.
+F006.4b checks that a limit is read somewhere in the source; it was green while
+the adapter consumed nothing and would be green again if this wiring were
+removed tomorrow. The fourteen failures that killed three tasks were the
+adapter's own surface firing, so that is the surface these pins drive:
+
+  C4.1  a novel failure takes the strategy path and books to strategyCount
+  C4.2  an identical attempt keeps the legacy path, books to replanCount, and
+        NEVER to strategyCount
+  C4.2b key order is not novelty, so a reordered input is the same attempt
+  C4.3  an exhausted fund with a retry-legal failure takes the legacy retry
+        path verbatim and is never pre-terminated
+  C4.4  an exhausted fund with no legal retry TERMINATES with
+        STRATEGY_BUDGET_EXHAUSTED, naming the fund and the counters
+  C4.5  the VALID boundary resets the anchor
+  C4.6  a newer task starts with no anchor, so its first failure is a repeat
+  C4.7  the anchor pins are live, not inert
+  C4.8  a never-prechecked failure still books to the replan budget
+
+The 4500-combination C2 sweep did not move, which is the evidence that the
+explicit-args caller changed no legacy decision. No existing replan-count pin
+moved: F006.1c, F006.2b and F006.3 all still hold, because the precheck-bypassing
+path reads as "no identity, therefore repeat" and keeps its original charge.
+D1's POLICY_DENIED guard still precedes the fork (C2.2g, D1.8, D1.9) and is
+untouched, and configured-policy.ts was not opened.
+
+Suite 456/454/0/2, delta +9 tests and +9 passes over main's 447/445/0/2, equal
+to the 9 pins added. tsc --noEmit clean.

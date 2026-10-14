@@ -1,0 +1,3 @@
+_time,service,level,status,latency_ms
+2026-09-30T09:00:00Z,checkout,ERROR,500,1200
+2026-09-30T09:05:00Z,checkout,INFO,200,140

@@ -1,0 +1,76 @@
+feat(api): mount live gateway endpoint for real-time telemetry polling
+
+The Omniroute gateway is now instantiated once per server process and reachable
+over HTTP, so the UI reads the same telemetry a producer pushes.
+
+=== THE GATEWAY IS A SINGLETON, AND THAT IS THE SUBSTANCE ===
+
+The gateway holds the in-flight stream AND the counters the dashboard reads.
+Built per request, a push would land in a broker discarded when the response was
+written and every read would report "no data" forever. This is the same failure
+`DynamicAgentRegistry` had before it was mounted, and the singleton shape is
+repeated here on purpose rather than discovered again.
+
+=== A RATE NEEDS TWO INSTANTS, AND THE SERVER IS WHERE THEY BOTH EXIST ===
+
+`LiveVerdict` carries `records`: a COUNT from one snapshot, not a speed. That is
+why every earlier throughput statement in this project was a guess and why the UI
+refused to print one. The browser holds one instant; the server holds every
+instant, because it is what is being polled.
+
+So `ThroughputMeter` (platform/omniroute/throughput-meter.ts, 10 tests) measures
+the rate from consecutive observations, and the reading travels with the verdict.
+It is bounded -- it lives in a long-running server with a dashboard open.
+
+Three properties are tested because each one is a way to be confidently wrong:
+
+  - The FIRST observation returns null, not zero. One point is not a rate, and a
+    zero there would read as "the stream has stopped", the opposite of the truth.
+  - A stalled stream reports rate 0 WITH a live window. Zero-with-no-window is not
+    information.
+  - A gap between polls is not reported as one enormous burst. This is the exact
+    failure a single-pair meter has, and the observed 14,901 ev/s over a 21.9s
+    window on the first reading of a real flood is it working.
+
+Every reading publishes its `windowMs`. A rate without its window is not a
+measurement, it is a vibe.
+
+=== TWO ROUTES, ONE OWNER ===
+
+`GET /api/portal/live` and `POST /api/portal/ingest` live in portal-routes.ts,
+not in a new service. They share the portal's credential, tenant boundary and
+refusal rendering, and this module has already argued once that two owners for one
+surface is how two policies slowly disagree.
+
+The provider name is the ingress surface and is FIXED AT BOOT. Ingest refuses an
+unconnected provider, because a caller must not be able to name a door the process
+did not open.
+
+Batches cap at 1000 events. Unbounded, that is an allocation sized by whoever sent
+the request -- a denial-of-service reachable by anyone holding a credential.
+
+Numeric field values are COERCED to strings, not refused. Every column in this
+platform is a string and a producer sending `{ elapsed_time: 1200 }` has done
+nothing wrong; refusing it would teach the producer to quote its numbers, which
+is a workaround rather than a fix.
+
+=== VERIFIED END TO END, NOT ASSERTED ===
+
+Booted the wedge with a provisioned credential, ran the flood, and read the
+route back over HTTP:
+
+    records=326250  rate=14901 ev/s  window=21895ms  breached=1
+    records=401500  rate=52586 ev/s  window=1431ms   breached=1
+    records=473500  rate=48913 ev/s  window=1472ms   breached=1
+    records=554000  rate=56690 ev/s  window=1420ms   breached=1
+
+554,000 records ingested, 0 refused, `synthetic: false`, and `breachedColumns: 1`
+-- the injected SLA breach was detected by the real IQR fence in `live-anomaly.ts`
+rather than being asserted.
+
+16 over-HTTP tests in portal-mount.test.ts (9 previous + 7 new), including the
+claim that matters: a verdict carrying `synthetic: false` on a body the server
+produced from events it actually received.
+
+PORT CHANGE: the Vite proxy now targets 8080, not 3000. Omniroute is a separate
+product that already binds 3000 on this machine.

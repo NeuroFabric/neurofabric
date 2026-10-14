@@ -1,0 +1,18 @@
+{
+  "id": "9910d8f2-f9f8-4352-a9a4-cef0aaf15c67",
+  "created": "2026-10-05T11:52:51.068Z",
+  "updated": "2026-10-05T11:52:51.235Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "first",
+      "at": "2026-10-05T11:52:51.196Z"
+    },
+    {
+      "role": "user",
+      "text": "second",
+      "at": "2026-10-05T11:52:51.235Z"
+    }
+  ],
+  "corrections": []
+}

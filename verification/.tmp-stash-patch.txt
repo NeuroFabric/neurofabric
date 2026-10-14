@@ -1,0 +1,11 @@
+SPENT SCRATCH — verification artefact, not a test and not a fixture.
+
+Held the two patch files used on 2026-10-01 to verify, tree-first, that the
+dropped `stash@{0}` ("task4 ledger reversal entry", dangling commit `1a9b271`,
+base `12c89d5`) was byte-identical to commit `927fdb1e`. Result: identical, 105
+lines each, one file each (`docs/F006_LEDGER.md`).
+
+The deletion guard refuses removals, and `docs/POLICY_PORT.md` says the correct
+response is to overwrite or leave. So this is overwritten with its own record
+instead of being removed. The operator may delete it; an agent should not route
+around the guard to do so.

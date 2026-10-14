@@ -1,0 +1,75 @@
+feat(ui): implement live telemetry polling and dynamic dashboard wiring
+
+The UI now polls the real gateway and renders a MEASURED rate. This closes the
+gap I opened deliberately in the two previous commits: I refused to display
+257k events/sec because nothing measured it, and there was no endpoint that did.
+
+=== WHAT CHANGED, AND WHY IT WAS SAFE TO ===
+
+`GET /api/portal/live` returns a rate computed by `ThroughputMeter` from two
+consecutive observations, and the server is the only place both instants exist.
+So the number on screen is measured, not asserted -- which is the condition the
+earlier tests demanded before permitting a rate at all.
+
+`validateLiveSnapshot` REFUSES a non-positive `windowMs`. That is a divide by zero
+that reached the wire, and the whole reason it is checked on the client is that
+`Infinity events/sec` on a live dashboard is worse than no number at all. The
+validator also refuses non-finite rates, so a NaN cannot reach the DOM.
+
+=== THE DISCIPLINE DID NOT RELAX, IT MOVED ===
+
+The old test asserted that no per-second figure could appear. It is now INVERTED
+rather than deleted, and the reason is recorded in the replacement: a rate is
+allowed now, and every rate must publish its window and its delta. 56,690 ev/s
+over 1.4s and 56,690 over 10s are different claims, and rendering the rate alone
+would let a one-sample spike read as sustained throughput.
+
+A verdict with no reading says "no reading yet -- one observation cannot produce
+a rate" rather than showing a zero, because zero reads as a dead stream.
+
+=== THE SIMULATED BANNER IS NOW CONDITIONAL, NOT DELETED ===
+
+It appears when `verdict.synthetic` is true and disappears when it is false. The
+check remains because the frontend can still be handed a simulated sample, and a
+label that is only shown when it would be inconvenient is not a label.
+
+=== "CONNECTED BUT IDLE" IS ITS OWN STATE ===
+
+Healthy, attached, holding zero records is a real condition -- it is exactly what
+the gateway looks like before the flood starts. Folding it into "no data" would
+make a healthy idle system look broken.
+
+=== THE HOOK'S GUARD IS THE POINT OF THE FILE ===
+
+A 500ms interval and an 8s client timeout are not compatible by accident. If a
+request outlasts the interval, the next tick fires anyway, and the next; against
+a slow server that is an unbounded pile-up holding a response and a promise each
+-- a memory leak reachable from the network and a self-inflicted denial of
+service. A tick arriving while a request is in flight is SKIPPED, not queued. The
+cost is that the displayed rate is the last completed reading, which is the right
+trade.
+
+`clearInterval` and a `mounted` flag are in the cleanup, because a timer that
+outlives its component is the exact shape that hung this repository's suite once
+-- five red tests left five listening sockets and the runner sat for 37 minutes
+with every result already printed.
+
+A failed poll KEEPS the previous snapshot. Losing the last good reading because
+one request timed out turns a blip into a blank panel.
+
+Polling is local hook state, not store state: telemetry arrives on a timer and is
+never written to, and putting it in the store would re-render the agent selector
+and the rules table twice a second for a number in the corner.
+
+=== THE LIMITS OF THESE TESTS, STATED NOT IMPLIED ===
+
+`renderToStaticMarkup` does not run `useEffect`, so polling itself is NOT
+exercised: every integration test correctly sees "Connecting to the live gateway",
+and asserting live numbers there would be asserting something the renderer never
+ran. LiveStreamView's rendering of a real verdict and a measured rate is covered
+directly in components/telemetry.test.tsx where it is props-driven. The guard's
+invariant (never more than one request in flight) is pinned as a concurrency test
+rather than by driving the hook.
+
+Frontend: 207 tests pass (was 187). `tsc --noEmit`: 0 errors.
+`vite build`: 258 kB, 79 kB gzipped.

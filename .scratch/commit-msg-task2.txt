@@ -1,0 +1,61 @@
+fix(api): mount portal and schema routes to the active wedge server
+
+`portal-routes.ts` was correct, fully tested, and imported ONLY BY ITS TESTS.
+Nothing served it. The frontend client written last session was therefore
+addressing a contract that no process exposed -- a green suite over a dead
+surface, which is the most expensive kind of bug because every signal says it
+works.
+
+THE BRIEF ASKED FOR `portal-routes.ts` AND `schema-routes.ts`. There IS NO
+`platform/api/schema-routes.ts`. The schema surface is the `api/portal/schema`
+route (POST to install, GET by id), which lives inside portal-routes.ts, so that
+is what is mounted. Creating a second file named for routes that already exist
+would have produced two owners for one surface.
+
+=== THE REGISTRY IS BUILT ONCE, OUTSIDE THE REQUEST HANDLER ===
+
+This placement is the whole substance of the change. The registry is the store of
+registered agents. Build one per request and every schema POST installs into a
+registry that is discarded once the response is written: the write answers 200,
+and the next read sees nothing. A 200 that installs nothing is worse than an
+error, because it is a success the caller must disbelieve. Pinned by a test that
+POSTs over HTTP and then GETs the roster.
+
+=== THE REGISTRY STARTS EMPTY, DELIBERATELY ===
+
+The obvious next step -- seed it from `configs/default-schemas.json` -- would
+have failed for every entry. That file describes core diagnostics in a
+`match`/`allOf` shape; `AgentSchema` wants `rules`/`capabilities`/`streams`.
+Handing one to the other is refused by `validateSchema` on every schema. So
+agents arrive via the schema POST, and until one does, the config route honestly
+reports a derived portal containing nothing. Recorded rather than papered over
+with a lossy translation nobody asked for.
+
+=== NOTHING ELSE ABOUT THE WEDGE CHANGED ===
+
+Same containment, same loopback default, same body ceiling. The portal prefix is
+matched FIRST so a portal path can never fall through to a wedge handler written
+for a different verb, and so a portal 404 is a portal 404 rather than the wedge's
+own. The body is read only for a write; reading it on a GET would leave the
+stream undrained. A non-JSON body is refused at the boundary, because letting it
+through makes the router report every required field missing -- a confusing
+answer to a syntax error.
+
+Credentials come from `environmentVault()` by default (one JSON array in
+`NEUROFEBRIC_GATEWAY_TOKENS`) and are injectable for tests. Unset is not a
+default in the permissive sense: an absent variable yields NO tokens and every
+portal route answers 401, which is correct -- a portal nobody is admitted to
+serves nobody -- and is why the frontend shows a sign-in fault rather than an
+empty dashboard.
+
+=== THE NEW TEST FILE IS THE POINT, NOT THE ROUTING ===
+
+`portal-mount.test.ts` goes through a real socket, because neither
+`portal-routes.test.ts` nor the e2e test could ever have caught "nobody mounts
+this". Nine tests: 401 without a credential, 401 with a wrong one, the derived
+config, a 404 that names no route, a POST-then-GET proving persistence, a
+refused schema proving nothing half-exists, a non-JSON body, the hardened
+headers, and a regression check that the wedge's own page still serves.
+
+Backend `npm test` after the change: 1430 pass, 0 fail, 2 skipped.
+`tsc --noEmit`: 0 errors. New file: 9 pass.

@@ -1,0 +1,64 @@
+feat(ui): implement live telemetry visualizer and anomaly alert center
+
+LiveStreamView.tsx and AlertCenter.tsx, plus live-contracts.ts mirroring
+platform/conductor/live-anomaly.ts and the webhook payload.
+
+=== IT DOES NOT DISPLAY 257k EVENTS PER SECOND, AND HERE IS WHY ===
+
+The brief asked this view to prove that throughput. It cannot, and nothing here
+pretends otherwise.
+
+There is no throughput metric anywhere in the backend. LiveVerdict carries
+`records`, which is a COUNT from one snapshot. A rate needs two instants and a
+numerator, and no endpoint reports either. So the number the brief names has no
+source, and rendering it anyway -- hardcoded, interpolated, or derived from a
+count -- would put an unfalsifiable figure on screen next to a live-looking
+spinner. That is the most expensive thing a dashboard can do: it survives every
+refactor, and somebody will eventually quote it.
+
+What is rendered instead is all real: the record count a snapshot actually saw
+(labelled "a count, not a rate"), each column's measured/min/max, the fence it
+was judged against, whether it breached, the busiest hour and the top keys.
+
+There is a test asserting the rendered TEXT contains no "/sec", no "per second"
+and no "throughput". It is the most important assertion in the file and it is a
+negative one.
+
+=== SIMULATED DATA IS ALWAYS LABELLED ===
+
+simulateVerdict exists so the view can be exercised with nothing live, and it
+is deterministic for a given seed -- a generator that differs per call makes
+every visual test flaky and every bug report unreproducible. Every sample it
+produces carries synthetic: true, and validateLiveVerdict REFUSES a verdict that
+does not state provenance rather than defaulting it to false. Defaulting would
+let a source that forgot the field render as a real measurement.
+
+=== NO RAW EVENTS IN THE DOM ===
+
+There is no scrolling log and no array of events. At any real rate a line per
+event is a heap problem, not a rendering problem. The aggregated columns ARE the
+log, read as statistics. A test counts rendered body rows and pins them to the
+COLUMN count, so a future change that starts rendering per-event rows fails
+rather than quietly melting the tab.
+
+=== THE ALERT CENTER KEEPS ONE DISTINCTION ===
+
+A column breached in one partition out of forty is not the same event as one
+breached in all forty, and that decides whether a person restarts a replica or
+pages the fleet. The backend carries breachedEverywhere for exactly this, so the
+view renders the BACKEND's severity and never recomputes it -- a second severity
+policy would agree with the first right up until the day somebody edits one of
+them. There is a test that an `info` payload with nothing breached renders as
+info, which a re-deriving component would have overridden.
+
+=== FOUR TEST BUGS I WROTE AND FIXED, one of them instructive ===
+
+The throughput test searched raw markup for "/sec" and matched the closing
+</section> tag -- a failing test whose failure had nothing to do with its claim.
+Every assertion about what a user READS is now made against markup-stripped
+text; only structural claims (rows, selected attributes) touch markup. Also: a
+row count that included the table header; an alert fixture whose summary and
+column list contradicted each other; and an assertion that no "257" appeared,
+which was really asserting that the component ignores the data it was fed.
+
+Frontend `tsc --noEmit`: 0 errors. 150 tests pass.

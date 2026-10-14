@@ -1,0 +1,10 @@
+SPENT SCRATCH — verification artefact, not a test and not a fixture.
+
+Held one of the two patch files used on 2026-10-01 to verify that the dropped
+`stash@{0}` (dangling commit `1a9b271`) was byte-identical to commit `927fdb1e`.
+Result: identical. Both halves of that comparison are the same content and the
+same conclusion; this copy is redundant with `.tmp-stash-patch.txt` beside it.
+
+Overwritten rather than removed, because the deletion guard refuses removals and
+`docs/POLICY_PORT.md` names overwriting as the correct response to a refusal.
+The operator may delete it.

@@ -1,0 +1,1 @@
+{"schema":{"id":"pega-alert-export","title":"Pega / Splunk alert export","domain":"anomaly","version":"1.0.0","capabilities":["finds SLA breaches"],"streams":["app.log"],"rules":[{"id":"breach","kind":"threshold","severity":"warning","message":"elapsed_time exceeded the SLA","field":"elapsed_time","operator":">","value":1000}]}}

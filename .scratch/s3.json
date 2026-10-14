@@ -1,0 +1,1 @@
+{"at":"2026-10-03T14:11:29.270Z","total":1,"agents":[{"id":"pega-alert-export","title":"Pega / Splunk alert export","domain":"anomaly","maturity":"ready","version":"1.0.0","capabilities":["finds SLA breaches"]}],"ready":1,"stubCount":0}

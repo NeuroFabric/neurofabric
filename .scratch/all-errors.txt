@@ -1,0 +1,9 @@
+platform/conductor/report-markdown.test.ts(187,104): error TS1005: ';' expected.
+platform/conductor/report-markdown.test.ts(190,1): error TS1128: Declaration or statement expected.
+platform/conductor/report-markdown.test.ts(190,2): error TS1128: Declaration or statement expected.
+platform/conductor/vocabulary-guard.test.ts(93,75): error TS1005: ';' expected.
+platform/conductor/vocabulary-guard.test.ts(105,1): error TS1128: Declaration or statement expected.
+platform/conductor/vocabulary-guard.test.ts(105,2): error TS1128: Declaration or statement expected.
+platform/conductor/vocabulary-guard.test.ts(154,82): error TS1005: ';' expected.
+platform/conductor/vocabulary-guard.test.ts(155,1): error TS1128: Declaration or statement expected.
+platform/conductor/vocabulary-guard.test.ts(155,2): error TS1128: Declaration or statement expected.

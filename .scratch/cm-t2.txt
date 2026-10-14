@@ -1,0 +1,73 @@
+fix(scripts): repair synthetic data generator and add to tsconfig
+
+=== THE TYPE ERROR THAT WAS LIVE FOR THE FILE'S WHOLE LIFE ===
+
+    scripts/generate-synthetic-data.ts(475,18): error TS2339:
+      Property 'label' does not exist on type 'Check'.
+        Property 'label' does not exist on type 'string'.
+
+`type Check = string | { label; run }` unioned the wrong thing. The doc comment
+above it says "accepts a bare predicate or a labelled one" -- the bare form is a
+FUNCTION. So the `typeof c === "function"` branch in `normalise` was
+unreachable, control always fell through to a value narrowed to `string`, and
+`c.label` / `c.run` did not exist on it. One line fixes it, and both branches of
+the union are now reachable, which is the entire point of having a union.
+
+=== WHY NOBODY HAD SEEN IT ===
+
+`tsconfig.json` included `platform/**/*.ts` and `.pi/extensions/*.ts`. Nothing
+else. So `scripts/` was outside the static gate entirely and the file had been
+carrying two live `--strict` errors for as long as it had existed.
+
+A source file no gate can see is a file that rots silently, and this one
+demonstrably did. `scripts/**/*.ts` is now in the include, and the reason is
+written into the config's own `$comment` so the next person to widen or narrow
+the gate knows what it cost to leave it out. `verification/` and `tools/` remain
+outside: they are proof harnesses, and widening the gate to cover them is its
+own measured decision rather than a side effect of this one.
+
+=== THE FLOOD MODE POSTS OVER HTTP, AND THAT IS THE WHOLE DESIGN ===
+
+The obvious implementation imports `OmniRouteGateway` and pushes straight into
+it. That produces beautiful terminal output about a gateway nothing else can
+see: the wedge server owns its own gateway instance, the UI polls THAT one, and
+a flood into a private object would move no number on any screen. A demo that
+proves throughput only to the process that generated it is not a demo.
+
+So `--flood` is an HTTP client against the running wedge's shared ingress, and
+the events land in the same gateway the UI reads. That is the only arrangement in
+which "watch the dashboard move" is true.
+
+Fields are the DEFAULT SCHEMA'S, not invented: `configs/default-schemas.json`
+ships one core verified schema, `pega-alert-export`, whose `match.allOf` names
+`alert_code`, `elapsed_time`, `threshold`, `pega_time`. The flood emits exactly
+those. A flood inventing its own column names would be demoing a schema nobody
+has.
+
+The anomaly is DERIVED. One case in `--anomaly-every` gets an `elapsed_time` of
+`threshold` x 8-40 -- a genuine breach of that case's own SLA rather than a
+constant, and the shape the IQR fence in `live-anomaly.ts` is built to catch.
+
+=== THROUGHPUT IS MEASURED, NEVER CLAIMED ===
+
+The printed rate is accepted events divided by wall-clock seconds around the
+dispatch loop. It is the only kind of throughput figure this repository prints.
+A hardcoded 257k in a demo generator would have been the first place the
+unfalsifiable-number failure this project exists to avoid actually appeared.
+
+Refusals are REPORTED, not retried. A silently resent batch would leave the
+accepted count honest while the elapsed time included work the server never did.
+
+=== GUARDS ===
+
+Batches are capped at 1000 and concurrency at 32, because an uncapped batch is a
+multi-megabyte body that the server's own ceiling refuses -- which would look
+like a server fault rather than a client one. A missing credential is named
+before any request, never defaulted, because a default credential is a credential
+everybody shares. Argument mistakes print a sentence rather than a stack trace,
+because this is a command a person types by hand during a demo.
+
+Verified: CSV generation still passes all three of its own verification suites
+(720 contiguous hours, 3513 rows, VERIFIED). `--flood` with no credential and
+with an unknown flag both print one readable line. `tsc --noEmit`: 0 errors,
+with `scripts/` now inside the gate.

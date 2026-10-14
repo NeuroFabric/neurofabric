@@ -1,0 +1,55 @@
+fix(web): the charting library was a 404, and the policy now ships as a header
+
+The Owner saw "The charting library could not be loaded" -- this repository's own
+fallback, rendered because `typeof Chart` was undefined -- and reported that the
+CSP had blocked the CDN.
+
+*** THE CSP WAS INNOCENT. THE REAL CAUSE WAS A 404. ***
+
+script-src already named https://unpkg.com and the tag carried the right
+origin. The page asked unpkg for:
+
+    chart.js@4.4.1/dist/chart.umd.min.js
+
+and Chart.js v4 ships no such file. It ships `chart.umd.js`, which is ALREADY
+minified -- `.min.js` was a v3 convention dropped in v4. Both URLs were checked
+against the live CDN by hand before this commit; the old one returns "Not found".
+
+That distinction is the whole lesson and it is why the fallback message was
+rewritten. From inside a browser, a script blocked by policy and a script that
+404s are the SAME observation: a global that never arrives. "The policy is too
+tight" is the natural first diagnosis and it would have sent the fix in exactly
+the wrong direction. The notice now names both causes and says to look at the
+console, where a CSP violation and a 404 are told apart in one line.
+
+Every test passed throughout, for the same reason the dashboard was invisible
+last session: each asserted the page CONTAINS a pinned Chart.js reference, and a
+404 is a perfectly well-formed reference. No test here makes a network call and
+none should, so the guarantee is pinned as the exact filename with its
+provenance, and a test asserts the v4 bundle name explicitly.
+
+THE POLICY IS NOW BUILT ONCE, AND IT HAD A SECOND DEFECT IN IT.
+
+It was written in two places -- a meta tag, and nothing else. While unifying
+them I found the meta tag carried `style-src` TWICE: widened in one release, then
+widened again in the one that added Tailwind without reading what was already
+there. Per the CSP spec duplicate directives are DISCARDED, so which one
+survives depends on parser order rather than on intent.
+
+`dashboardCsp()` is now the single definition. The meta tag calls it, the server
+calls it for the HTTP header, and a test asserts the two are byte-identical. A
+page whose real policy is whichever copy its author forgot about is not a
+policy.
+
+WHY A HEADER AND NOT JUST A META TAG. A meta policy is only honoured if it
+precedes every resource the page loads, so a future edit that moves it down the
+document silently disarms it. It cannot be inspected from the server side. And
+it cannot be tested from the server side, which is how a dashboard spent a
+release failing to draw its charts.
+
+Still: two named origins, no wildcard, no unsafe-eval. And the kernel's own
+landing page keeps `default-src 'none'` and loads nothing remote -- a test pins
+that, because the widening is exactly the thing a later edit would "fix" by
+making the two artifacts consistent.
+
+Kernel FROZEN. Nothing under platform/core/ touched.

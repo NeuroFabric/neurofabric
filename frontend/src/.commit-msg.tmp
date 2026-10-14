@@ -1,0 +1,115 @@
+feat(ui): rescue the workspace grid and give telemetry its own type
+
+## THE COLLAPSE
+
+.app__main declares exactly two grid tracks, minmax(0, 2fr) and
+minmax(0, 1fr). It was handed THREE direct children: the record
+panel, the dashboard, and the live column. The third was auto-placed
+into an implicit THIRD ROW, so the whole primary column collapsed to
+the height of its tallest child.
+
+**A grid does not complain about this.** The layout rendered. Nothing
+threw, no attribute was malformed, tsc was silent, and all 413 tests
+passed while the page was visibly broken. The browser resolved a
+well-formed request into a layout nobody wanted, which is why this
+commit carries a guard rather than only a fix.
+
+.quiet had the same shape of defect for a different reason. It was a
+<div> holding <dt>/<dd> INSIDE the readout's <dl>, so the key/value
+grid auto-placed a bare <div> into its max-content label track and
+squeezed two paragraphs of explanation into the width of the word
+"throughput". It is prose about the figures above it, not a figure.
+
+## THE FIX IS STRUCTURAL, NOT COSMETIC
+
+A :nth-child(3) rule would have hidden the symptom and left the cause:
+the next panel dropped in would land in a track nobody chose. So
+.app__primary makes the child count two BY CONSTRUCTION -- the
+workspace stack is one grid item however many panels it holds -- and
+.quiet moves below the grid at full width as prose.
+
+.quiet also had to be given an explicit single-column template. It had
+inherited max-content/minmax(0,1fr) from the <dl>, so fixing the
+markup alone would have left the prose squeezed into a label-width
+track. One explicit 1fr, rather than no declaration, so nothing above
+it can silently re-narrow it.
+
+## THE GUARD
+
+frontend/src/app-grid-layout.test.tsx checks BOTH halves of the
+invariant, because the layout is correct only when the track count and
+the child count are the SAME NUMBER, and neither half is visible from
+the other: two children under a three-track grid is an empty column,
+three children under a two-track grid is the collapse.
+
+The fixture supplies a real ReconciliationDiff on purpose. With
+reconciliation={null} the record panel renders nothing, .app__main has
+two children anyway, and the count assertion PASSED against the
+reintroduced defect. It passed for the wrong reason, which is worse
+than no guard. The panel only appears when there IS a difference, so a
+diff is supplied -- the third child is now genuinely there to be
+counted, which is the only state in which the collapse can occur.
+
+quiet-feed.test.tsx asserted "why the rate is zero" in lower case,
+which was correct when the phrase was a <dt> (this panel's labels are
+all lower case) and stopped being correct when it became an <h4>.
+Case is presentation and the stylesheet owns presentation, so the five
+sites now compare through one shared constant. The assertions are not
+weakened: each still proves presence where it belongs and absence
+where it does not.
+
+## THE DESIGN CONSTRAINTS
+
+Queried from the ui-ux-pro-max skill, colours.csv / typography.csv /
+ux-guidelines.csv, Product Type "Developer Tool / IDE".
+
+* WEBFONTS DECLINED, THE RULE KEPT. The skill's "Dashboard Data"
+  pairing is Fira Code for figures and Fira Sans for labels, and the
+  transferable part is the division of labour: code for data, sans for
+  labels. This console may run on a locked-down host with no egress,
+  and a webfont that silently fails to load reflows every column at
+  once -- the worst possible failure for a density-critical panel. Both
+  roles are satisfied by fonts the OS already has.
+
+* TWO BORDER WEIGHTS, BECAUSE THEY DO DIFFERENT JOBS. The skill
+  separates a DIVIDER, which only has to be perceptible, from a
+  CONTROL BOUNDARY, which is the only thing telling a keyboard user
+  where the input box is and must clear 3:1. --line stays at 1.44:1
+  for dividers; --line-strong at 3.46:1 is for the four form fields.
+  One weight cannot be both -- it would make the dividers too loud or
+  the fields invisible.
+
+* INK ON THE ACCENT IS DARK. The accent is a light blue, so a white
+  label on it measures 2.46:1 and fails. --on-accent is 7.63:1. A
+  button is the one place a stylesheet is tempted to reach for white
+  by reflex.
+
+* TELEMETRY GETS THREE DECLARATIONS TOGETHER: --mono,
+  tabular-nums, and "zero" for the slashed zero. Dropping any one
+  produces a panel that looks nearly right, which is the failure mode
+  worth guarding. Prose inside a figure slot is re-asserted to the sans,
+  or "no reading yet -- one observation cannot produce a rate" would be
+  set in monospace.
+
+Every value was measured, not eyeballed: 15.93:1 ink, 7.30:1 muted,
+9.08:1 focus ring, 3.14:1 marker, 6.94:1 selected border. The focus
+ring is 2px at 3:1 per the skill's Focus Appearance rule, whose named
+anti-pattern is a thin low-contrast outline.
+
+## SEVEN DECLARATIONS THAT WERE BEING DROPPED
+
+--text and --bg were renamed to --ink and --ground at some point and
+four and three references respectively were never followed. An
+undefined var() makes a declaration invalid at computed-value time, so
+those properties were silently discarded -- including the text colour
+on the wordmark, the live strip's healthy state, and both accent
+buttons. Found while auditing the palette; fixed here because the same
+audit would otherwise re-report them.
+
+## HONEST SCOPE
+
+The skill's 44x44px touch target is NOT met by the agent-list pills
+(~28px). That is a deliberate trade for density on a desktop
+operator's console, and it is the one constraint knowingly left
+unmet. The tokens are now fully defined and fully used: zero
+undefined, zero unused.

@@ -1,0 +1,47 @@
+fix(f006): close out Part C — pin the anchor's staleness and clear Part C's type debt
+
+The Part C completion audit found one empty cell and filed it rather than
+filling it: the C4 anchor (lastFailureSignature) had no staleness pin. C3.4
+covers the ATTEMPT side, and the H2-H6 series covers every other counter, but
+nothing proved a stale handler could not classify a failure into the newer task
+and move the anchor there. A stale anchor would give the newer task a history it
+never had, and its very next failure would be compared against a failure from a
+task that no longer exists.
+
+C4.9  a stale failure classification must not write the anchor onto the newer
+      task. Deterministic interleaving, parked on TOOL_FAILED with a newer turn
+      started while suspended — never a timer race. It asserts the newer task is
+      untouched (no failure reason, no budget spent) and then asserts the
+      observable consequence: its own first failure reads as a REPEAT.
+C4.10 the staleness pin is live, not inert (C3.4b's shape), so C4.9 cannot pass
+      merely because the anchor is never written by anyone.
+
+MUTATION EVIDENCE, and a correction. Moving the anchor assignment above
+observeToolResult's stale guard — the mutation as specified — failed 7 tests but
+NOT C4.9, and a second attempt placed above the true guard failed the same 7
+while C4.9 still passed. The reason is that beginTask clears lastAttemptSignature,
+so a stale write above the guard writes undefined and is a no-op: that particular
+relocation is not observable, and C4.9 does not discriminate it. I am reporting
+that rather than claiming the mutation proved the pin.
+
+The mutation C4.9 actually defends against is the one that lets a stale result
+reach classification at all: neutering the isStale early return in
+observeToolResult. Executed and observed: exactly 1 test failed, C4.9, with the
+other 10 green. The probe was restored and `git diff` on kernel-adapter.ts is
+empty, so no production behaviour remains altered.
+
+TS2741 (6) — Part C's own type debt, now cleared. C1 added a required
+`maxStrategyChanges` to RecoveryLimits and left six test literals that no longer
+satisfied the interface. They passed at runtime only because
+--experimental-strip-types does not typecheck, and the C2 sweep deliberately
+never constructs them. Every one of the six is a call site that OMITS the new
+arguments, so the repeat path is taken and maxStrategyChanges is never read;
+adding the field cannot change what any of those tests assert. Verified by
+reading each site, not assumed. Four take parity with their own maxReplans.
+The fifth, the recovery-limits-defaults fixture, takes a DISTINCT value (4
+against maxReplans 1) because that fixture exists to prove a configured budget
+is returned as given, and a parity value would make a mix-up invisible.
+
+Suite 458/456/0/2, delta +2 tests and +2 passes, equal to the 2 pins added.
+Production tsc --noEmit clean. The strict run over test files drops 90 to 84,
+exactly the six TS2741 and nothing else.

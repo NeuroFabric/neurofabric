@@ -1,0 +1,65 @@
+feat(conductor): the agent can COUNT, not just route
+
+The router could hand a user the right CHART. It could not answer "how many
+rows are over 5,000", because a summary is not invertible -- a mean, a maximum
+and an outlier count do not determine how many values fall inside an arbitrary
+range.
+
+So the agent answered "what was the worst hour" and declined "how many queries
+took longer than two seconds", which is the question a person with a slow
+database actually opens the file to ask. It could find a chart and not count.
+
+*** THE ANSWER IS A BOUNDED HISTOGRAM ***
+
+Twenty buckets per numeric column, computed in the SAME pass as the mean and the
+fences, from the same array of measured values -- so a summary and a histogram
+can never disagree about which cells were counted. Bounded because twenty pairs
+per column is twenty pairs per column whatever the row count. Bucketed rather
+than storing every value because an entire file in a dashboard payload is
+exactly the thing this product exists not to do.
+
+*** AND THE LIMIT IS STATED RATHER THAN HIDDEN ***
+
+A bucket is a RANGE. "About 3,900 rows" is defensible; "3,912 rows" is a
+fabrication, and it is the single most tempting lie in this feature.
+
+- a threshold on a bucket EDGE is exact, because the buckets are half-open;
+- a threshold INSIDE a bucket yields a range, and the answer says "at least N ...
+  at most M" and names the span;
+- a question that cannot be answered within the bounds is DECLINED.
+
+The lower bound deliberately EXCLUDES the straddling bucket. Whole buckets above
+33 hold 64; the straddler holds at most 30 more; so the answer is "at least 64,
+at most 94". Counting the straddler into the lower bound would have been
+convenient and wrong, and a test asserts the arithmetic.
+
+*** A SUBTLETY THE TESTS FOUND, NOW STATED IN THE CODE ***
+
+"Over 200" counts every bucket whose lower bound is at or above 200 -- which
+includes a value of exactly 200. A histogram cannot separate 200 from 200.0001,
+so the only two available readings are "at or above" (exact under a stated
+convention) and "strictly above, minus the unknown count at exactly 200" (a
+range). The convention is written down on countOnSide rather than left to chance.
+For "under" it costs nothing: [lo, X) is all strictly below X.
+
+*** DECLINES ARE INFORMATIVE ***
+
+There were two drafts of the "no such column" message. One said "which column do
+you mean?", which is unhelpful when the user named a column this file does not
+have, because they will answer with the same name. The other said "no such
+column", which is unhelpful when they named nothing. The message now lists what
+the file DOES have, which answers both.
+
+A range question with no column named is declined outright -- "how many rows are
+over 40" does not say WHICH column, and picking the widest or the first would be
+inventing the question.
+
+*** THE RESOLVER RUNS ABOVE EVERY COARSE ROUTE ***
+
+Because "how many rows took longer than 5000ms" contains no category word and no
+hour word, it fell through to the decline. It now runs second, after
+corrections and before the keyword routes. A `matched: false` falls through
+exactly as before, and two tests pin that the old routes still work -- the same
+mistake I made with the correction heuristic, caught by twenty existing tests.
+
+Suite: 1071 passing, 0 failing. Kernel FROZEN.

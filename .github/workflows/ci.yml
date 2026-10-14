@@ -6,15 +6,19 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
-  verify:
+  security-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
-    - name: Checkout code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up Node.js
+    - name: Set up Node.js 22
       uses: actions/setup-node@v4
       with:
         node-version: 22
@@ -22,12 +26,19 @@ jobs:
     - name: Install Root Dependencies
       run: npm ci || npm install
 
-    - name: Run Backend Triage & Contract Verification
+    - name: Verify No .env or Raw Secrets Committed
+      run: |
+        if git ls-files | grep -E '^\.env$|\.pem$|\.key$'; then
+          echo "CRITICAL: Secret file tracked in git!"
+          exit 1
+        fi
+
+    - name: Run 32-Point Backend Triage & Security Suite
       run: node --experimental-strip-types scripts/triage-agent-client.ts
 
-    - name: Build Platform UI Cockpit
+    - name: Build & Typecheck Platform UI Cockpit
       working-directory: platform/ui
       run: |
-        npm install
+        npm ci || npm install
         npx tsc -b
         npm run build

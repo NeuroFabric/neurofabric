@@ -1,0 +1,61 @@
+feat(conductor): the engine says what the file IS, before it says anything else
+
+Every surface this product had was named after a FILE SHAPE rather than a
+QUESTION. "Bottleneck report". "Alert categories by frequency". The engine was
+very good at telling a person how a column behaved and completely silent about
+what the column was for -- so somebody opening a database performance log was
+asked to interpret latency statistics as though the tool had no idea, and
+somebody opening a sales export got the same shape of answer about different
+data.
+
+semantics.ts is the thing that opens its mouth about the FILE first. It reads
+the header row and a bounded sample of values, scores them against four domain
+signatures, and returns a purpose with its EVIDENCE and its CONFIDENCE.
+
+IT IS A HYPOTHESIS, SAYED AS ONE. Every statement is a claim about a file nobody
+described, so the result carries what this codebase insists on everywhere else:
+
+- `evidence`: the specific columns the conclusion rests on, so the reasoning can
+  be checked rather than taken.
+- `confidence`: high only when two INDEPENDENT columns agree. One matching
+  column in a file of five anonymous ones is a coincidence, and a purpose
+  statement FRAMES every number that follows it.
+- `kind: "unknown"`: a real first-class answer, not a fallback. An engine that
+  improvises when it does not know is a narrator, not an agent.
+
+A file genuinely between two readings says so rather than picking the larger
+number -- the sort also detects a runner-up within reach and reports both.
+
+THE GATE IS THE PART MOST LIKELY TO BE RELAXED LATER. One domain column scores
+nothing. `query_snippet` beside `a`, `b`, `c`, `d` is deliberately NOT called a
+database log, and a test pins that case, because a later change wanting one more
+file to classify will reach for exactly this threshold and nobody will remember
+that `purchase_amount` alone is a sales file with unnamed columns.
+
+COSTS THE SAME ON A MILLION ROWS AS ON THREE. It runs before everything else --
+the greeting cannot wait on a full scan -- and a profiler that streams the file
+to categorise it has already done the expensive part it was meant to make
+unnecessary. A test asserts 5000 rows and 2 rows give the same answer.
+
+MATCHING IS ON SUBSTRINGS, NOT EQUALITY. `total_elapsed_time_ms`,
+`elapsed_time` and `avgElapsedMs` are one idea written by three exporters, and
+a domain whose vocabulary varies by vendor is the domain that needs recognising.
+Every match records its column, which keeps the looseness checkable.
+
+TERMINOLOGY. "Bottleneck" was the first guess at what a CSV was for, and it was
+wrong for most files people actually upload. So:
+
+- Every artifact is now titled from the file's own name and purpose, via
+  `titleFor`. The title is a label; the purpose is a claim shown separately,
+  with evidence. Only one of them is stated flatly.
+- The landing page is "Data agent".
+- `toBottleneckMarkdown` carries a @deprecated note naming its future, and the
+  symbol is NOT renamed in this commit. It is exported and called from the
+  conductor and two suites, and "Bottleneck" appears in about forty places;
+  renaming them all at once would bury a behavioural change under a mechanical
+  one and the result could not be reviewed for the thing that matters.
+
+`purpose` now travels on the analysis, the API response, and the dashboard, so
+Task 3's greeting can open with it.
+
+Kernel FROZEN. Nothing under platform/core/ touched.

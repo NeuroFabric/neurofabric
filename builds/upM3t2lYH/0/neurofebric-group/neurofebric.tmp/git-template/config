@@ -1,0 +1,10 @@
+[init]
+	defaultBranch = none
+[fetch]
+	recurseSubmodules = false
+[credential]
+	interactive = never
+[gc]
+	autoDetach = false
+[include]
+	path = D:\\Agent-Harness\\agent-harness_omni\\agent-harness\\builds\\upM3t2lYH\\0\\neurofebric-group\\neurofebric.tmp\\.gitlab-runner.ext.conf

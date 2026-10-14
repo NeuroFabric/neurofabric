@@ -1,0 +1,54 @@
+{
+  "exportedAt": "2026-10-12T16:11:46.492Z",
+  "source": "workspace/.neurofabric.db",
+  "telemetry": [
+    {
+      "id": 19,
+      "service": "auth-gateway",
+      "severity": "CRITICAL",
+      "message": "Connection pool exhausted; upstream timeout to redis-cluster secret=[REDACTED_SECRET]",
+      "dlpScrubbed": 1,
+      "createdAt": 1791821023885
+    },
+    {
+      "id": 18,
+      "service": "auth-gateway",
+      "severity": "CRITICAL",
+      "message": "Connection pool exhausted; upstream timeout to redis-cluster secret=[REDACTED_SECRET]",
+      "dlpScrubbed": 1,
+      "createdAt": 1791821023764
+    },
+    {
+      "id": 6,
+      "service": "auth-gateway",
+      "severity": "WARNING",
+      "message": "Exfiltration probe with token [REDACTED_SECRET] and [REDACTED_SECRET]",
+      "dlpScrubbed": 1,
+      "createdAt": 1791817708648
+    }
+  ],
+  "circuit_breakers": [
+    {
+      "service": "auth-gateway",
+      "strikes": 2,
+      "tripped": 0,
+      "last_strike": 1791821023886
+    }
+  ],
+  "dedup_cache": [
+    {
+      "hash": "328080700a753e451dc3f3598e93a4d04623be0652f25b6b35fbdbef5cb796f2",
+      "service": "auth-gateway",
+      "first_seen": 1791817708645,
+      "last_seen": 1791817708645,
+      "seen_count": 1
+    },
+    {
+      "hash": "14e7de3811a8276724c0aaebc93ea3327afbffe7c26874d2cae0f31cb654a36b",
+      "service": "auth-gateway",
+      "first_seen": 1791821023763,
+      "last_seen": 1791821023883,
+      "seen_count": 2
+    }
+  ]
+}

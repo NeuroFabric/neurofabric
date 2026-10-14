@@ -1,0 +1,16 @@
+
+/**
+ * WRITE A REFUSAL AND REPORT THAT THIS CALL HAS ALREADY ANSWERED.
+ *
+ * Returns false rather than a `UiResponse`, because every caller of `openStream`
+ * has exactly one job left when this returns: do not write anything else. A
+ * helper that handed back a response would invite a second `writeHead`, and a
+ * second `writeHead` on a live socket is the failure this shape exists to make
+ * impossible.
+ */
+function write(response: ServerResponse, result: UiResponse): boolean {
+  const text = JSON.stringify(result.body ?? null);
+  response.writeHead(result.status, { ...result.headers, "content-length": Buffer.byteLength(text) });
+  response.end(text);
+  return false;
+}

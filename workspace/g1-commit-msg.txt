@@ -1,0 +1,37 @@
+chore(tsconfig): narrow the unknown catch sites in G1 (3 of 9)
+
+PARTIAL. G1 was scoped at 9 sites (TS7006 + TS7016 + TS18046). This commit
+clears the 3 TS18046 sites. The remaining 6 are ONE root cause and are blocked
+on an operator ruling; the options are set out in the report, not decided here.
+
+TS18046, both sites are the validation callback of assert.rejects /
+assert.throws, where the parameter is correctly typed `unknown` and was then
+dereferenced as if it were an Error.
+
+policy-config.test.ts  the parameter was unannotated, so it defaulted to
+  unknown and `.message` was a type error. Annotated as `unknown` and narrowed
+  with `instanceof Error`. The assertion is unchanged: a non-Error rejection now
+  fails the test cleanly instead of throwing a TypeError from inside the
+  validator, which is the same outcome reached more legibly.
+
+state-machine.test.ts  the parameter was already `unknown`, and the code relied
+  on `isTaskError` to narrow. It is a runtime predicate, not a type guard, so it
+  cannot narrow and the following `.message` was a type error. `instanceof
+  Error` added ahead of it. The production predicate is untouched; the
+  alternative, promoting it to a type guard, would be a production change and
+  does not belong in a type increment.
+
+Neither fix introduces a cast or a suppression directive.
+
+The other 6 sites in G1 share one root cause: `platform/skill-registry.mjs` has
+no type declarations, so the three imports are TS7016, and the three TS7006
+callbacks are `.map`/`.find` parameters over `discoverSkills(...)` returning
+that untyped module. All six clear together or not at all, and none can be fixed
+from inside a test file without either hand-writing a declaration that would be
+a second source of truth for the module's signatures, or changing how the whole
+project compiles. Both are out of G1's scope, so they are reported rather than
+worked around.
+
+Suite 458/456/0/2, unchanged and identical to main. Production tsc --noEmit
+clean. Strict run over test files: 84 to 81, exactly the 3 TS18046 sites this commit
+clears.

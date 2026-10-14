@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "savedAt": "2026-10-06T11:12:50.288Z",
+  "agents": [
+    {
+      "id": "god",
+      "name": "Neurofebric",
+      "character": "michael",
+      "accent": "lemon",
+      "description": "god — runs the floor, triages requests, escalates only critical calls to you",
+      "project": "hive",
+      "tmuxTarget": "",
+      "cwd": "D:\\Agent-Harness\\agent-harness_omni\\agent-harness",
+      "status": "idle",
+      "action": "running the floor",
+      "progress": 0,
+      "currentStation": "desk",
+      "ptyId": "pty-god",
+      "command": "pi --model google/gemini-2.5-pro --approve",
+      "provider": "pi",
+      "model": "google/gemini-2.5-pro",
+      "isGod": true
+    }
+  ],
+  "archived": [],
+  "restorable": [],
+  "queues": {},
+  "selectedId": "god"
+}

@@ -1,0 +1,240 @@
+{
+  "id": "f89a352f-3394-4ef6-a08a-d63ddddcf46a",
+  "created": "2026-10-03T00:37:48.635Z",
+  "updated": "2026-10-03T00:38:16.243Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "show me the worst hour",
+      "at": "2026-10-03T00:37:48.635Z"
+    },
+    {
+      "role": "agent",
+      "text": "No hour stands out against the mean. The busiest is 2026-10-03 00:00 with 198 rows.",
+      "widgets": [
+        {
+          "kind": "chart-line",
+          "title": "Rows by hour",
+          "note": "Orange points are spikes the engine flagged against its own mean. Hover for the exact count.",
+          "payload": {
+            "points": [
+              {
+                "hour": "2026-10-02T23",
+                "count": 102,
+                "share": 0.255,
+                "multiple": 0.7649999999999999,
+                "spike": false,
+                "rule": null
+              },
+              {
+                "hour": "2026-10-03T00",
+                "count": 198,
+                "share": 0.495,
+                "multiple": 1.4849999999999999,
+                "spike": false,
+                "rule": null
+              },
+              {
+                "hour": "2026-10-03T01",
+                "count": 100,
+                "share": 0.25,
+                "multiple": 0.75,
+                "spike": false,
+                "rule": null
+              }
+            ]
+          }
+        }
+      ],
+      "suggestions": [
+        "what are the top categories",
+        "are there any complex anomalies?",
+        "how did you read the columns?",
+        "show me the columns"
+      ],
+      "at": "2026-10-03T00:37:48.753Z"
+    },
+    {
+      "role": "user",
+      "text": "what are the top categories",
+      "at": "2026-10-03T00:37:54.835Z"
+    },
+    {
+      "role": "agent",
+      "text": "9 distinct values in the category column. The largest is \"200\" with 221 rows.",
+      "widgets": [
+        {
+          "kind": "chart-bar",
+          "title": "Record categories",
+          "note": "How many rows fall in each category.",
+          "payload": {
+            "points": [
+              {
+                "key": "200",
+                "count": 221
+              },
+              {
+                "key": "304",
+                "count": 70
+              },
+              {
+                "key": "404",
+                "count": 41
+              },
+              {
+                "key": "403",
+                "count": 30
+              },
+              {
+                "key": "401",
+                "count": 14
+              },
+              {
+                "key": "201",
+                "count": 10
+              },
+              {
+                "key": "400",
+                "count": 10
+              },
+              {
+                "key": "500",
+                "count": 3
+              },
+              {
+                "key": "502",
+                "count": 1
+              }
+            ],
+            "hidden": 0
+          }
+        }
+      ],
+      "suggestions": [
+        "show me the worst hour",
+        "are there any complex anomalies?",
+        "how did you read the columns?",
+        "show me the columns"
+      ],
+      "at": "2026-10-03T00:37:54.858Z"
+    },
+    {
+      "role": "user",
+      "text": "show me the worst hour",
+      "at": "2026-10-03T00:37:58.675Z"
+    },
+    {
+      "role": "agent",
+      "text": "No hour stands out against the mean. The busiest is 2026-10-03 00:00 with 198 rows.",
+      "widgets": [
+        {
+          "kind": "chart-line",
+          "title": "Rows by hour",
+          "note": "Orange points are spikes the engine flagged against its own mean. Hover for the exact count.",
+          "payload": {
+            "points": [
+              {
+                "hour": "2026-10-02T23",
+                "count": 102,
+                "share": 0.255,
+                "multiple": 0.7649999999999999,
+                "spike": false,
+                "rule": null
+              },
+              {
+                "hour": "2026-10-03T00",
+                "count": 198,
+                "share": 0.495,
+                "multiple": 1.4849999999999999,
+                "spike": false,
+                "rule": null
+              },
+              {
+                "hour": "2026-10-03T01",
+                "count": 100,
+                "share": 0.25,
+                "multiple": 0.75,
+                "spike": false,
+                "rule": null
+              }
+            ]
+          }
+        }
+      ],
+      "suggestions": [
+        "what are the top categories",
+        "are there any complex anomalies?",
+        "how did you read the columns?",
+        "show me the columns"
+      ],
+      "at": "2026-10-03T00:37:58.703Z"
+    },
+    {
+      "role": "user",
+      "text": "are there any complex anomalies?",
+      "at": "2026-10-03T00:38:02.552Z"
+    },
+    {
+      "role": "agent",
+      "text": "No. Across 400, no row has two numeric columns that contradict each other -- every row that is high in one is also high in the other, or low in both. Rows that are merely large are a different question, and I answer that one from the per-column findings.",
+      "widgets": [],
+      "suggestions": [
+        "show me the worst hour",
+        "what are the top categories",
+        "are there any complex anomalies?",
+        "how did you read the columns?"
+      ],
+      "at": "2026-10-03T00:38:02.573Z"
+    },
+    {
+      "role": "user",
+      "text": "are there any complex anomalies?",
+      "at": "2026-10-03T00:38:07.229Z"
+    },
+    {
+      "role": "agent",
+      "text": "No. Across 400, no row has two numeric columns that contradict each other -- every row that is high in one is also high in the other, or low in both. Rows that are merely large are a different question, and I answer that one from the per-column findings.",
+      "widgets": [],
+      "suggestions": [
+        "show me the worst hour",
+        "what are the top categories",
+        "are there any complex anomalies?",
+        "how did you read the columns?"
+      ],
+      "at": "2026-10-03T00:38:07.399Z"
+    },
+    {
+      "role": "user",
+      "text": "how did you read the columns?",
+      "at": "2026-10-03T00:38:16.222Z"
+    },
+    {
+      "role": "agent",
+      "text": "2 of those mappings came from what you told me in this conversation. I inferred the rest from column names and a statistical profile of the values. None of it has been checked by a person, so treat it as a first reading. The column names here are bytes_sent, status_code. Tell me a mapping in plain English and I will remember it for this checkout.",
+      "widgets": [
+        {
+          "kind": "mappings",
+          "title": "How I read the columns",
+          "payload": {
+            "learned": {
+              "time": "timestamp",
+              "category": "status_code"
+            },
+            "columns": [
+              "bytes_sent",
+              "status_code"
+            ]
+          }
+        }
+      ],
+      "suggestions": [
+        "show me the worst hour",
+        "what are the top categories",
+        "are there any complex anomalies?",
+        "show me the columns"
+      ],
+      "at": "2026-10-03T00:38:16.243Z"
+    }
+  ],
+  "corrections": []
+}

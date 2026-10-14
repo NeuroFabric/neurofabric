@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "rulings": {
+    "durationUnit": "ms",
+    "timeZone": "UTC"
+  },
+  "entries": [
+    {
+      "signature": [
+        "_time",
+        "source_host",
+        "nodeId",
+        "userid",
+        "thread_name",
+        "logger_name",
+        "alertType",
+        "alert_code",
+        "elapsed_time",
+        "threshold",
+        "pega_time",
+        "service_uri"
+      ],
+      "marker": [
+        "_time",
+        "logger_name",
+        "alertType",
+        "alert_code",
+        "elapsed_time",
+        "pega_time"
+      ],
+      "roles": {
+        "time": "_time",
+        "source": "source_host",
+        "category": "alert_code",
+        "alias": "logger_name",
+        "duration": "elapsed_time",
+        "threshold": "threshold"
+      },
+      "learnedFrom": "data\\splunk_pega_alerts.csv",
+      "confirmedByOwner": false
+    }
+  ]
+}

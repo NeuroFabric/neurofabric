@@ -1,0 +1,88 @@
+  if (live.credentialRequired) {
+    return (
+      <RefusalScreen
+        state={live.state}
+        {...(onCredentialRequired === undefined ? {} : { onCredentialRequired })}
+        onRetry={reload}
+      />
+    );
+  }
+
+  return (
+    <div className="app">
+      {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
+          *
+          "Visible without scrolling" is the requirement, and putting it here
+          * rather than in the side panel is what satisfies it. A fault you have
+          * to scroll to find is a fault an operator misses, and the state that
+          * must never be ambiguous is the one that costs the most to reach. */}
+      <LivenessStrip
+        liveness={livenessOf({
+          credentialRequired: live.credentialRequired,
+          lastUpdated: live.snapshot?.at ?? null,
+          now,
+          loading: live.loading,
+          records: live.snapshot?.verdict?.records ?? null,
+          // ADR-003: the RATE decides whether the feed is live. Without this the
+          // strip said "Live, just now" directly beside "0 events/sec" once a
+          // burst ended, and both readings were true.
+          rate: live.snapshot?.throughput?.eventsPerSecond ?? null,
+        })}
+        lastUpdated={live.snapshot?.at ?? null}
+        now={now}
+        credentialState={live.state}
+        fault={live.error}
+        records={live.snapshot?.verdict?.records ?? null}
+      />
+
+      <header className="app__bar">
+        {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
+            gutter, which is a description of a component rather than a product
+            -- and the word "Neurofebric" appeared nowhere on screen at all. The
+            class carries the centring so the change is one line of CSS rather
+            than a layout rewrite. */}
+        <div className="app__identity">
+          <h1 className="app__wordmark">Neurofebric</h1>
+        </div>
+        <div className="app__meta">
+          <p className="muted">
+            {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
+            {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
+          </p>
+          <div className="app__actions">
+            {/* The CLASS still carries the machine state, for styling and for the
+                test that asserts on it. Only the word a person reads changes. */}
+            <span className={`pill pill--${state.status}`} data-status={state.status}>
+              {statusWord(state.status)}
+            </span>
+            <button type="button" onClick={reload}>
+              Reload
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <nav className="app__select" aria-label="Agent selection">
+        <AgentSelector
+          agents={state.agents}
+          selectedAgentId={state.selectedAgentId}
+          loading={state.schemaLoading}
+          onSelect={select}
+        />
+      </nav>
+
+      <main className="app__main">
+        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        <aside className="app__side">
+          <LiveStreamView
+            verdict={live.snapshot?.verdict ?? null}
+            throughput={live.snapshot?.throughput ?? null}
+            error={live.error ?? undefined}
+            demo={demo}
+          />
+          <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
+        </aside>
+      </main>
+    </div>
+  );
+}

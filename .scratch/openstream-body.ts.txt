@@ -1,0 +1,134 @@
+  /**
+   * OPEN THE STREAM. Authenticated exactly like everything else.
+   *
+   * === WHY THE GUARD IS FIRST, BEFORE ANY HEADER IS WRITTEN ===
+   *
+   * Because the first byte is the whole answer. A stream that writes `200 OK` and
+   * then refuses is a surface that reports success to a scanner and delivers
+   * nothing to the operator -- the "a 200 that installs nothing" shape
+   * `portal-routes.ts` calls worse than an error, because it is a success the
+   * caller has to disbelieve. So the credential is proven first, and a refusal is
+   * an ordinary JSON error carrying the same status every other route returns.
+   *
+   * === BACK-PRESSURE IS A REFUSAL, NOT A QUEUE ===
+   *
+   * The socket's own writable buffer is the measurement, and
+   * `MAX_CONSUMER_BACKLOG_BYTES` is the ceiling. A consumer further behind than
+   * that is disconnected with a final frame explaining why, and its keep-alive
+   * timer is cleared in the same breath -- a timer that outlives its consumer is a
+   * handle that keeps this process alive, and this repository has been hung by
+   * exactly that shape.
+   *
+   * What it loses is a NOTIFICATION, never an alert: `onDecision` persisted the
+   * alert before this file was reached, so the consumer's recovery is to reconnect
+   * and read `/api/memory/diff`.
+   */
+  async function openStream(
+    method: string,
+    path: string,
+    headers: Readonly<Record<string, string | undefined>>,
+    response: ServerResponse,
+    request?: { on?: (event: string, fn: () => void) => void },
+  ): Promise<boolean> {
+    const clean = path.split("?")[0] ?? path;
+    if (clean !== MEMORY_ALERTS_PATH) return write(response, json(404, { error: "no such resource" }));
+
+    // The verb is proved, not guessed. An event stream is a read, and answering a
+    // POST with a stream would be a surface nobody could reason about.
+    if (method.toUpperCase() !== "GET") {
+      const verbProof = await prove(headers);
+      if (!verbProof.ok) return write(response, verbProof.response);
+      return write(response, json(405, { error: "an event stream is read with GET" }));
+    }
+
+    const proven = await prove(headers);
+    if (!proven.ok) return write(response, proven.response);
+    const { tenant } = proven;
+
+    response.writeHead(200, SSE_HEADERS);
+    /**
+     * AN OPENING COMMENT, with no payload.
+     *
+     * So the client's `open` event fires immediately rather than on the first
+     * alert. Without it, "connected" and "something has happened" are
+     * indistinguishable, and the liveness strip cannot tell a quiet feed from a
+     * dead one -- which is the blur ADR-005 §6 forbids.
+     */
+    response.write(": connected\n\n");
+
+    let closed = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * ONE CLOSE, THREE CAUSES, ONE SET OF HANDLES CLEARED.
+     *
+     * Guarded by `closed` because all three can fire for the same disconnection,
+     * and closing a subscription twice would decrement nothing and read as though
+     * something had been removed that was not.
+     */
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (timer !== undefined) clearInterval(timer);
+      unsubscribe();
+    };
+
+    /**
+     * ONE WRITE, OR A DISCONNECT.
+     *
+     * `write()` returning false does not mean the data was lost -- it means the
+     * socket's buffer is full. The ceiling on how full is the whole policy: past
+     * it, this consumer is not slow, it is gone.
+     */
+    const send = (payload: string): void => {
+      if (closed) return;
+      if (response.write(payload)) return;
+      if (response.writableLength <= MAX_CONSUMER_BACKLOG_BYTES) return;
+      // THE DISCONNECT. Explained, then closed -- a bare socket close looks to the
+      // operator like a server fault, and "you fell behind" is a fact they can act
+      // on by reconnecting.
+      try {
+        response.write(
+          frame("slow-consumer", "slow-consumer", {
+            reason: `this connection fell more than ${MAX_CONSUMER_BACKLOG_BYTES} bytes behind`,
+            whatToDo: "Reconnect, then read /api/memory/diff. The alert is in the record; only the notification was lost.",
+          }),
+        );
+      } catch {
+        // The socket is already unusable. Closing below is still correct.
+      }
+      close();
+      response.end();
+    };
+
+    const unsubscribe = hub.open(tenant, send);
+
+    timer = setInterval(() => {
+      if (closed) return;
+      try {
+        response.write(keepAliveFrame());
+      } catch {
+        close();
+        response.end();
+      }
+    }, options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS);
+    // A timer that outlives its consumer keeps the process alive for a connection
+    // nobody has. Not optional, and not something a test can notice.
+    timer.unref?.();
+
+    // THREE WAYS A STREAM ENDS, all of them clearing the same handles.
+    response.on("close", close);
+    response.on("error", close);
+    /**
+     * THE CLIENT GOING AWAY.
+     *
+     * Without this, a consumer whose browser has closed the tab stays subscribed
+     * until the socket times out, and every alert in the meantime is written to a
+     * dead consumer. Not a leak anybody would notice, and exactly the "a handle
+     * that outlived the thing that owned it" shape this repository has been bitten
+     * by once already.
+     */
+    request?.on?.("close", close);
+
+    return true;
+  }

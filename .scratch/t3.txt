@@ -1,0 +1,19 @@
+npm notice run agent-harness@0.0.0 generate-flood
+npm notice run node --experimental-strip-types scripts/generate-synthetic-data.ts --flood --url=http://127.0.0.1:8090 --token=demo-gw-value --seconds=8 --concurrency=6
+provider    pega
+target      http://127.0.0.1:8090/api/portal/ingest
+events      8s of traffic
+batch       250 x 6 concurrent
+fields      alert_code, elapsed_time, threshold, pega_time
+anomaly     every 97 events, 8-40x its own SLA
+
+  6,500 accepted  20249 ev/s  0.3s  18,000 accepted  31414 ev/s  0.6s  32,000 accepted  38601 ev/s  0.8s  47,000 accepted  43559 ev/s  1.1s  61,500 accepted  46275 ev/s  1.3s  75,250 accepted  47506 ev/s  1.6s  83,750 accepted  45541 ev/s  1.8s  98,500 accepted  47062 ev/s  2.1s  112,500 accepted  47995 ev/s  2.3s  124,250 accepted  47881 ev/s  2.6s  137,000 accepted  48155 ev/s  2.8s  150,500 accepted  48595 ev/s  3.1s  162,750 accepted  48611 ev/s  3.3s  174,500 accepted  48486 ev/s  3.6s  185,750 accepted  48222 ev/s  3.9s  200,500 accepted  48879 ev/s  4.1s  213,500 accepted  49024 ev/s  4.4s  224,500 accepted  48751 ev/s  4.6s  236,500 accepted  48683 ev/s  4.9s  249,500 accepted  48826 ev/s  5.1s  262,500 accepted  48937 ev/s  5.4s  272,750 accepted  48575 ev/s  5.6s  283,500 accepted  48321 ev/s  5.9s  292,750 accepted  47851 ev/s  6.1s  301,250 accepted  47100 ev/s  6.4s  309,750 accepted  46593 ev/s  6.6s  318,250 accepted  46110 ev/s  6.9s  326,500 accepted  45652 ev/s  7.2s  332,750 accepted  44954 ev/s  7.4s  339,750 accepted  44389 ev/s  7.7s  347,000 accepted  43891 ev/s  7.9s
+
+MEASURED (not claimed)
+  elapsed        8.02s
+  accepted       352,000
+  refused        0
+  failed         0
+  throughput     43879 events/sec
+
+live view       http://127.0.0.1:8090/api/portal/live

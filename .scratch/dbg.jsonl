@@ -1,0 +1,2 @@
+{"ts":"2026-09-30T09:00:00Z","level":"ERROR","service":"checkout","latency_ms":1200,"status":500}
+{"ts":"2026-09-30T10:30:00Z","service":"search","latency_ms":1500000,"status":500}

@@ -1,0 +1,55 @@
+feat(web): the forecast, wired to a chart that cannot be mistaken for data
+
+Resumes a session that was cut off mid-edit. The tree was NOT broken -- the
+refusal message said that edit was never evaluated, so the fix was to write the
+wiring rather than repair it.
+
+*** TWO PIECES OF DEAD CODE THE WIRING EXPOSED ***
+
+183 lines of it. The chat-first rewrite had introduced a SECOND BarChart and
+LineChart -- the widget versions, which read their series from the message
+payload -- while the pre-pivot versions still sat earlier in the same template.
+Both pairs are function DECLARATIONS in one scope, so the later pair won and the
+earlier pair was unreachable, shipping to every browser.
+
+It survived because a JS parser cannot see a shadowed declaration as an error
+and a regex cannot see it either. Found by counting: two BarCharts where there
+should be one. `dedupe-charts.mjs` refuses to finish unless exactly one of each
+survives.
+
+The splice that removed it then left the old tooltip tail dangling inside the
+new function -- unreachable code referencing a variable the new scope does not
+declare, and tsc STAYED QUIET because it sits inside a callback that is never
+invoked. Worth remembering: the type checker is not a linter for dead code.
+
+*** THE FORECAST CANNOT BE MISTAKEN FOR A MEASUREMENT ***
+
+Three ways a projection lies on a chart, and all three are now asserted:
+
+- DASHED. A solid line continuing past the last observation is indistinguishable
+  from data at a glance and in a screenshot. The reader has no way to check which
+  is which, so it is dashed.
+- BANDS DRAWN, not just the line. A dashed line without a band is a point
+  estimate that happens to be dashed; the translucent range is the honest part,
+  and it is painted UNDER the projection so it does not grey the line out.
+- IT CAN BE TURNED OFF. The control most likely to be deleted in a tidy-up,
+  because a toggle is one more thing. A reader who wants the past must not be
+  forced to look at a claim about the future.
+
+The projection is appended to the SAME axis rather than drawn as a second panel,
+which is what makes the band read as a widening range; a separate panel would
+let the two scales disagree.
+
+The first projected point repeats the last observed value so the line connects.
+Without it the two series float apart and read as unrelated facts.
+
+Tooltip text on a projected point says PROJECTED, gives the range, and says it
+came from the observed trend rather than a measurement.
+
+*** A REFUSAL IS RENDERED, NOT HIDDEN ***
+
+Three hourly points carry no forecast, and the payload ships the REASON with it.
+The control is replaced by that sentence rather than becoming a toggle that
+silently does nothing.
+
+Suite: 1064 passing, 0 failing. Kernel FROZEN.

@@ -1,0 +1,105 @@
+diff --git a/docs/F006_LEDGER.md b/docs/F006_LEDGER.md
+index ddaecae..9acaacf 100644
+--- a/docs/F006_LEDGER.md
++++ b/docs/F006_LEDGER.md
+@@ -12,6 +12,11 @@ standing annotations and environment facts are written here and nowhere else.
+ `docs/DECISIONS.md` records operator rulings by reference to this file.
+ `memory/` is not a ledger. See §7.
+ 
++> **READ §0 FIRST.** §2.5 and §3 describe the D1 defect **as it was before the
++> reversal of 2026-10-01**. Sections marked HISTORICAL below quote pre-reversal
++> code in the present tense and are **evidence of a bug, not current law**. Do not
++> cite them to justify a code change without reading §0.
++
+ ### Provenance — environment claims, measured not asserted
+ 
+ Measured in this pass, on the host that ran it:
+@@ -147,6 +152,65 @@ no statement in this ledger depends on that inventory being current.
+ 
+ ---
+ 
++## 0. D1 CONTRACT REVERSAL — ratified 2026-10-01
++
++**Merged as `066b2b4`** (branch `fix/f006-policy-deny-not-fatal`, merged to
++`origin/main` at `fca77fc`).
++
++### 0.1 The ratified decision
++
++`POLICY_DENIED` returns **`CONTINUE` / `POLICY_SOFT_REFUSED`** — at **every**
++violation label (`block`, `abort`, absent) and at **every** budget, including
++exhausted retry, replan, strategy and recovery depth.
++
++**A denial is a RESULT, not a death.** Rationale: a refusal is an *answer*, not a
++*fault*, and only a fault may kill a task. No retry, replan or strategy change can
++make a deterministically denied call permitted, so paying for any of them is
++paying for a foregone conclusion.
++
++This **reverses** D1, which made a marked `POLICY_DENIED` **TERMINATE**. That was
++a deferral, not a fix: it stopped the replan death and replaced it with a
++different one.
++
++### 0.2 §2.5 is HISTORICAL
++
++§2.5's findings table quotes `recovery.ts:130` returning
++`{ strategy: "TERMINATE", reason: "POLICY_DENIED_TERMINATED" }` in the **present
++tense**. That code **no longer exists**. Current code is
++`recovery.ts:194-196`, returning `CONTINUE` / `POLICY_SOFT_REFUSED`.
++
++§2.5 remains accurate as a **record of the defect it found**. It is **not** a
++specification. Citing it to justify reintroducing termination on a denial would
++revert a ratified operator decision on the authority of a bug report.
++
++### 0.3 The §3 alarm is DISARMED — and this is a hazard, not a closure
++
++§3 is armed with the standing condition:
++
++> *"Any denial certificate reading `TOOL_FAILURE` → `REPLAN_BUDGET_EXHAUSTED`
++> means a denial path bypassed the bridge."*
++
++**That trigger can no longer fire.** `REPLAN_BUDGET_EXHAUSTED` is unreachable from
++a denial under every label at every budget, and no terminal certificate is emitted
++for a denial at all.
++
++**An operator reading §3 as written believes they are covered and are not.** The
++denial-delivery watch has no live trigger and must be re-armed against the
++post-reversal surface — a refusal that is silently **unreported**, rather than one
++that dies loudly. Until that is written, treat denial-delivery coverage as
++**UNWATCHED**, not watched.
++
++### 0.4 What did NOT change
++
++Denial **classification** is untouched: a marked denial still classifies as
++`POLICY_DENIED`, never `TOOL_FAILURE`. Collapsed to `TOOL_FAILURE` it would
++REPLAN the very block that was denied and burn the replan budget re-proposing it —
++that is the original F-006 defect and it is exactly as live as it was.
++
++`abort` still ends a task, one layer out, in `precheckToolCall` → `abortTask`,
++where it is reachable. Termination was never removed from the system; it was moved
++off the table that could not legitimately reach it.
++
+ ## 1. FIXED
+ 
+ ### 1.1 Crash spiral — 93 `REPLAN_BUDGET_EXHAUSTED` deaths, zero since
+@@ -489,6 +553,11 @@ corpus remain the standing gate and are not weakened by this work.
+ 
+ ### 2.5 D5 — the committed `onViolation` is honoured on one path and dropped on the other, so every denial terminates the task
+ 
++> **HISTORICAL — see §0.** Everything in this subsection describes the defect as it
++> stood **before** the reversal of 2026-10-01. The title says "every denial
++> terminates the task"; that is no longer true and was never intended to remain so.
++> The code quoted below is **pre-reversal**. Read §0 before citing any of it.
++
+ **Status: CONFIRMED by measurement, 2026-09-30. Not yet fixed.** Filed before any
+ fix attempt, per directive. This is the highest-priority open item: it is a
+ sufficient cause for every `POLICY_DENIED` death in this log, and two consecutive
+@@ -729,6 +798,10 @@ real failure. The table grows only by measurement.
+ 
+ ## 3. WATCH — armed
+ 
++> **PARTIALLY DISARMED — see §0.3.** The standing trigger below is **unreachable**
++> after the 2026-10-01 reversal and will never fire. Read §0.3 before relying on
++> this section as coverage. §3.1 and §3.2 remain live and unaffected.
++
+ **Any denial certificate reading `TOOL_FAILURE` -> `REPLAN_BUDGET_EXHAUSTED` means
+ a denial path bypassed the bridge.** File it with the certificate.
+ 

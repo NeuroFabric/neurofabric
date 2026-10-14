@@ -1,0 +1,81 @@
+## Boot crash fixed — two follow-up commits
+
+Pushed to `epic/ui-command-center-core`. MR !76 now carries both.
+
+| Commit | What |
+|---|---|
+| `164debb` | chore(api): add dev script to run the local wedge server |
+| `80499cb` | fix(ui): prevent boot crash and implement gateway token prompt |
+
+### Test counts (unchanged except the frontend, which grew)
+
+- **Backend: 1461 pass, 0 fail, 2 skipped** (1441 TS + 22 MJS)
+- **Frontend: 186 pass, 0 fail** (was 161 — 25 new boot tests)
+- `tsc --noEmit`: 0 errors in both workspaces · `vite build`: 255 kB / 78 kB gzipped
+
+---
+
+## The white screen
+
+`main.tsx` called `new GatewayClient(...)` at **module scope**. Module scope runs
+before React exists — no tree, no boundary, no handler in a position to catch it.
+So a blank page plus a message in a console nobody had opened.
+
+The client was **right to throw**; a client that builds successfully and then
+refuses every request is a bug report that starts "the API is broken". The call
+site was wrong.
+
+Now `Root` owns the decision: environment → session storage → prompt. The tree is
+**either a form or a working app, never neither**. `makeClient` catches everything
+and returns `null`, so a constructor that throws for an unanticipated reason still
+yields a form. `main.tsx` constructs nothing that can fail.
+
+`ErrorBoundary` sits *outside* `Root`, so it covers `Root`'s own render too.
+
+## Task 1 — `npm run dev`
+
+I did **not** use the `tsx`/`ts-node` the brief suggested. Either would install a
+runtime dependency into a repo whose defining property is having none
+(`.gitlab-ci.yml` says so in its header; `npm ci` installs exactly `typescript` and
+`@types/node` for the type gate alone). The script reuses the existing
+`start-ui.mjs` on bare node — which also keeps the loopback-by-default bind and the
+workspace boundary that a generic runner would have none of.
+
+**Verified, not assumed.** Booted on an ephemeral port and probed:
+
+```
+wedge page                        200
+portal config, no credential      401  UNAUTHENTICATED
+```
+
+So `npm run dev` serves both the wedge and the portal API the frontend proxy points
+at. That 401 is correct — no gateway credential is provisioned in this environment,
+and it is an explicit refusal rather than an empty dashboard.
+
+---
+
+## Three things worth your attention
+
+**1. A real bug the new tests caught.** `sessionTokenStorage` fell back to memory on
+a refused write but still *read* from the storage that had just failed. The
+credential silently vanished: type it, hit Connect, see the app work, find it gone on
+reload with no error anywhere. Now it degrades once and stays degraded, and a
+successful write clears the flag.
+
+**2. One compromise I need you to rule on.** The credential input is `type="text"`,
+**not masked** — because the banned-vocabulary list contains the word the masked-input
+type is spelled with. An unmasked credential box is shoulder-surfable; that is a real
+security cost accepted to keep the naming rule intact. Flagged in the component and
+here rather than left to be discovered. If masking wins, it is one attribute.
+
+**3. What these tests cannot cover — stated first in the file.**
+`renderToStaticMarkup` does not run `useEffect` and does **not** honour error
+boundaries: on the server an error propagates, because there is no commit phase to
+recover into. So the prompt **submit** path and the boundary's **recovery** path are
+unverified. The boot *decision* is verified, because `useState`'s initialiser runs
+during static render. Asserting the boundary "catches" anything here would be a test
+that could never pass, so the suite asserts propagation and explains why.
+
+**I could not visually confirm the fix.** No browser is available here. The evidence
+is 186 passing tests, a clean typecheck, and a successful build — not a rendered
+screen. If the prompt still does not appear when you run it, that gap is the reason.

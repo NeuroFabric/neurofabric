@@ -1,0 +1,11 @@
+
+  The wedge is up.
+
+    http://localhost:59059
+
+    workspace  D:\Agent-Harness\agent-harness_omni\agent-harness\.scratch\devcheck
+    the only place a file may be read from, and reports are written here.
+
+    Drop a CSV into that directory, then open the URL above.
+    Ctrl-C to stop.
+

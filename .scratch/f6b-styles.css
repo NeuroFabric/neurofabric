@@ -1,0 +1,44 @@
+
+/* ===================================================================== *
+ * SLICE 6 (F6b). SURFACE SEPARATION, LIVE FROM RECORDED.
+ * ===================================================================== *
+ *
+ * `.live` HAD NO RULE AT ALL in this stylesheet before this block. The live panel
+ * rendered with whatever its container happened to give it, while the record
+ * panel -- added in !105 -- arrived with its own ground, its own border and its
+ * own header. The two-truths contract was therefore true in MARKUP and false on
+ * SCREEN: a reader scanning for "which of these numbers is now?" was being asked
+ * to tell two panels apart by their contents.
+ *
+ * So both surfaces are now given a ground and an edge that differ, and the rule
+ * is a constraint for whoever edits this next:
+ *
+ *   **A FIGURE'S SURFACE IS DECIDED BY WHERE IT IS RENDERED, NOT BY ITS VALUE.**
+ *
+ * A recorded number lives on `.record` and carries its age; a live number lives
+ * on `.live` and carries a pulse. Neither surface may style the other's figures,
+ * because a recorded breach drawn with the live pulse is precisely the dishonesty
+ * ADR-005 section 9 rule 3 exists to prevent.
+ */
+
+.live {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 0 0 var(--gap);
+}
+
+/* The two surfaces differ in GROUND as well as edge, so the distinction survives
+ * a greyscale screenshot and a reader who cannot see the accent. */
+.record {
+  background: var(--panel-2);
+}
+
+/* Anything inside `.live` that reports a recorded value would be a rule 3
+ * violation, and this makes it visible: a live surface draws in the panel ground,
+ * and the record surface draws in the raised one. Nothing here may cross. */
+.live .kv dt {
+  color: var(--muted);
+}

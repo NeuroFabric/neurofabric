@@ -1,0 +1,63 @@
+feat(ui): integrate full command center application
+
+App.tsx wires the transport, the store and all five components into the real
+screen. The stylesheet is hand-written CSS with no framework: the brief allowed
+Tailwind "whatever is initialized", nothing was initialized, and adding a utility
+framework now would mean a visual language decided before anyone has looked at
+a screen and a dependency load-bearing by the time the design exists.
+
+=== ONE REAL BUG, CAUGHT BY THE INTEGRATION TEST AND NOT BY ANY UNIT TEST ===
+
+`store.getState` was a prototype method, and `useSyncExternalStore` receives it
+as a bare reference. Every field in SchemaStore is a PRIVATE one, so the unbound
+call threw "Cannot read properties of undefined" and rendered nothing.
+
+It stayed green through 150 unit tests because every one of them called
+`store.getState()` -- with the receiver attached. Only the first component to
+hand the reference to React found it. That is the whole argument for the
+integration test existing: the unit tests were not weak, they were blind to
+exactly this.
+
+Fixed by making getState and subscribe arrow properties, which also gives them
+the stable per-instance identity useSyncExternalStore requires -- an unstable
+subscribe resubscribes on every render and can loop. Both properties are now
+pinned by store tests that use them unbound and assert the identity is stable, so
+the regression cannot come back quietly.
+
+=== WHY App TAKES ITS STORE AS A PROP ===
+
+If App built its own store internally, the only way to test it would be to fire
+effects and wait, in a DOM, which this environment does not have. As written, a
+test builds a REAL store over a mocked transport, drives it, and renders the
+REAL tree -- the guards, the reducers, the subscription and every component all
+run as production code. Only `fetch` is swapped.
+
+=== WHAT THE INTEGRATION TEST DOES NOT COVER, STATED NOT IMPLIED ===
+
+`renderToStaticMarkup` does not run `useEffect`, so App's mount-time load is not
+exercised -- which is why every test drives the store explicitly first. And it
+tests no interaction: the Reload button, the selector's onChange and the
+refresh cycle are unverified, and they need a real DOM and a real user. Saying
+so is cheaper than letting a green suite imply otherwise.
+
+The nine tests cover the healthy path, an empty tenant, a refused gateway, a
+degraded store that still draws what validated, garbage on every channel at once,
+an alert payload alongside the dashboard, header status, tenant hint, and the
+no-telemetry default.
+
+=== THE BOOT SEQUENCE FAILS LOUDLY WHEN UNCONFIGURED ===
+
+main.tsx reads the gateway token from the environment and hands it to the client.
+An absent variable yields an empty string, and GatewayClient REFUSES to be
+constructed with that -- so an unconfigured deployment fails on the boot line,
+naming the reason. It must never start up looking healthy and then show a wall
+of 401s; a page that refuses to start is far easier to diagnose than a page that
+renders and fails every request.
+
+main.tsx passes `simulateVerdict`, which is SIMULATED and is banner-labelled
+wherever it renders. No backend endpoint reports a live verdict or a throughput
+rate yet. That gap is deliberate and visible rather than papered over with a
+number.
+
+`tsc --noEmit`: 0 errors in both workspaces. `vite build`: 251 kB / 77 kB gzipped.
+Frontend: 161 tests pass. Backend: unchanged and green.

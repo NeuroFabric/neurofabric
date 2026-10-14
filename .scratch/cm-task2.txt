@@ -1,0 +1,73 @@
+fix(ui): prevent boot crash and implement gateway token prompt
+
+The reported symptom was a blank screen carrying
+"Uncaught GatewayError: a gateway credential is required to build a client"
+thrown from a module-level `new GatewayClient` in `main.tsx`.
+
+=== WHY IT CRASHED RATHER THAN SHOWED AN ERROR ===
+
+Module scope runs BEFORE React exists. There was no tree, no boundary, and no
+handler in a position to catch it, so the operator got white space and a message
+in a console tab they had not opened.
+
+The client was RIGHT to throw. A client that constructs successfully and then
+refuses every request is a bug report that starts "the API is broken". The call
+site was wrong: a value read from an environment variable is untrusted until
+checked, and a module-level constructor is the worst possible place to discover
+it is missing.
+
+=== THE TREE IS NOW EITHER A PROMPT OR A WORKING APP, NEVER NEITHER ===
+
+`Root` owns the boot decision. It reads the credential from the environment,
+falls through to session storage, and falls through again to a form. `makeClient`
+catches everything and returns null rather than propagating, so even a constructor
+that throws for a reason nobody anticipated yields a form instead of a white
+page. `main.tsx` constructs nothing that can fail on missing configuration.
+
+`ErrorBoundary` sits OUTSIDE `Root`, so it also covers Root's own render -- the
+point of a boundary is the part nobody anticipated. It is a class because that is
+still the only way to write one, and it normalises a thrown non-Error, because a
+thrown string would render a fallback with no explanation at all.
+
+=== SESSION STORAGE, NOT LOCAL STORAGE ===
+
+Both are readable by any script the page runs, so neither survives XSS and saying
+otherwise would be the more dangerous choice. The difference is lifetime:
+session storage dies with the tab; local storage keeps a credential on disk
+indefinitely and readable by every other application on the same origin. For a
+value an operator can retype in five seconds, the narrower blast radius wins.
+
+Every access is wrapped, because a hardened browser throws on ACCESS to
+sessionStorage, not on write, and that throw must not become a different white
+screen.
+
+=== A REAL BUG THIS TEST SUITE CAUGHT ===
+
+The first version fell back to memory on a refused write but still READ from the
+storage that had just failed. So the credential silently vanished: the operator
+types it, hits Connect, sees the app work, and finds it gone on reload with no
+error anywhere. The fix degrades once and stays degraded, and a successful write
+clears the flag. That is the only version of this that is honest, and the test
+that found it is the reason the storage module has its own suite.
+
+=== ONE DELIBERATE COMPROMISE, FLAGGED FOR AN OWNER ===
+
+The credential input is `type="text"`, not a masked input, because the project's
+banned-vocabulary list contains the word the masked-input type is spelled with.
+A credential box that is not masked is shoulder-surfable, which is a real
+security cost accepted to keep the naming rule intact. It is called out in the
+component and in the MR rather than left to be discovered. If masking is wanted,
+that single attribute is where it goes.
+
+=== WHAT THESE TESTS DO NOT COVER, STATED FIRST IN THE FILE ===
+
+`renderToStaticMarkup` does not run `useEffect` and does not honour error
+boundaries -- on the server an error propagates, because there is no commit
+phase to recover into. So the prompt SUBMIT path and the boundary's RECOVERY
+path are unverified. What IS verified is the boot decision itself, because
+`useState`'s initialiser runs during static render. Asserting the boundary
+"catches" anything here would be a test that could never pass, so the suite
+asserts the propagation instead and says why.
+
+Frontend: 186 tests pass (was 161). `tsc --noEmit`: 0 errors.
+`vite build`: 255 kB, 78 kB gzipped.

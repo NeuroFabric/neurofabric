@@ -1,0 +1,50 @@
+test(f006): pin the attempt-signature lifecycle and the normalizer
+
+C3 extracted callSignature into platform/core/call-signature.ts and gave the
+adapter a lastAttemptSignature in its per-task recovery state. No pin could
+tell any of it from nothing, so it landed inert and unproven. These are the 12
+that were missing.
+
+C3.1   an allowed, bound attempt records a signature
+C3.1b  a call that binds no execution records nothing: a refused call never ran,
+        so recording it would spend a strategy change on a fiction
+C3.2   a VALID result clears the signature on the SAME boundary as
+        recoveryDepth, not on bookkeeping of its own
+C3.2b  a FAILED result does NOT clear it: the failed attempt is the one
+        recovery is being asked about
+C3.3   a newer task starts with none recorded
+C3.4   a stale ALLOW does not record onto the newer task. The load-bearing pin.
+        The stale guard runs before the ALLOW branch, so a handler superseded
+        mid-decision writes nothing. If the record site ever moves above that
+        guard, this is the only pin in the suite that would catch it. This is
+        the H2-H6 invariant applied to a new counter.
+C3.4b  that pin is live, not inert: a current-task ALLOW still records, so
+        C3.4 cannot pass merely because recording is broken everywhere
+C3.5   diagnostics exposes only WHETHER a signature was recorded, never the
+        signature, nor the input it was derived from
+C3.5b  no event payload carries it either
+
+C3.6a-c pin the normalizer itself. The extraction nearly shipped a collision:
+the NUL separator was transcribed as a space, which a tool name may
+legitimately contain, and nothing in the suite noticed. C3.6a pins that key
+order is not a different call; C3.6b that array order IS meaning and must not
+be sorted away, since merging two different calls would make the second read as
+a repeat of the first; C3.6c that the separator really is NUL and a spaced tool
+name cannot collide with an unspaced one.
+
+Two draft pins mis-modelled the architecture and were corrected to reality, not
+the code corrected to the pins. A helper that ran the whole allow-then-record
+sequence observed only the cleared post-VALID state and so could not tell
+"recorded then reset" from "never recorded"; it is split into allowAndBind and
+allowAndRun. And the distinctive path used to detect a leak was also in the task
+prompt, which beginTask legitimately echoes into the trace, so the pin would
+have passed or failed for the wrong reason; it now appears only in tool input.
+
+Suite 447/445/0/2, delta +12 tests and +12 passes over main's 435/433/0/2,
+equal to the 12 pins added. The 4500-combination C2 sweep did not move, which
+is the evidence that merging D1's kernel-adapter.ts alongside C3's changed no
+recovery decision. tsc --noEmit clean.
+
+Merges 2d8b64a (feat/f006-c3-signature) into this branch with --no-ff to pick up
+the C3 code. The two changes both touched kernel-adapter.ts and auto-merged
+without conflict; no rebase, no force-push, no rewrite of either branch.

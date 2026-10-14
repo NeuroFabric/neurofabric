@@ -1,0 +1,4 @@
+﻿User-agent: *
+Allow: /
+Disallow: /api/
+Sitemap: https://neurofabric-ui.onrender.com/sitemap.xml

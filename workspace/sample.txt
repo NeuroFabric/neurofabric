@@ -1,0 +1,9 @@
+Quarterly Update — Project Falcon
+
+This quarter the team shipped the v2 onboarding flow, reducing
+signup drop-off by an estimated 18%. Infrastructure costs rose
+9% due to increased load testing. Two open risks remain: the
+payments integration is still on a deprecated API version, and
+the mobile app has not been load-tested above 500 concurrent
+users. Next quarter priorities: migrate payments API, run a
+mobile load test, and begin design work on the referrals feature.

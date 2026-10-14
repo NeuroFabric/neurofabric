@@ -1,0 +1,1 @@
+{"error":"upgrade_required","message":"Use WebSocket."}

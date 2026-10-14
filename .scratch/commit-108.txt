@@ -1,0 +1,86 @@
+feat(ui): the agent list, the quiet feed explained, and two real surfaces
+
+Slices 4, 5 and 6 (F6c, F6a, F6b). The frontend suite was red on a half-finished
+rename when this started; it is green now, and the three slices are committed as
+one because they share the same stylesheet and the same surface story.
+
+SLICE 4 -- THE AGENT LIST REPLACES THE <select>.
+
+This is the primary navigation of the product and it rendered as a form control.
+AgentList is a <nav> of real <button>s, so focus, Tab and Enter come from the
+browser rather than from a file re-implementing them. The selected row is marked
+by aria-current AND a filled shape, not by colour alone, because a reader who
+cannot distinguish the accent is not left with nothing. A "No agent open" row is
+a real button rather than a heading, so a null selection stays reachable the same
+way every other row is.
+
+NO STATUS DOT, DELIBERATELY, and a test says so. F6c's stated prize is a per-agent
+status marker, and AgentDescriptor carries no per-agent status -- it is a title, a
+domain, a version and a maturity, while the live verdict is one provider-wide
+answer. A dot drawn now could not mean anything, and an indicator that cannot
+mean anything teaches an operator to glance and be right by accident. What the
+slice delivers instead is the LIST, so a dot has somewhere honest to live later.
+
+The cost is stated in the file rather than discovered: arrow-key roving focus is
+gone, which a <select> had for free.
+
+SLICE 5 -- THE COUNT AND THE RATE, EXPLAINED.
+
+The runbook's strongest beat is 0 events/sec beside a record count holding at
+20,000, and an operator who concludes one of them is broken stops reading the
+panel. Both numbers were always correct; the ambiguity is what is removed. When
+the rate is zero and records are held, the readout now says nothing new arrived
+in the interval, says the records are still held from earlier and nothing here
+clears them, and says that this is a quiet feed rather than a stopped one -- and
+points at the last-answer age as where a fault would actually show.
+
+THE JARGON SWEEP CAUGHT MY OWN COPY on its first run. The first draft said "this
+window is still holding, and a window does not empty itself"; "window" is the
+engine's word, not an operator's. The copy was reworded and the assertion was
+NOT relaxed, and a further test asserts the rewording did not cost the
+explanation its content -- a jargon fix that deletes the point is not a fix. The
+sweep is scoped to the block this slice added, because the panel as a whole says
+"records in snapshot", which is settled vocabulary a previous slice decided on,
+and a test that fights settled vocabulary gets deleted.
+
+The explanation appears ONLY where it is true: not at a non-zero rate, not at zero
+records, not with no measurement yet, and not when a sub-second rate rounds down
+to zero on screen -- claiming nothing arrived when something did is worse than
+showing nothing.
+
+SLICE 6 -- TWO SURFACES THAT DIFFER ON SCREEN.
+
+.live HAD NO RULE IN styles.css AT ALL. The live panel rendered with whatever its
+container gave it, while the record panel arrived with its own ground, border and
+header. So the two-truths contract was TRUE IN MARKUP AND FALSE ON SCREEN: a
+reader had to tell the two panels apart by their contents, which is the opposite
+of structural separation. Every JSX assertion in this repository passed while one
+of the two surfaces had no style, which is the strongest argument for a guard
+that reads the stylesheet as well as the components.
+
+Both surfaces are now given grounds and edges that differ, so the distinction
+survives greyscale and a printed page. Each carries data-surface, and a guard
+asserts they never nest, that each names itself in words, that no recorded figure
+lacks an age, and -- the anti-swing -- that nothing in the record surface
+animates, because an animation on a recorded value claims it is happening now.
+
+The dead CSS went with the dead control. .selector, .selector__label,
+.selector__input and .app__select are removed rather than left behind: orphaned
+CSS is the same trap as orphaned code, unreachable and passing every assertion,
+and the next person to add a control of that name would have inherited a layout
+nobody chose.
+
+Project Law 1 (a test that pins jargon defends jargon) is applied to the new copy
+above, not just to the existing view. Project Law 3 is respected by asserting on
+rendered text wherever the claim is about reading; the one text read of the
+stylesheet follows the precedent css-collision-guard.test.ts set, because the
+rule being defended is a rule about declarations, which is what text is.
+
+GATES: frontend tsc --noEmit clean; frontend vitest 413 passed / 6 skipped / 0
+fail, 26 files; test:mjs 22/22; test:ts 1620 tests / 1618 pass / 0 fail / 2
+skipped; kernel tsc and tsconfig.entries.json clean.
+
+NOT PROVEN: the click. renderToStaticMarkup runs no effects, so selecting an
+agent, and the browser's own focus behaviour on the new button rows, are the
+operator's browser test. Items 1, 2 and 5 of the product vision's five checks
+still require your eyes.

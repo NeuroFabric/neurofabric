@@ -1,0 +1,96 @@
+## What this is
+
+The UI Command Center, built end to end. Five commits, frontend and backend.
+
+| Commit | What |
+|---|---|
+| `88d6236` | chore(ui): initialize lightweight react workspace |
+| `32e2a71` | feat(ui): defensive api client for secure gateway communication |
+| `0a22fc8` | feat(ui): resilient state machine for dynamic schema parsing |
+| `37663ac` | fix(api): mount portal and schema routes to the active wedge server |
+| `ec52cba` | feat(ui): schema-driven dashboard rendering engine |
+| `7b3b5cc` | feat(ui): live telemetry visualizer and anomaly alert center |
+| `c4caf60` | feat(ui): integrate full command center application |
+
+## Test counts
+
+- **Backend: 1461 pass, 0 fail, 2 skipped** (1441 TS + 22 MJS), of which 9 are the new portal-mount tests
+- **Frontend: 161 pass, 0 fail** across 6 files
+- `tsc --noEmit`: 0 errors in both workspaces
+- `vite build`: 251 kB, 77 kB gzipped
+
+## The three things a reviewer should look at first
+
+### 1. `portal-routes.ts` was mounted for the first time in `37663ac`
+
+It was correct, fully tested, and **imported only by its tests**. Nothing served
+it. The client in `32e2a71` was addressing a contract no process exposed — a
+green suite over a dead surface, which is the most expensive kind of bug because
+every signal says it works.
+
+The registry is built **once per server instance**, outside the request handler.
+Built per request, every schema POST would install into a registry discarded when
+the response is written: 200, then an empty roster on the next read. A 200 that
+installs nothing is worse than an error.
+
+The registry starts **empty on purpose**. Seeding it from
+`configs/default-schemas.json` was the obvious next step and would have failed for
+every entry — that file is a `match`/`allOf` shape, `AgentSchema` wants
+`rules`/`capabilities`/`streams`. Noted rather than papered over with a lossy
+translation nobody asked for.
+
+### 2. The UI displays no throughput rate, and there is a test asserting it
+
+The brief asked the telemetry view to "prove the 257k event/sec throughput is
+happening". **It cannot.** No backend endpoint reports a rate. `LiveVerdict`
+carries `records` — a count from one snapshot — and a rate needs two instants and
+a numerator.
+
+So no component renders that number. `telemetry.test.tsx` asserts the rendered
+**text** contains no `/sec`, no `per second`, no `throughput`. That is the most
+important assertion in the suite and it is a negative one. What is shown instead
+is real: the record count, labelled *"a count, not a rate"*, each column's
+measured/min/max, the fence it was judged against, whether it breached.
+
+Synthetic samples exist for exercising the view and every one is banner-labelled
+**SIMULATED SAMPLE**. `validateLiveVerdict` **refuses** a verdict that does not
+state its provenance rather than defaulting it to `false` — defaulting would let
+a source that forgot the field render as a real measurement.
+
+No raw events reach the DOM. A test pins rendered body rows to the *column*
+count, so a future change that starts rendering per-event rows fails loudly
+instead of melting the tab.
+
+### 3. One real bug the integration test caught and 150 unit tests could not
+
+`store.getState` was a prototype method. `useSyncExternalStore` receives it as a
+bare reference, and every field in `SchemaStore` is private, so the unbound call
+threw and rendered nothing.
+
+It stayed green through 150 unit tests because every one called
+`store.getState()` **with the receiver attached**. Only the first component to
+hand the reference to React found it. Fixed with arrow properties (which also
+gives the stable identity `useSyncExternalStore` requires), and both properties
+are now pinned by tests that use them unbound.
+
+## Deviations from the brief, all deliberate
+
+- **`schema-routes.ts` does not exist.** The brief asked for it to be mounted. The schema surface is `/api/portal/schema` and lives inside `portal-routes.ts`, which is what got mounted. A second file named for routes that already exist would give one surface two owners.
+- **Vitest runs in a `node` environment, not `jsdom`.** Everything under test is pure logic, and components are verified through `renderToStaticMarkup`, which runs in plain node. That is why the project installs no DOM implementation at all.
+- **Hand-written CSS, no Tailwind.** "Whatever is initialized" — nothing was, and a utility framework now would fix a visual language before anyone has seen a screen.
+- **`fetchActiveSchemas()` returns `AgentRoster`.** No route lists raw schemas. The name is kept — the roster *is* the active schemas — but the return type is what it honestly is rather than a guessed shape.
+
+## Known gaps, stated rather than implied
+
+- **`useEffect` is not covered.** `renderToStaticMarkup` does not run it, so App's mount-time load is unverified; every integration test drives the store explicitly first.
+- **No interaction tests.** The Reload button, the selector's `onChange` and the refresh cycle need a real DOM and a real user. A green suite here does not mean the clicks work.
+- **`frontend/` has no CI job.** `.gitlab-ci.yml` documents that this project has **never had a pipeline run** — zero active runners. Adding a job now would be another promise in a pipeline that does not execute. It should land with the existing four jobs when a Linux runner appears, and must not be read as coverage until a green run is observed.
+- **No live verdict endpoint.** The UI ships wired to `simulateVerdict`. Adding one is a validator and a fetcher in `live-contracts.ts`; no component changes.
+
+## Isolation
+
+`frontend/` is a separate npm project with its own lockfile and tsconfig. The
+root `tsconfig` includes `platform/**` only and the root test globs are
+`platform/**` only, so the kernel's gates cannot see this workspace and a
+frontend dependency bump cannot break the kernel. Root `npm ci` still installs
+exactly `typescript` and `@types/node`.

@@ -1,0 +1,54 @@
+security(auth): one door, and the fourth copy found by the guard
+
+Three routers each wrote the same four lines -- load the vault, build an
+EdgeRequest, guard it, take tokenId -- and each wrote them slightly differently.
+portal-routes refused on an undefined tokenId, memory-routes grew its own local
+prove(), and ui-routes.ts NEVER CHECKED IT AT ALL. It proved the caller and then
+threw the tenant away, because nothing it serves is scoped by a tenant yet.
+
+That last one is correct today and it is exactly the shape of a bug waiting for
+the first route there that IS scoped: at which point an author has to decide where
+the tenancy boundary sits, in a file that has never had one. This is the third
+instance of that class in this repository, after the unreachable App.tsx block
+and the StoreStatus union drift -- and both of those were code that was correct,
+tested, and wrong in a way no assertion could see.
+
+proveTenant() now lives in edge-security.ts, beside guard(), which is the only
+module that should know how a door opens. It returns the tenant ALONGSIDE the
+decision, so a caller that ignores it has to say so rather than having it simply
+be available. It does not decide what a caller may do; guard() still does. Those
+are two different claims and a function answering both would be a function nobody
+could check one half of. An undefined tokenId is a REFUSAL, because every record
+here is namespaced by tokenId (ADR-005 10.1): writing rows nobody can read and
+serving reads nobody can scope is not a lenient success.
+
+THE GUARD FOUND A FOURTH COPY. schema-routes.ts had its own guard() and its own
+loadTokens(), and the manual audit missed it -- three routers had already been
+collapsed by hand and this one was not in the list, because an audit that reads
+the files it remembers to look at is not an audit. one-door.test.ts found it in
+its first run, which is the whole argument for making the rule mechanical.
+
+The scan is a TEXT rule with an allowlist of exactly two entries, both reasoned
+and both written down because the guard failed on them before it understood them:
+the push ingress (a different door -- it admits events, applies a rate limiter
+proveTenant does not know about, and takes its tokens at construction) and
+safe-regex's private guard(), which is a ReDoS backtrack guard and not an
+authenticator at all. Renaming correct, well-named code to satisfy a text scan
+would be changing working code for a false positive. Two tests keep the allowlist
+honest in BOTH directions, so a permission that outlives its reason is a red
+build.
+
+The first version of the scan walked process.cwd() and found the GitLab Runner's
+stale copy of the repository under builds/. It reported six offenders, all of them
+files that are not part of this tree, and the real portal-routes.ts was in the
+list too -- buried under noise. A guard that reads the wrong tree is worse than
+no guard, because it trains people to ignore it, so the root is now anchored to
+the kernel and a skip list exists for exactly that mistake.
+
+Also asserted, because they are the properties the door has to keep: rotation of
+a credential's VALUE leaves the tenant unchanged, an unissued credential is
+refused, a credential for another provider is refused, and an empty vault refuses
+everybody rather than admitting by default.
+
+GATES: one-door 11/11; test:ts 1620 tests / 1618 pass / 0 fail / 2 skipped;
+tsc --noEmit clean.

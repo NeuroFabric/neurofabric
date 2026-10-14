@@ -1,0 +1,8 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#050609"/>
+  <rect x="60" y="60" width="1080" height="510" rx="32" fill="#0B0E17" stroke="#10B981" stroke-opacity="0.4" stroke-width="2"/>
+  <text x="120" y="240" fill="#10B981" font-family="monospace" font-size="24" font-weight="bold">NEUROFABRIC v3.1 • ZERO-TRUST SRE &amp; GITOPS MESH</text>
+  <text x="120" y="330" fill="#FFFFFF" font-family="sans-serif" font-size="56" font-weight="bold">Automated Incident Remediation</text>
+  <text x="120" y="405" fill="#38BDF8" font-family="sans-serif" font-size="52" font-weight="bold">Without Hallucination Blindspots</text>
+  <text x="120" y="485" fill="#94A3B8" font-family="monospace" font-size="22">In-Flight DLP • AST Diff Gate • 3-Strike Circuits • SHA-256 Merkle Ledger</text>
+</svg>

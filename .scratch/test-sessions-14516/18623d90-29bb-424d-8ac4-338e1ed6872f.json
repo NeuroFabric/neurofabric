@@ -1,0 +1,23 @@
+{
+  "id": "18623d90-29bb-424d-8ac4-338e1ed6872f",
+  "created": "2026-10-05T10:36:43.503Z",
+  "updated": "2026-10-05T10:36:43.578Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "what is wrong with this file?",
+      "at": "2026-10-05T10:36:43.529Z"
+    },
+    {
+      "role": "agent",
+      "text": "One severe finding in latency_ms.",
+      "at": "2026-10-05T10:36:43.552Z"
+    },
+    {
+      "role": "user",
+      "text": "will it get worse?",
+      "at": "2026-10-05T10:36:43.578Z"
+    }
+  ],
+  "corrections": []
+}

@@ -1,0 +1,64 @@
+fix(f006): classify a policy refusal deterministically and terminate on it
+
+A policy DENY is a final answer, not a fault. Nothing about retrying the same
+call or replanning around it can make a denied call permitted: the rule that
+denied it is a rule about the call itself.
+
+The defect, reproduced three times, each time killing the task:
+
+  ConfiguredPolicy denial
+    -> the adapter reduced the PolicyDecision to a boolean plus an optional
+       retryable flag
+    -> recordToolResult fabricated a TOOL_ERROR from them, discarding the cause
+    -> classifyFailure -> TOOL_FAILURE
+    -> the table REPLANNED it
+    -> the replan re-proposed the block that had just been denied
+    -> REPLAN_BUDGET_EXHAUSTED, with no progress and nothing to commit
+
+A refusal was treated as a fault worth another attempt, so the outcome was
+determined in advance: the only possible result of replanning a denied call is
+to be denied again.
+
+POLICY_DENIED is now a distinct deterministic class. It is non-retryable,
+non-replan-worthy, and returns TERMINATE from a guard that runs AHEAD of the
+elapsed-time and depth guards, so a refusal is never misreported as a budget
+exhaustion and cannot be turned into a plan. The terminal certificate carries
+the policy's own words through a new denialReason, so the operator can see WHICH
+rule refused the call.
+
+The reason travels as a parameter on recordToolResult rather than as state
+recovered from precheckToolCall, because a preflight denial binds no execution
+and observeToolResult discards a result whose execution is unbound: a marker
+keyed on the precheck would be written and never read. The refusals that matter
+arrive on a call whose execution Pi had already begun.
+
+Two things are deliberately NOT changed. A preflight denial still leaves the
+task alive under on_violation:block, because F-008 requires it and a task
+spending its call budget must still be able to wrap up. And an ordinary tool
+failure keeps its previous behaviour: the new category is applied only when a
+denial reason is actually supplied, and TOOL_FAILURE still replans.
+
+EXTERNAL-WIRING LIMITATION, recorded rather than papered over: no caller of
+recordToolResult exists in this repository outside the kernel and its tests, so
+which layer supplies denialReason cannot be proven here. Pi's tool_execution_end
+carries only a boolean isError. The bridge that reports a policy denial must
+forward the reason for this fix to take effect on that path; until it does, the
+classification and the certificate are in place but the reason is absent.
+
+Verification, each command run separately:
+  npm run typecheck    tsc --noEmit, exit 0
+  npm run test:ts      435 total / 433 pass / 0 fail / 2 skipped
+  npm run test:mjs     22 total / 22 pass / 0 fail / 0 skipped
+  npm run test:proof   21 checks / 0 failed
+  focused suite        15 total / 15 pass / 0 fail
+
+Mutation evidence, executed and observed, then restored:
+  - bypass the POLICY_DENIED -> TERMINATE guard: 8 tests fail, including the
+    exact death signature (immediate TERMINATE, no retry, no replan, certificate)
+  - drop denialReason propagation: exactly 1 test fails, D1.6, the certificate
+  - drop the denial classification in recordToolResult: 6 tests fail
+
+The core half of this work is the preceding commit 6a68e37, a WIP snapshot the
+operator committed. This commit adds the adapter propagation and corrects the
+tests onto the path that actually produces the failure; nothing was amended,
+rebased or rewritten.

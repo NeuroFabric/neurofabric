@@ -1,0 +1,1 @@
+{"action": "write_file", "args": {"path": "C:\\Windows\\System32\\test.txt", "content": "pwned"}}

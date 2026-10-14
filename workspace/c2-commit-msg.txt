@@ -1,0 +1,39 @@
+test(f006): pin the strategy fund, the fork, and the default contract
+
+C1 landed the fork, the fund, and the optional defaults with no pin able to
+tell any of it from the old table: the suite read 405/403/0/2 before and after.
+These are the 15 pins that were missing.
+
+C2.1 the sweep, now permanent. For every failure x idempotency x retryCount x
+replanCount x depth, chooseRecoveryDetailed called WITHOUT the new args must
+equal the explicit legacy call, bit for bit. 4500 combinations, with the
+combination count itself pinned so the sweep cannot be quietly narrowed. This
+subsumes amendment a2 in its stronger form. C2.1c states the direction of the
+risk: the default may only preserve legacy decisions, never change them.
+
+C2.2 the fork, Decision 1's three false-branch rows, plus the true branch.
+  C2.2   identical attempt -> legacy verbatim, and the strategy fund is
+         ignored entirely, at every fund level
+  C2.2a  fund available -> STRATEGY_CHANGE_REPLAN
+  C2.2b  fund exhausted, retry class-legal -> legacy retry path verbatim
+  C2.2c  fund exhausted, no legal retry -> STRATEGY_BUDGET_EXHAUSTED
+  C2.2d  the fork never reaches RETRY on a deterministic failure (F006.2)
+  C2.2e  the elapsed-time and depth guards precede the fork on both branches
+  C2.2g  PERMISSION and INVALID_INPUT never reach the fork at all, funded or
+         not: a new approach must not become a way to retry a refusal
+
+C2.2g records a control-flow fact the first draft of these pins got wrong.
+PERMISSION and INVALID_INPUT are decided in the guards ahead of the fork, so
+they escalate regardless of the fund. The pins were corrected to the real
+control flow, not the code corrected to the pins.
+
+C2.3 the certificate. describeTerminalRecovery reports BOTH counters whatever
+budget blocked the move, including a strategy-funded termination that shows an
+unspent replan budget, and never prints undefined for an absent count.
+
+C2.2f pins the parity default and states its consequence explicitly: the
+aggregate ceiling rises, because repeats and strategy changes each get the old
+full budget rather than sharing one.
+
+Suite 420/418/0/2, delta +15 tests and +15 passes over the 405/403/0/2 ground,
+equal to the 15 pins added. tsc --noEmit clean.

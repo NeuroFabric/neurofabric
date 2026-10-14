@@ -1,0 +1,71 @@
+feat(alerts): the decision path is reached, and alerts push over SSE
+
+Part 1 wires recordDecision() into the running server. Part 2 builds the
+Server-Sent Events surface on top of it, which was only possible because Part 1
+persists before anything is pushed. Zero dependencies: node:http and node:sqlite
+are built-ins.
+
+THE FINDING THAT MATTERED MORE THAN THE FEATURE. gateway.evaluate() had no
+caller outside the test suite. The record was wired, onDecision was wired, the
+ordering was proved by six tests -- and nothing in the running server ever ASKED
+for an alert, so recordDecision() had no production caller and the write
+boundary was never entered. This is the same failure as the unreachable App.tsx
+block in !105, one layer up: code that is correct, tested, and never executed. It
+would have shipped on the strength of a green suite with its central claim true
+of a path no operator could reach.
+
+The fix is LiveGateway.evaluate, called from the live read path, and its
+limitation is stated rather than left to be discovered: an alert is raised when
+something asks how the stream is doing, so a deployment where nobody polls raises
+no alerts. That is honest and wrong for a monitoring product at the same time, and
+the fix is a scheduler this platform does not have rather than a trick hidden in a
+request handler. The line is named so whoever adds one knows it is taken. A timer
+in the server factory was rejected because it would be a handle outliving its
+owner in every test that builds a server without startWedgeServer, and this
+repository has been hung by exactly that shape.
+
+THE GUARD ACTIVELY DEFENDS THE STREAM. Not "returns 401" -- actively, meaning the
+bytes are asserted: a refusal also asserts that text/event-stream NEVER appeared
+in the response, because a stream that writes 200 and the stream headers and then
+refuses is a surface a scanner reads as working and an operator reads as silent.
+And the stream's refusal is asserted byte-identical to the diff route's, because
+they come from one prove(); the day they differ is the day a second authentication
+path was born. The tenant is captured at connect and never re-scoped, and there is
+deliberately no publishAll -- a broadcast helper is one call away from a leak.
+
+A SLOW CONSUMER IS DISCONNECTED, NOT BUFFERED. Two conditions, both required:
+write() reports a full buffer AND the backlog is past MAX_CONSUMER_BACKLOG_BYTES,
+which is asserted as a number so raising it is a reviewed edit. A consumer
+momentarily behind is kept, because disconnecting it would make the stream
+useless on a slow network for no reason. On disconnect it gets a final frame naming
+the reason and what it actually lost: reconnect and read /api/memory/diff, because
+the alert is in the record and only the notification was lost. publish returns
+{told, dropped}, because a publish reporting 1 while nothing reached anybody would
+let the caller believe a notification landed.
+
+The live receipt is the whole point: one alert id, 1403f4bf..., appears BOTH in
+the frame a live subscriber received AND in the record, with the same severity,
+because both take it from buildAlertPayload rather than re-deriving a second
+policy.
+
+TWO TEST DEFECTS IN MY OWN WORK, which mattered more than the fixes. The ordering
+tests compare execution indices in a shared trace, because the rule is a claim
+about ORDER and inspecting state afterwards cannot tell the right order from the
+wrong one -- and the first version of that file passed in one tick against a
+broker that had not drained, producing five green tests asserting nothing. And my
+FakeResponse.end() ignored its argument, so every refusal came back as an empty
+string with a correct status line: five tests failing on a fixture that was lying.
+A receipt that cannot fail is not a receipt.
+
+The earlier mend of memory-routes.ts used a line range that swallowed the
+openStream body and the write helper. Both restored and typechecked before this
+commit.
+
+NOT PROVEN, STATED: there is no scheduler, so alerts depend on something polling;
+nothing in frontend/ consumes the stream yet, so it is unproven in a browser; no
+proxy was tested; and only one subscriber was proved.
+
+GATES: test:mjs 22/22; test:ts 1609 tests / 1607 pass / 0 fail / 2 skipped;
+tsc --noEmit clean; tsc -p tsconfig.entries.json clean; memory suites 31/31;
+decision-boundary 6/6; alert-stream 14/14; .scratch/sse-proof.mts green against a
+real process and a real socket.

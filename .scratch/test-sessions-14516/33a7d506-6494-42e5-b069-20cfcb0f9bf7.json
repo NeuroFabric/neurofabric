@@ -1,0 +1,27 @@
+{
+  "id": "33a7d506-6494-42e5-b069-20cfcb0f9bf7",
+  "created": "2026-10-05T10:36:43.807Z",
+  "updated": "2026-10-05T10:36:43.891Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "channel is the category",
+      "at": "2026-10-05T10:36:43.844Z"
+    },
+    {
+      "role": "agent",
+      "text": "I will treat channel as the category.",
+      "correction": {
+        "column": "channel",
+        "role": "category"
+      },
+      "at": "2026-10-05T10:36:43.891Z"
+    }
+  ],
+  "corrections": [
+    {
+      "column": "channel",
+      "role": "category"
+    }
+  ]
+}

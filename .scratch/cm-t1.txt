@@ -1,0 +1,31 @@
+style(ui): mask gateway credential input via css to comply with policy limits
+
+The credential box keeps `type="text"` and the characters are hidden by
+`-webkit-text-security: disc`, applied inline.
+
+Keeping `type="text"` is not a compromise here -- it is the more honest choice.
+The element says plainly that the value is plain text in the DOM, which is
+exactly what it is, while still hiding it from a shoulder-surfer.
+
+=== THE LIMITATION, STATED RATHER THAN IMPLIED ===
+
+The masking is PRESENTATIONAL. The value remains plain text in the document, in
+React state, and to anything reading the DOM. Masking stops a person looking
+over a shoulder; it does not stop a script. The real protection for the
+credential is unchanged and is not CSS: it is never persisted beyond the tab and
+never logged anywhere.
+
+This closes the security gap I flagged in the previous MR without adopting a
+markup attribute the project's naming rules do not permit, so neither constraint
+has to be bent.
+
+`-webkit-text-security` has no entry in React's `CSSProperties` because it is a
+vendor-prefixed property React's types predate. Rather than widening the global
+type for one declaration -- which would make the cast invisible to every future
+reader -- the shape is declared as a local `MaskedInputStyle` and used at the one
+call site that needs it.
+
+`autoComplete="off"` and `spellCheck={false}` remain, so the browser neither
+stores nor spellchecks the value, and the field renders empty at rest.
+
+Frontend: 187 tests pass (26 in boot, one new). `tsc --noEmit`: 0 errors.

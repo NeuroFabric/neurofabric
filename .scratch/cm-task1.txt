@@ -1,0 +1,32 @@
+chore(api): add dev script to run the local wedge server
+
+`npm run dev` was missing, so the reported failure was simply "Missing script:
+dev".
+
+The script runs the EXISTING boot path -- `start-ui.mjs` on bare node with
+`--experimental-strip-types` -- rather than the `tsx` or `ts-node` the brief
+suggested. Adding either would install a runtime dependency into a repository
+whose defining property is that it has none: `.gitlab-ci.yml` states it in its
+own header, and `npm ci` at the root installs exactly `typescript` and
+`@types/node` for the type gate alone. A toolchain to launch a file that node
+can already launch is a dependency bought for nothing.
+
+`start-ui.mjs` is also the better launcher on purpose. It defaults to a
+LOOPBACK bind, warns loudly if the bind is widened, and treats the workspace as
+a boundary rather than a folder of convenience. A generic runner would have none
+of that, and the bind default is the security property.
+
+Verified rather than assumed. Booted on an ephemeral port and probed both
+surfaces:
+
+  wedge page                        200
+  portal config, no credential      401
+      {"status":"FAILED","failure":{"code":"UNAUTHENTICATED",
+       "reason":"no credential presented: send the x-gateway-token header"}}
+
+So the dev script serves the wedge AND the portal API mounted in the previous
+commit -- which is what the frontend dev proxy at port 5173 points at. A 401
+there is the correct answer: no gateway credential is provisioned in this
+environment, and it is an explicit refusal rather than an empty dashboard.
+
+`tsc --noEmit`: 0 errors.

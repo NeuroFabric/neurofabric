@@ -1,0 +1,31 @@
+chore(tsconfig): declare skill-registry so the registry is consumed, not `any`
+
+G1 remainder, 3 of 9 overall. `allowJs` stays OFF, per ruling: the strict sweep
+covers TypeScript only, and JavaScript is consumed through declaration files
+rather than type-checked directly. platform/skill-registry.mjs had none, so
+every `.ts` file importing it got TS7016 and the `.map`/`.find` callbacks over
+`discoverSkills(...)` got TS7006. Six errors, one root cause, and all six clear
+together or not at all.
+
+The declaration REUSES the source of truth rather than restating it.
+`discoverSkills` returns `SkillDescriptor` and `formatSkillCatalog` accepts it,
+both imported from core/types.ts, so a change to the skill contract reaches
+every consumer without anyone editing this file.
+
+FINDING, surfaced by typing it: the JSDoc on `skillRiskLevel` in the .mjs
+declares a THREE-value risk union ("READ_ONLY" | "CONTROLLED" | "WRITE"), but
+the value it is handed is a four-value `RiskLevel` that also includes
+DESTRUCTIVE, because `parseSkillDocument` builds a `SkillDescriptor`. Typing the
+declaration to the JSDoc made four call sites fail to compile, which is how the
+discrepancy became visible. The declaration follows the implementation
+(`RiskLevel` in and out) and the JSDoc discrepancy is filed rather than
+propagated. Correcting the JSDoc on the .mjs is a production edit and does not
+belong in a type increment.
+
+The other three TS2554 in these files are PRE-EXISTING and belong to G3, not
+here: `recentEvents(200)` is called with an argument at three sites while
+`recentEvents()` declares none. They were not introduced by this change.
+
+Suite 458/456/0/2, unchanged and identical to main. Production tsc --noEmit
+clean. Strict run over test files: 81 to 74. All of G1's three codes (TS7006,
+TS7016, TS18046) are now zero.

@@ -1,0 +1,2 @@
+{"ts":"2026-09-30T09:00:00Z","service":"a","latency_ms":1500000}
+{"ts":"2026-09-30T10:00:00Z","service":"b","latency_ms":120}

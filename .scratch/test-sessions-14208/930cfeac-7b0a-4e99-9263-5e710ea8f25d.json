@@ -1,0 +1,30 @@
+{
+  "id": "930cfeac-7b0a-4e99-9263-5e710ea8f25d",
+  "created": "2026-10-07T08:45:54.806Z",
+  "updated": "2026-10-07T08:45:54.831Z",
+  "turns": [
+    {
+      "role": "agent",
+      "text": "Here is the ranking.",
+      "widgets": [
+        {
+          "kind": "chart-bar",
+          "title": "Record categories",
+          "payload": {
+            "points": [
+              {
+                "key": "web",
+                "count": 300
+              }
+            ]
+          }
+        }
+      ],
+      "suggestions": [
+        "what happens next?"
+      ],
+      "at": "2026-10-07T08:45:54.831Z"
+    }
+  ],
+  "corrections": []
+}

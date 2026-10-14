@@ -1,0 +1,1669 @@
+strict digraph "dependency-cruiser output"{
+    rankdir="LR" splines="true" overlap="false" nodesep="0.16" ranksep="0.18" fontname="Helvetica-bold" fontsize="9" style="rounded,bold,filled" fillcolor="#ffffff" compound="true"
+    node [shape="box" style="rounded, filled" height="0.2" color="black" fillcolor="#ffffcc" fontcolor="black" fontname="Helvetica" fontsize="9"]
+    edge [arrowhead="normal" arrowsize="0.6" penwidth="2.0" color="#00000033" fontname="Helvetica" fontsize="9"]
+
+    subgraph "cluster_.pi" {label=".pi" subgraph "cluster_.pi/extensions" {label="extensions" ".pi/extensions/platform-orchestrator.ts" [label=<platform-orchestrator.ts> tooltip="platform-orchestrator.ts" URL=".pi/extensions/platform-orchestrator.ts" fillcolor="#ddfeff"] } }
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/core/redaction.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/core/workspace.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/pi/approval.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/pi/kernel-adapter.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/pi/project-config.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/pi/tool-adapter.ts"
+    ".pi/extensions/platform-orchestrator.ts" -> "platform/skill-registry.mjs"
+    ".pi/extensions/platform-orchestrator.ts" -> "path" [style="dashed" penwidth="1.0"]
+    "assert" [label=<assert> tooltip="assert" URL="https://nodejs.org/api/assert.html" color="grey" fontcolor="grey"]
+    subgraph "cluster_assert" {label="assert" "assert/strict" [label=<strict> tooltip="strict" URL="https://nodejs.org/api/assert.html" color="grey" fontcolor="grey"] }
+    "buffer" [label=<buffer> tooltip="buffer" URL="https://nodejs.org/api/buffer.html" color="grey" fontcolor="grey"]
+    "child_process" [label=<child_process> tooltip="child_process" URL="https://nodejs.org/api/child_process.html" color="grey" fontcolor="grey"]
+    "crypto" [label=<crypto> tooltip="crypto" URL="https://nodejs.org/api/crypto.html" color="grey" fontcolor="grey"]
+    "events" [label=<events> tooltip="events" URL="https://nodejs.org/api/events.html" color="grey" fontcolor="grey"]
+    "fs" [label=<fs> tooltip="fs" URL="https://nodejs.org/api/fs.html" color="grey" fontcolor="grey"]
+    subgraph "cluster_fs" {label="fs" "fs/promises" [label=<promises> tooltip="promises" URL="https://nodejs.org/api/fs.html" color="grey" fontcolor="grey"] }
+    "http" [label=<http> tooltip="http" URL="https://nodejs.org/api/http.html" color="grey" fontcolor="grey"]
+    "module" [label=<module> tooltip="module" URL="https://nodejs.org/api/module.html" color="grey" fontcolor="grey"]
+    "net" [label=<net> tooltip="net" URL="https://nodejs.org/api/net.html" color="grey" fontcolor="grey"]
+    "node:sqlite" [label=<node:sqlite> tooltip="node:sqlite" URL="https://nodejs.org/api/node:sqlite.html" color="grey" fontcolor="grey"]
+    "node:test" [label=<node:test> tooltip="node:test" URL="https://nodejs.org/api/node:test.html" color="grey" fontcolor="grey"]
+    "os" [label=<os> tooltip="os" URL="https://nodejs.org/api/os.html" color="grey" fontcolor="grey"]
+    "path" [label=<path> tooltip="path" URL="https://nodejs.org/api/path.html" color="grey" fontcolor="grey"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/portal-routes.test.ts" [label=<portal-routes.test.ts> tooltip="portal-routes.test.ts" URL="platform/api/portal-routes.test.ts" fillcolor="#ddfeff"] } }
+    "platform/api/portal-routes.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/api/portal-routes.test.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/api/portal-routes.test.ts" -> "platform/api/portal-routes.ts"
+    "platform/api/portal-routes.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/api/portal-routes.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/portal-routes.ts" [label=<portal-routes.ts> tooltip="portal-routes.ts" URL="platform/api/portal-routes.ts" fillcolor="#ddfeff"] } }
+    "platform/api/portal-routes.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/api/portal-routes.ts" -> "platform/omniroute/throughput-meter.ts"
+    "platform/api/portal-routes.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/api/portal-routes.ts" -> "platform/api/ui-routes.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/schema-routes.test.ts" [label=<schema-routes.test.ts> tooltip="schema-routes.test.ts" URL="platform/api/schema-routes.test.ts" fillcolor="#ddfeff"] } }
+    "platform/api/schema-routes.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/api/schema-routes.test.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/api/schema-routes.test.ts" -> "platform/api/schema-routes.ts"
+    "platform/api/schema-routes.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/api/schema-routes.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/schema-routes.ts" [label=<schema-routes.ts> tooltip="schema-routes.ts" URL="platform/api/schema-routes.ts" fillcolor="#ddfeff"] } }
+    "platform/api/schema-routes.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/api/schema-routes.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/api/schema-routes.ts" -> "platform/api/ui-routes.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/ui-routes.test.ts" [label=<ui-routes.test.ts> tooltip="ui-routes.test.ts" URL="platform/api/ui-routes.test.ts" fillcolor="#ddfeff"] } }
+    "platform/api/ui-routes.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/api/ui-routes.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/api/ui-routes.test.ts" -> "platform/swarm/agent-registry.ts"
+    "platform/api/ui-routes.test.ts" -> "platform/swarm/templates.ts"
+    "platform/api/ui-routes.test.ts" -> "platform/api/ui-routes.ts"
+    "platform/api/ui-routes.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/api/ui-routes.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/api" {label="api" "platform/api/ui-routes.ts" [label=<ui-routes.ts> tooltip="ui-routes.ts" URL="platform/api/ui-routes.ts" fillcolor="#ddfeff"] } }
+    "platform/api/ui-routes.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/api/ui-routes.ts" -> "platform/omniroute/edge-security.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/agent-router.ts" [label=<agent-router.ts> tooltip="agent-router.ts" URL="platform/conductor/agent-router.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/agent-router.ts" -> "platform/conductor/subagents/anomaly-agent.ts"
+    "platform/conductor/agent-router.ts" -> "platform/conductor/subagents/forecasting-agent.ts"
+    "platform/conductor/agent-router.ts" -> "platform/conductor/subagents/profiler-agent.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/anomaly.test.ts" [label=<anomaly.test.ts> tooltip="anomaly.test.ts" URL="platform/conductor/anomaly.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/anomaly.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/anomaly.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/anomaly.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/anomaly.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/anomaly.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/anomaly.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/anomaly.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/bottleneck-report.ts" [label=<bottleneck-report.ts> tooltip="bottleneck-report.ts" URL="platform/conductor/bottleneck-report.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/bottleneck-report.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/bottleneck-report.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/bottleneck-report.ts" -> "platform/conductor/semantics.ts"
+    "platform/conductor/bottleneck-report.ts" -> "platform/conductor/svg-charts.ts"
+    "platform/conductor/bottleneck-report.ts" -> "platform/conductor/synthesis.ts"
+    "platform/conductor/bottleneck-report.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/bottleneck-report.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/bottlenecks.ts" [label=<bottlenecks.ts> tooltip="bottlenecks.ts" URL="platform/conductor/bottlenecks.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/bottlenecks.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/bottlenecks.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/bottlenecks.ts" -> "platform/conductor/semantics.ts"
+    "platform/conductor/bottlenecks.ts" -> "platform/conductor/stream-profile.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/capabilities.ts" [label=<capabilities.ts> tooltip="capabilities.ts" URL="platform/conductor/capabilities.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/capabilities.ts" -> "platform/ingestion/jsonl-tokenizer.ts"
+    "platform/conductor/capabilities.ts" -> "platform/ingestion/log-tokenizer.ts"
+    "platform/conductor/capabilities.ts" -> "platform/conductor/stream-profile.ts"
+    "platform/conductor/capabilities.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/capabilities.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/cli.mjs" [label=<cli.mjs> tooltip="cli.mjs" URL="platform/conductor/cli.mjs" ] } }
+    "platform/conductor/cli.mjs" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/cli.mjs" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/cli.mjs" -> "platform/conductor/ingest.ts"
+    "platform/conductor/cli.mjs" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/cli.mjs" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/cli.mjs" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conductor.test.ts" [label=<conductor.test.ts> tooltip="conductor.test.ts" URL="platform/conductor/conductor.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conductor.test.ts" -> "platform/conductor/agent-router.ts"
+    "platform/conductor/conductor.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/conductor.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conductor.ts" [label=<conductor.ts> tooltip="conductor.ts" URL="platform/conductor/conductor.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conductor.ts" -> "platform/core/workspace.ts"
+    "platform/conductor/conductor.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/conductor/conductor.ts" -> "platform/pi/project-config.ts"
+    "platform/conductor/conductor.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/conductor.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/conductor.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/conductor.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/conductor.ts" -> "platform/conductor/semantics.ts"
+    "platform/conductor/conductor.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conversation-discordance.test.ts" [label=<conversation-discordance.test.ts> tooltip="conversation-discordance.test.ts" URL="platform/conductor/conversation-discordance.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conversation-discordance.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/conductor/conversation-discordance.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/conversation-discordance.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conversation-suggestions.test.ts" [label=<conversation-suggestions.test.ts> tooltip="conversation-suggestions.test.ts" URL="platform/conductor/conversation-suggestions.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conversation-suggestions.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/conductor/conversation-suggestions.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/conversation-suggestions.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conversation-synthesis.test.ts" [label=<conversation-synthesis.test.ts> tooltip="conversation-synthesis.test.ts" URL="platform/conductor/conversation-synthesis.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conversation-synthesis.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/conductor/conversation-synthesis.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/conversation-synthesis.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conversation.test.ts" [label=<conversation.test.ts> tooltip="conversation.test.ts" URL="platform/conductor/conversation.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conversation.test.ts" -> "platform/web/chat-parse.ts"
+    "platform/conductor/conversation.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/conductor/conversation.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/conversation.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/conversation.ts" [label=<conversation.ts> tooltip="conversation.ts" URL="platform/conductor/conversation.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/conversation.ts" -> "platform/web/chat-parse.ts"
+    "platform/conductor/conversation.ts" -> "platform/conductor/agent-router.ts"
+    "platform/conductor/conversation.ts" -> "platform/conductor/multivariate.ts"
+    "platform/conductor/conversation.ts" -> "platform/conductor/query.ts"
+    "platform/conductor/conversation.ts" -> "platform/conductor/subagents/suggestions.ts"
+    "platform/conductor/conversation.ts" -> "platform/conductor/subagents/widgets.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/data-health.test.ts" [label=<data-health.test.ts> tooltip="data-health.test.ts" URL="platform/conductor/data-health.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/data-health.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/data-health.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/data-health.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/data-health.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/data-health.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/data-health.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/data-health.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/dirty-data.test.ts" [label=<dirty-data.test.ts> tooltip="dirty-data.test.ts" URL="platform/conductor/dirty-data.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/dirty-data.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/dirty-data.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/dirty-data.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/dirty-data.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/dynamic-structure.test.ts" [label=<dynamic-structure.test.ts> tooltip="dynamic-structure.test.ts" URL="platform/conductor/dynamic-structure.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/dynamic-structure.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/dynamic-structure.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/dynamic-structure.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/dynamic-structure.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/dynamic-structure.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/dynamic-structure.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/dynamic-structure.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/extreme-outliers.test.ts" [label=<extreme-outliers.test.ts> tooltip="extreme-outliers.test.ts" URL="platform/conductor/extreme-outliers.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/extreme-outliers.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/extreme-outliers.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/extreme-outliers.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/extreme-outliers.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/extreme-outliers.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/forecasting.test.ts" [label=<forecasting.test.ts> tooltip="forecasting.test.ts" URL="platform/conductor/forecasting.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/forecasting.test.ts" -> "platform/conductor/forecasting.ts"
+    "platform/conductor/forecasting.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/forecasting.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/forecasting.ts" [label=<forecasting.ts> tooltip="forecasting.ts" URL="platform/conductor/forecasting.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/generic-profiler.test.ts" [label=<generic-profiler.test.ts> tooltip="generic-profiler.test.ts" URL="platform/conductor/generic-profiler.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/generic-profiler.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/generic-profiler.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/generic-profiler.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/generic-profiler.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/generic-profiler.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/generic-vocabulary-audit.test.ts" [label=<generic-vocabulary-audit.test.ts> tooltip="generic-vocabulary-audit.test.ts" URL="platform/conductor/generic-vocabulary-audit.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/generic-vocabulary-audit.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/global-schema-fallback.test.ts" [label=<global-schema-fallback.test.ts> tooltip="global-schema-fallback.test.ts" URL="platform/conductor/global-schema-fallback.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/global-schema-fallback.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/global-schema-fallback.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/global-schema-fallback.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/global-schema-fallback.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/global-schema-fallback.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/global-schema-fallback.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/global-schema-fallback.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/global-schema-fallback.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/ingest.test.ts" [label=<ingest.test.ts> tooltip="ingest.test.ts" URL="platform/conductor/ingest.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/ingest.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/ingest.test.ts" -> "platform/conductor/ingest.ts"
+    "platform/conductor/ingest.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/ingest.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/ingest.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/conductor/ingest.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/ingest.ts" [label=<ingest.ts> tooltip="ingest.ts" URL="platform/conductor/ingest.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/ingest.ts" -> "platform/core/policy-config.ts"
+    "platform/conductor/ingest.ts" -> "platform/core/workspace.ts"
+    "platform/conductor/ingest.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/conductor/ingest.ts" -> "platform/pi/project-config.ts"
+    "platform/conductor/ingest.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/ingest.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/live-anomaly.test.ts" [label=<live-anomaly.test.ts> tooltip="live-anomaly.test.ts" URL="platform/conductor/live-anomaly.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/live-anomaly.test.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/conductor/live-anomaly.test.ts" -> "platform/conductor/stream-broker.ts"
+    "platform/conductor/live-anomaly.test.ts" -> "platform/conductor/subagents/anomaly-agent.ts"
+    "platform/conductor/live-anomaly.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/live-anomaly.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/live-anomaly.ts" [label=<live-anomaly.ts> tooltip="live-anomaly.ts" URL="platform/conductor/live-anomaly.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/live-anomaly.ts" -> "platform/conductor/stream-profile.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/multivariate-synthesis.test.ts" [label=<multivariate-synthesis.test.ts> tooltip="multivariate-synthesis.test.ts" URL="platform/conductor/multivariate-synthesis.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/multivariate-synthesis.test.ts" -> "platform/conductor/multivariate.ts"
+    "platform/conductor/multivariate-synthesis.test.ts" -> "platform/conductor/synthesis.ts"
+    "platform/conductor/multivariate-synthesis.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/multivariate-synthesis.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/multivariate.test.ts" [label=<multivariate.test.ts> tooltip="multivariate.test.ts" URL="platform/conductor/multivariate.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/multivariate.test.ts" -> "platform/conductor/multivariate.ts"
+    "platform/conductor/multivariate.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/multivariate.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/multivariate.ts" [label=<multivariate.ts> tooltip="multivariate.ts" URL="platform/conductor/multivariate.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/numerical-fallback.test.ts" [label=<numerical-fallback.test.ts> tooltip="numerical-fallback.test.ts" URL="platform/conductor/numerical-fallback.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/numerical-fallback.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/numerical-fallback.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/numerical-fallback.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/numerical-fallback.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/numerical-fallback.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/numerical-fallback.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/numerical-fallback.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/omnivorous-ingest.test.ts" [label=<omnivorous-ingest.test.ts> tooltip="omnivorous-ingest.test.ts" URL="platform/conductor/omnivorous-ingest.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/omnivorous-ingest.test.ts" -> "platform/ingestion/jsonl-tokenizer.ts"
+    "platform/conductor/omnivorous-ingest.test.ts" -> "platform/ingestion/log-tokenizer.ts"
+    "platform/conductor/omnivorous-ingest.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/omnivorous-ingest.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/omnivorous-ingest.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/omnivorous-ingest.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/omnivorous-ingest.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/omnivorous-ingest.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/outliers.test.ts" [label=<outliers.test.ts> tooltip="outliers.test.ts" URL="platform/conductor/outliers.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/outliers.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/outliers.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/outliers.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/outliers.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/outliers.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/pega-alerts.test.ts" [label=<pega-alerts.test.ts> tooltip="pega-alerts.test.ts" URL="platform/conductor/pega-alerts.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/pega-alerts.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/pega-alerts.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/pega-alerts.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/pega-alerts.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/pega-alerts.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/pega-alerts.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/query.test.ts" [label=<query.test.ts> tooltip="query.test.ts" URL="platform/conductor/query.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/query.test.ts" -> "platform/conductor/query.ts"
+    "platform/conductor/query.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/query.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/query.ts" [label=<query.ts> tooltip="query.ts" URL="platform/conductor/query.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/reader-shape.test.ts" [label=<reader-shape.test.ts> tooltip="reader-shape.test.ts" URL="platform/conductor/reader-shape.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/reader-shape.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/reader-shape.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/reader-shape.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/reader-shape.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/reader-shape.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/reader-shape.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/report-markdown.test.ts" [label=<report-markdown.test.ts> tooltip="report-markdown.test.ts" URL="platform/conductor/report-markdown.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/report-markdown.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/report-markdown.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/report-markdown.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/report-markdown.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/report-markdown.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/report-markdown.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/report-markdown.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/report-markdown.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/schema-memory.test.ts" [label=<schema-memory.test.ts> tooltip="schema-memory.test.ts" URL="platform/conductor/schema-memory.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/schema-memory.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/schema-memory.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/schema-memory.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/schema-memory.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/schema-memory.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/schema-memory.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    "platform/conductor/schema-memory.test.ts" -> "url" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/schema-memory.ts" [label=<schema-memory.ts> tooltip="schema-memory.ts" URL="platform/conductor/schema-memory.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/schema-memory.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/schema-memory.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/semantics-demo-files.test.ts" [label=<semantics-demo-files.test.ts> tooltip="semantics-demo-files.test.ts" URL="platform/conductor/semantics-demo-files.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/semantics-demo-files.test.ts" -> "platform/conductor/semantics.ts"
+    "platform/conductor/semantics-demo-files.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/semantics-demo-files.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/conductor/semantics-demo-files.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/semantics-demo-files.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/semantics.test.ts" [label=<semantics.test.ts> tooltip="semantics.test.ts" URL="platform/conductor/semantics.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/semantics.test.ts" -> "platform/conductor/semantics.ts"
+    "platform/conductor/semantics.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/semantics.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/semantics.ts" [label=<semantics.ts> tooltip="semantics.ts" URL="platform/conductor/semantics.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/session-store.test.ts" [label=<session-store.test.ts> tooltip="session-store.test.ts" URL="platform/conductor/session-store.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/session-store.test.ts" -> "platform/conductor/session-store.ts"
+    "platform/conductor/session-store.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/session-store.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/conductor/session-store.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/session-store.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/session-store.ts" [label=<session-store.ts> tooltip="session-store.ts" URL="platform/conductor/session-store.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/session-store.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/conductor/session-store.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/session-store.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/statistics.test.ts" [label=<statistics.test.ts> tooltip="statistics.test.ts" URL="platform/conductor/statistics.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/statistics.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/statistics.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/statistics.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/statistics.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/statistics.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/statistics.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/statistics.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/stream-broker-load.test.ts" [label=<stream-broker-load.test.ts> tooltip="stream-broker-load.test.ts" URL="platform/conductor/stream-broker-load.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/stream-broker-load.test.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/conductor/stream-broker-load.test.ts" -> "platform/conductor/stream-broker.ts"
+    "platform/conductor/stream-broker-load.test.ts" -> "platform/conductor/stream-profile.ts"
+    "platform/conductor/stream-broker-load.test.ts" -> "platform/conductor/subagents/anomaly-agent.ts"
+    "platform/conductor/stream-broker-load.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/stream-broker-load.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/stream-broker.test.ts" [label=<stream-broker.test.ts> tooltip="stream-broker.test.ts" URL="platform/conductor/stream-broker.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/stream-broker.test.ts" -> "platform/conductor/stream-broker.ts"
+    "platform/conductor/stream-broker.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/stream-broker.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/stream-broker.test.ts" -> "stream" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/stream-broker.ts" [label=<stream-broker.ts> tooltip="stream-broker.ts" URL="platform/conductor/stream-broker.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/stream-broker.ts" -> "platform/conductor/stream-profile.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/stream-profile.ts" [label=<stream-profile.ts> tooltip="stream-profile.ts" URL="platform/conductor/stream-profile.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/stream-profile.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/conductor/stream-profile.ts" -> "string_decoder" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/streaming-ingest.test.ts" [label=<streaming-ingest.test.ts> tooltip="streaming-ingest.test.ts" URL="platform/conductor/streaming-ingest.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/streaming-ingest.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/streaming-ingest.test.ts" -> "platform/conductor/bottleneck-report.ts" [style="dashed"]
+    "platform/conductor/streaming-ingest.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/streaming-ingest.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/streaming-ingest.test.ts" -> "platform/conductor/stream-profile.ts"
+    "platform/conductor/streaming-ingest.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-ingest.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-ingest.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-ingest.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-ingest.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/streaming-parity.test.ts" [label=<streaming-parity.test.ts> tooltip="streaming-parity.test.ts" URL="platform/conductor/streaming-parity.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/streaming-parity.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/streaming-parity.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/streaming-parity.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/streaming-parity.test.ts" -> "platform/conductor/stream-profile.ts"
+    "platform/conductor/streaming-parity.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-parity.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-parity.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/streaming-parity.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/anomaly-agent.ts" [label=<anomaly-agent.ts> tooltip="anomaly-agent.ts" URL="platform/conductor/subagents/anomaly-agent.ts" fillcolor="#ddfeff"] } } }
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/multivariate.ts"
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/subagents/forecasting-agent.ts"
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/subagents/suggestions.ts"
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/subagents/types.ts"
+    "platform/conductor/subagents/anomaly-agent.ts" -> "platform/conductor/subagents/widgets.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/forecasting-agent.ts" [label=<forecasting-agent.ts> tooltip="forecasting-agent.ts" URL="platform/conductor/subagents/forecasting-agent.ts" fillcolor="#ddfeff"] } } }
+    "platform/conductor/subagents/forecasting-agent.ts" -> "platform/conductor/forecasting.ts"
+    "platform/conductor/subagents/forecasting-agent.ts" -> "platform/conductor/subagents/suggestions.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/profiler-agent.ts" [label=<profiler-agent.ts> tooltip="profiler-agent.ts" URL="platform/conductor/subagents/profiler-agent.ts" fillcolor="#ddfeff"] } } }
+    "platform/conductor/subagents/profiler-agent.ts" -> "platform/conductor/subagents/suggestions.ts"
+    "platform/conductor/subagents/profiler-agent.ts" -> "platform/conductor/subagents/types.ts"
+    "platform/conductor/subagents/profiler-agent.ts" -> "platform/conductor/subagents/widgets.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/suggestions.ts" [label=<suggestions.ts> tooltip="suggestions.ts" URL="platform/conductor/subagents/suggestions.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/types.ts" [label=<types.ts> tooltip="types.ts" URL="platform/conductor/subagents/types.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" subgraph "cluster_platform/conductor/subagents" {label="subagents" "platform/conductor/subagents/widgets.ts" [label=<widgets.ts> tooltip="widgets.ts" URL="platform/conductor/subagents/widgets.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/svg-charts.test.ts" [label=<svg-charts.test.ts> tooltip="svg-charts.test.ts" URL="platform/conductor/svg-charts.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/svg-charts.test.ts" -> "platform/conductor/svg-charts.ts"
+    "platform/conductor/svg-charts.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/svg-charts.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/svg-charts.ts" [label=<svg-charts.ts> tooltip="svg-charts.ts" URL="platform/conductor/svg-charts.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/swarm-handoff.test.ts" [label=<swarm-handoff.test.ts> tooltip="swarm-handoff.test.ts" URL="platform/conductor/swarm-handoff.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/swarm-handoff.test.ts" -> "platform/conductor/agent-router.ts"
+    "platform/conductor/swarm-handoff.test.ts" -> "platform/conductor/subagents/forecasting-agent.ts"
+    "platform/conductor/swarm-handoff.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/swarm-handoff.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/synthesis.test.ts" [label=<synthesis.test.ts> tooltip="synthesis.test.ts" URL="platform/conductor/synthesis.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/synthesis.test.ts" -> "platform/web/react-report.ts" [style="dashed"]
+    "platform/conductor/synthesis.test.ts" -> "platform/conductor/bottleneck-report.ts" [style="dashed"]
+    "platform/conductor/synthesis.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/synthesis.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/synthesis.test.ts" -> "platform/conductor/synthesis.ts"
+    "platform/conductor/synthesis.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/synthesis.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/synthesis.ts" [label=<synthesis.ts> tooltip="synthesis.ts" URL="platform/conductor/synthesis.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/synthesis.ts" -> "platform/conductor/multivariate.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/v2-ux-gaps.test.ts" [label=<v2-ux-gaps.test.ts> tooltip="v2-ux-gaps.test.ts" URL="platform/conductor/v2-ux-gaps.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/v2-ux-gaps.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/conductor/v2-ux-gaps.test.ts" -> "platform/conductor/query.ts"
+    "platform/conductor/v2-ux-gaps.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/v2-ux-gaps.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/verdict-synthesis.test.ts" [label=<verdict-synthesis.test.ts> tooltip="verdict-synthesis.test.ts" URL="platform/conductor/verdict-synthesis.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/verdict-synthesis.test.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/conductor/verdict-synthesis.test.ts" -> "platform/conductor/stream-broker.ts"
+    "platform/conductor/verdict-synthesis.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/verdict-synthesis.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/vocabulary-guard.test.ts" [label=<vocabulary-guard.test.ts> tooltip="vocabulary-guard.test.ts" URL="platform/conductor/vocabulary-guard.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/vocabulary-guard.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/vocabulary-guard.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/vocabulary-guard.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/vocabulary-guard.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/vocabulary-guard.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/vocabulary-guard.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/vocabulary-guard.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/vocabulary-guard.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/conductor/vocabulary-guard.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/conductor" {label="conductor" "platform/conductor/vocabulary.test.ts" [label=<vocabulary.test.ts> tooltip="vocabulary.test.ts" URL="platform/conductor/vocabulary.test.ts" fillcolor="#ddfeff"] } }
+    "platform/conductor/vocabulary.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/conductor/vocabulary.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/conductor/vocabulary.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/conductor/vocabulary.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/conductor/vocabulary.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/conductor/vocabulary.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/conductor/vocabulary.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/conductor/vocabulary.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/artifact.test.ts" [label=<artifact.test.ts> tooltip="artifact.test.ts" URL="platform/core/artifact.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/artifact.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/core/artifact.test.ts" -> "platform/core/artifact.ts"
+    "platform/core/artifact.test.ts" -> "platform/core/workspace.ts"
+    "platform/core/artifact.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/artifact.ts" [label=<artifact.ts> tooltip="artifact.ts" URL="platform/core/artifact.ts" fillcolor="#ddfeff"] } }
+    "platform/core/artifact.ts" -> "platform/core/limits.ts"
+    "platform/core/artifact.ts" -> "platform/core/redaction.ts"
+    "platform/core/artifact.ts" -> "platform/core/tool-paths.ts"
+    "platform/core/artifact.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/core/artifact.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/benign-exit.ts" [label=<benign-exit.ts> tooltip="benign-exit.ts" URL="platform/core/benign-exit.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/bounded-scan-truncation.test.ts" [label=<bounded-scan-truncation.test.ts> tooltip="bounded-scan-truncation.test.ts" URL="platform/core/bounded-scan-truncation.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/bounded-scan-truncation.test.ts" -> "platform/core/configured-policy.ts"
+    "platform/core/bounded-scan-truncation.test.ts" -> "platform/core/policy-config.ts"
+    "platform/core/bounded-scan-truncation.test.ts" -> "platform/core/policy.ts"
+    "platform/core/bounded-scan-truncation.test.ts" -> "platform/core/tool-paths.ts" [style="dashed"]
+    "platform/core/bounded-scan-truncation.test.ts" -> "assert" [style="dashed" penwidth="1.0"]
+    "platform/core/bounded-scan-truncation.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/bounded-scan-truncation.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/bounded-scan-truncation.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/bounded-scan-truncation.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/call-signature.ts" [label=<call-signature.ts> tooltip="call-signature.ts" URL="platform/core/call-signature.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/command-position.ts" [label=<command-position.ts> tooltip="command-position.ts" URL="platform/core/command-position.ts" fillcolor="#ddfeff"] } }
+    "platform/core/command-position.ts" -> "platform/core/tool-paths.ts"
+    "platform/core/command-position.ts" -> "platform/core/workspace.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/configured-policy.ts" [label=<configured-policy.ts> tooltip="configured-policy.ts" URL="platform/core/configured-policy.ts" fillcolor="#ddfeff"] } }
+    "platform/core/configured-policy.ts" -> "platform/core/call-signature.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/command-position.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/policy-config.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/policy.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/sql-guard.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/tool-paths.ts"
+    "platform/core/configured-policy.ts" -> "platform/core/workspace.ts"
+    "platform/core/configured-policy.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/context-memory.ts" [label=<context-memory.ts> tooltip="context-memory.ts" URL="platform/core/context-memory.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/core.test.ts" [label=<core.test.ts> tooltip="core.test.ts" URL="platform/core/core.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/core.test.ts" -> "platform/core/context-memory.ts"
+    "platform/core/core.test.ts" -> "platform/core/errors.ts"
+    "platform/core/core.test.ts" -> "platform/core/execution.ts"
+    "platform/core/core.test.ts" -> "platform/core/limits.ts"
+    "platform/core/core.test.ts" -> "platform/core/plan.ts"
+    "platform/core/core.test.ts" -> "platform/core/policy.ts"
+    "platform/core/core.test.ts" -> "platform/core/recovery.ts"
+    "platform/core/core.test.ts" -> "platform/core/skill-catalog.ts"
+    "platform/core/core.test.ts" -> "platform/core/state-machine.ts"
+    "platform/core/core.test.ts" -> "platform/core/tool-registry.ts"
+    "platform/core/core.test.ts" -> "platform/core/validation.ts"
+    "platform/core/core.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/core.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/corelimits-enforcement.test.ts" [label=<corelimits-enforcement.test.ts> tooltip="corelimits-enforcement.test.ts" URL="platform/core/corelimits-enforcement.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/corelimits-enforcement.test.ts" -> "platform/core/artifact.ts"
+    "platform/core/corelimits-enforcement.test.ts" -> "platform/core/context-memory.ts"
+    "platform/core/corelimits-enforcement.test.ts" -> "platform/core/limits.ts"
+    "platform/core/corelimits-enforcement.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/corelimits-enforcement.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/core/corelimits-enforcement.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/corelimits-enforcement.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/corelimits-enforcement.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/entry-contract.test.ts" [label=<entry-contract.test.ts> tooltip="entry-contract.test.ts" URL="platform/core/entry-contract.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/entry-contract.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/entry-contract.test.ts" -> "child_process" [style="dashed" penwidth="1.0"]
+    "platform/core/entry-contract.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/core/entry-contract.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/entry-contract.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/errors.ts" [label=<errors.ts> tooltip="errors.ts" URL="platform/core/errors.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/events.ts" [label=<events.ts> tooltip="events.ts" URL="platform/core/events.ts" fillcolor="#ddfeff"] } }
+    "platform/core/events.ts" -> "platform/core/redaction.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/execution.ts" [label=<execution.ts> tooltip="execution.ts" URL="platform/core/execution.ts" fillcolor="#ddfeff"] } }
+    "platform/core/execution.ts" -> "platform/core/errors.ts"
+    "platform/core/execution.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/index.ts" [label=<index.ts> tooltip="index.ts" URL="platform/core/index.ts" fillcolor="#ddfeff"] } }
+    "platform/core/index.ts" -> "platform/core/artifact.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/configured-policy.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/context-memory.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/errors.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/events.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/execution.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/limits.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/plan.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/planner.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/policy-config.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/policy.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/recovery.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/redaction.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/skill-catalog.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/skill-metadata.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/state-machine.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/tool-paths.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/tool-registry.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/types.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/validation.ts" [arrowhead="inv"]
+    "platform/core/index.ts" -> "platform/core/workspace.ts" [arrowhead="inv"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/limit-profiles.test.ts" [label=<limit-profiles.test.ts> tooltip="limit-profiles.test.ts" URL="platform/core/limit-profiles.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/limit-profiles.test.ts" -> "platform/core/policy-config.ts"
+    "platform/core/limit-profiles.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/limit-profiles.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/limits.ts" [label=<limits.ts> tooltip="limits.ts" URL="platform/core/limits.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/plan.ts" [label=<plan.ts> tooltip="plan.ts" URL="platform/core/plan.ts" fillcolor="#ddfeff"] } }
+    "platform/core/plan.ts" -> "platform/core/errors.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/planner.ts" [label=<planner.ts> tooltip="planner.ts" URL="platform/core/planner.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/policy-config.test.ts" [label=<policy-config.test.ts> tooltip="policy-config.test.ts" URL="platform/core/policy-config.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/policy-config.test.ts" -> "platform/core/policy-config.ts"
+    "platform/core/policy-config.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/policy-config.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/policy-config.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/policy-config.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/policy-config.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/policy-config.ts" [label=<policy-config.ts> tooltip="policy-config.ts" URL="platform/core/policy-config.ts" fillcolor="#ddfeff"] } }
+    "platform/core/policy-config.ts" -> "platform/core/errors.ts"
+    "platform/core/policy-config.ts" -> "platform/core/vault.ts"
+    "platform/core/policy-config.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/policy-config.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/policy.test.ts" [label=<policy.test.ts> tooltip="policy.test.ts" URL="platform/core/policy.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/policy.test.ts" -> "platform/core/index.ts"
+    "platform/core/policy.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/policy.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/policy.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/policy.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/policy.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/policy.ts" [label=<policy.ts> tooltip="policy.ts" URL="platform/core/policy.ts" fillcolor="#ddfeff"] } }
+    "platform/core/policy.ts" -> "platform/core/errors.ts"
+    "platform/core/policy.ts" -> "platform/core/tool-paths.ts"
+    "platform/core/policy.ts" -> "platform/core/workspace.ts"
+    "platform/core/policy.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/port-probe.test.ts" [label=<port-probe.test.ts> tooltip="port-probe.test.ts" URL="platform/core/port-probe.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/port-probe.test.ts" -> "platform/core/port-probe.ts"
+    "platform/core/port-probe.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/port-probe.test.ts" -> "net" [style="dashed" penwidth="1.0"]
+    "platform/core/port-probe.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/port-probe.ts" [label=<port-probe.ts> tooltip="port-probe.ts" URL="platform/core/port-probe.ts" fillcolor="#ddfeff"] } }
+    "platform/core/port-probe.ts" -> "child_process" [style="dashed" penwidth="1.0"]
+    "platform/core/port-probe.ts" -> "net" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/recovery.ts" [label=<recovery.ts> tooltip="recovery.ts" URL="platform/core/recovery.ts" fillcolor="#ddfeff"] } }
+    "platform/core/recovery.ts" -> "platform/core/benign-exit.ts"
+    "platform/core/recovery.ts" -> "platform/core/errors.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/redaction.test.ts" [label=<redaction.test.ts> tooltip="redaction.test.ts" URL="platform/core/redaction.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/redaction.test.ts" -> "platform/core/events.ts"
+    "platform/core/redaction.test.ts" -> "platform/core/redaction.ts"
+    "platform/core/redaction.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/redaction.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/core/redaction.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/redaction.ts" [label=<redaction.ts> tooltip="redaction.ts" URL="platform/core/redaction.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/refspec-guard.test.ts" [label=<refspec-guard.test.ts> tooltip="refspec-guard.test.ts" URL="platform/core/refspec-guard.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/refspec-guard.test.ts" -> "platform/core/index.ts"
+    "platform/core/refspec-guard.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/refspec-guard.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/refspec-guard.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/refspec-guard.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/refspec-guard.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/skill-catalog.ts" [label=<skill-catalog.ts> tooltip="skill-catalog.ts" URL="platform/core/skill-catalog.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/skill-metadata.test.ts" [label=<skill-metadata.test.ts> tooltip="skill-metadata.test.ts" URL="platform/core/skill-metadata.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/skill-metadata.test.ts" -> "platform/core/policy.ts"
+    "platform/core/skill-metadata.test.ts" -> "platform/core/skill-catalog.ts"
+    "platform/core/skill-metadata.test.ts" -> "platform/core/skill-metadata.ts"
+    "platform/core/skill-metadata.test.ts" -> "platform/core/workspace.ts"
+    "platform/core/skill-metadata.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/skill-metadata.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/skill-metadata.ts" [label=<skill-metadata.ts> tooltip="skill-metadata.ts" URL="platform/core/skill-metadata.ts" fillcolor="#ddfeff"] } }
+    "platform/core/skill-metadata.ts" -> "platform/core/skill-catalog.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/sql-guard.test.ts" [label=<sql-guard.test.ts> tooltip="sql-guard.test.ts" URL="platform/core/sql-guard.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/sql-guard.test.ts" -> "platform/core/sql-guard.ts"
+    "platform/core/sql-guard.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/sql-guard.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/sql-guard.ts" [label=<sql-guard.ts> tooltip="sql-guard.ts" URL="platform/core/sql-guard.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/state-machine.test.ts" [label=<state-machine.test.ts> tooltip="state-machine.test.ts" URL="platform/core/state-machine.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/state-machine.test.ts" -> "platform/core/errors.ts"
+    "platform/core/state-machine.test.ts" -> "platform/core/state-machine.ts"
+    "platform/core/state-machine.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/state-machine.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/state-machine.ts" [label=<state-machine.ts> tooltip="state-machine.ts" URL="platform/core/state-machine.ts" fillcolor="#ddfeff"] } }
+    "platform/core/state-machine.ts" -> "platform/core/errors.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/tool-paths-recursion.test.ts" [label=<tool-paths-recursion.test.ts> tooltip="tool-paths-recursion.test.ts" URL="platform/core/tool-paths-recursion.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/tool-paths-recursion.test.ts" -> "platform/core/index.ts"
+    "platform/core/tool-paths-recursion.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths-recursion.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths-recursion.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths-recursion.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths-recursion.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/tool-paths.test.ts" [label=<tool-paths.test.ts> tooltip="tool-paths.test.ts" URL="platform/core/tool-paths.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/tool-paths.test.ts" -> "platform/core/index.ts"
+    "platform/core/tool-paths.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/tool-paths.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/tool-paths.ts" [label=<tool-paths.ts> tooltip="tool-paths.ts" URL="platform/core/tool-paths.ts" fillcolor="#ddfeff"] } }
+    "platform/core/tool-paths.ts" -> "platform/core/workspace.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/tool-registry.ts" [label=<tool-registry.ts> tooltip="tool-registry.ts" URL="platform/core/tool-registry.ts" fillcolor="#ddfeff"] } }
+    "platform/core/tool-registry.ts" -> "platform/core/errors.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/types.ts" [label=<types.ts> tooltip="types.ts" URL="platform/core/types.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/validation.ts" [label=<validation.ts> tooltip="validation.ts" URL="platform/core/validation.ts" fillcolor="#ddfeff"] } }
+    "platform/core/validation.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/vault-redaction.test.ts" [label=<vault-redaction.test.ts> tooltip="vault-redaction.test.ts" URL="platform/core/vault-redaction.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/vault-redaction.test.ts" -> "platform/core/redaction.ts"
+    "platform/core/vault-redaction.test.ts" -> "platform/core/vault.ts"
+    "platform/core/vault-redaction.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/vault-redaction.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/vault-redaction.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/vault-redaction.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/vault-redaction.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/vault.test.ts" [label=<vault.test.ts> tooltip="vault.test.ts" URL="platform/core/vault.test.ts" fillcolor="#ddfeff"] } }
+    "platform/core/vault.test.ts" -> "platform/core/vault.ts"
+    "platform/core/vault.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/core/vault.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/vault.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/core/vault.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/core/vault.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/vault.ts" [label=<vault.ts> tooltip="vault.ts" URL="platform/core/vault.ts" fillcolor="#ddfeff"] } }
+    "platform/core/vault.ts" -> "platform/core/errors.ts"
+    "platform/core/vault.ts" -> "platform/core/redaction.ts"
+    "platform/core/vault.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/core/vault.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/core" {label="core" "platform/core/workspace.ts" [label=<workspace.ts> tooltip="workspace.ts" URL="platform/core/workspace.ts" fillcolor="#ddfeff"] } }
+    "platform/core/workspace.ts" -> "platform/core/errors.ts"
+    "platform/core/workspace.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/core/workspace.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/egress" {label="egress" "platform/egress/webhook-dispatcher.test.ts" [label=<webhook-dispatcher.test.ts> tooltip="webhook-dispatcher.test.ts" URL="platform/egress/webhook-dispatcher.test.ts" fillcolor="#ddfeff"] } }
+    "platform/egress/webhook-dispatcher.test.ts" -> "platform/egress/webhook-dispatcher.ts"
+    "platform/egress/webhook-dispatcher.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/egress/webhook-dispatcher.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/egress" {label="egress" "platform/egress/webhook-dispatcher.ts" [label=<webhook-dispatcher.ts> tooltip="webhook-dispatcher.ts" URL="platform/egress/webhook-dispatcher.ts" fillcolor="#ddfeff"] } }
+    "platform/egress/webhook-dispatcher.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/bin.mjs" [label=<bin.mjs> tooltip="bin.mjs" URL="platform/embassy/bin.mjs" ] } }
+    "platform/embassy/bin.mjs" -> "platform/embassy/server.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/core.ts" [label=<core.ts> tooltip="core.ts" URL="platform/embassy/core.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/core.ts" -> "platform/omniroute/edge-security.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/durable-audit.test.ts" [label=<durable-audit.test.ts> tooltip="durable-audit.test.ts" URL="platform/embassy/durable-audit.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/durable-audit.test.ts" -> "platform/memory/store.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/vault/audit-sink.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/vault/capability.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/vault/reader.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/vault/store.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/embassy/elicitation.ts"
+    "platform/embassy/durable-audit.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/durable-audit.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-audit.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-audit.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-audit.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-audit.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-audit.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/durable-read-audit.test.ts" [label=<durable-read-audit.test.ts> tooltip="durable-read-audit.test.ts" URL="platform/embassy/durable-read-audit.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/memory/store.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/vault/audit-sink.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/vault/capability.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/vault/reader.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/vault/store.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/embassy/elicitation.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "platform/embassy/server.ts"
+    "platform/embassy/durable-read-audit.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-read-audit.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-read-audit.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-read-audit.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-read-audit.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/embassy/durable-read-audit.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/elicitation.test.ts" [label=<elicitation.test.ts> tooltip="elicitation.test.ts" URL="platform/embassy/elicitation.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/elicitation.test.ts" -> "platform/memory/store.ts"
+    "platform/embassy/elicitation.test.ts" -> "platform/embassy/elicitation.ts"
+    "platform/embassy/elicitation.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/elicitation.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/elicitation.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/elicitation.ts" [label=<elicitation.ts> tooltip="elicitation.ts" URL="platform/embassy/elicitation.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/elicitation.ts" -> "platform/embassy/jsonrpc.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/frame.test.ts" [label=<frame.test.ts> tooltip="frame.test.ts" URL="platform/embassy/frame.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/frame.test.ts" -> "platform/embassy/core.ts"
+    "platform/embassy/frame.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/frame.test.ts" -> "platform/embassy/server.ts"
+    "platform/embassy/frame.test.ts" -> "platform/embassy/tools.ts"
+    "platform/embassy/frame.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/frame.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/jsonrpc.ts" [label=<jsonrpc.ts> tooltip="jsonrpc.ts" URL="platform/embassy/jsonrpc.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/precheck-gateway.test.ts" [label=<precheck-gateway.test.ts> tooltip="precheck-gateway.test.ts" URL="platform/embassy/precheck-gateway.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/precheck-gateway.test.ts" -> "platform/embassy/elicitation.ts"
+    "platform/embassy/precheck-gateway.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/precheck-gateway.test.ts" -> "platform/embassy/server.ts"
+    "platform/embassy/precheck-gateway.test.ts" -> "platform/embassy/tools.ts"
+    "platform/embassy/precheck-gateway.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/precheck-gateway.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/embassy/precheck-gateway.test.ts" -> "stream" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/server.ts" [label=<server.ts> tooltip="server.ts" URL="platform/embassy/server.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/server.ts" -> "platform/memory/store.ts"
+    "platform/embassy/server.ts" -> "platform/vault/audit-sink.ts"
+    "platform/embassy/server.ts" -> "platform/vault/file-source.ts"
+    "platform/embassy/server.ts" -> "platform/vault/osi.ts"
+    "platform/embassy/server.ts" -> "platform/vault/reader.ts"
+    "platform/embassy/server.ts" -> "platform/vault/store.ts"
+    "platform/embassy/server.ts" -> "platform/embassy/elicitation.ts"
+    "platform/embassy/server.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/server.ts" -> "platform/embassy/tools.ts"
+    "platform/embassy/server.ts" -> "readline" [style="dashed" penwidth="1.0"]
+    "platform/embassy/server.ts" -> "stream" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/stdio.test.ts" [label=<stdio.test.ts> tooltip="stdio.test.ts" URL="platform/embassy/stdio.test.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/stdio.test.ts" -> "platform/embassy/jsonrpc.ts"
+    "platform/embassy/stdio.test.ts" -> "platform/embassy/server.ts"
+    "platform/embassy/stdio.test.ts" -> "platform/embassy/tools.ts"
+    "platform/embassy/stdio.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/embassy/stdio.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/embassy/stdio.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/embassy/stdio.test.ts" -> "stream" [style="dashed" penwidth="1.0"]
+    "platform/embassy/stdio.test.ts" -> "url" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/embassy" {label="embassy" "platform/embassy/tools.ts" [label=<tools.ts> tooltip="tools.ts" URL="platform/embassy/tools.ts" fillcolor="#ddfeff"] } }
+    "platform/embassy/tools.ts" -> "platform/embassy/core.ts"
+    "platform/embassy/tools.ts" -> "platform/embassy/jsonrpc.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/connector-security.test.ts" [label=<connector-security.test.ts> tooltip="connector-security.test.ts" URL="platform/ingestion/connector-security.test.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/connector-security.test.ts" -> "platform/core/sql-guard.ts"
+    "platform/ingestion/connector-security.test.ts" -> "platform/ingestion/db-connector.ts"
+    "platform/ingestion/connector-security.test.ts" -> "platform/ingestion/pdf-connector.ts"
+    "platform/ingestion/connector-security.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/connector-security.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/connector-security.test.ts" -> "node:sqlite" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/connector-security.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/connector-security.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/connector-security.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/db-connector.test.ts" [label=<db-connector.test.ts> tooltip="db-connector.test.ts" URL="platform/ingestion/db-connector.test.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/db-connector.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/core/policy-config.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/pi/project-config.ts"
+    "platform/ingestion/db-connector.test.ts" -> "platform/ingestion/db-connector.ts"
+    "platform/ingestion/db-connector.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.test.ts" -> "node:sqlite" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/db-connector.ts" [label=<db-connector.ts> tooltip="db-connector.ts" URL="platform/ingestion/db-connector.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/db-connector.ts" -> "platform/conductor/capabilities.ts"
+    "platform/ingestion/db-connector.ts" -> "platform/core/sql-guard.ts"
+    "platform/ingestion/db-connector.ts" -> "platform/core/workspace.ts"
+    "platform/ingestion/db-connector.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/db-connector.ts" -> "module" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/jsonl-tokenizer.ts" [label=<jsonl-tokenizer.ts> tooltip="jsonl-tokenizer.ts" URL="platform/ingestion/jsonl-tokenizer.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/jsonl-tokenizer.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/jsonl-tokenizer.ts" -> "readline" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/log-tokenizer.ts" [label=<log-tokenizer.ts> tooltip="log-tokenizer.ts" URL="platform/ingestion/log-tokenizer.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/log-tokenizer.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/log-tokenizer.ts" -> "readline" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/pdf-connector.test.ts" [label=<pdf-connector.test.ts> tooltip="pdf-connector.test.ts" URL="platform/ingestion/pdf-connector.test.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/pdf-connector.test.ts" -> "platform/core/policy-config.ts"
+    "platform/ingestion/pdf-connector.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/ingestion/pdf-connector.test.ts" -> "platform/pi/project-config.ts"
+    "platform/ingestion/pdf-connector.test.ts" -> "platform/ingestion/pdf-connector.ts"
+    "platform/ingestion/pdf-connector.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/pdf-connector.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/pdf-connector.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/pdf-connector.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/pdf-connector.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/pdf-connector.ts" [label=<pdf-connector.ts> tooltip="pdf-connector.ts" URL="platform/ingestion/pdf-connector.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/pdf-connector.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/ingestion/pdf-connector.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/ingestion/pdf-connector.ts" -> "platform/core/workspace.ts"
+    "platform/ingestion/pdf-connector.ts" -> "platform/test-support/pdf-fixture.ts" [arrowhead="inv"]
+    "platform/ingestion/pdf-connector.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/pdf-connector.ts" -> "zlib" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/router.test.ts" [label=<router.test.ts> tooltip="router.test.ts" URL="platform/ingestion/router.test.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/router.test.ts" -> "platform/test-support/pdf-fixture.ts"
+    "platform/ingestion/router.test.ts" -> "platform/ingestion/router.ts"
+    "platform/ingestion/router.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/router.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/router.test.ts" -> "node:sqlite" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/router.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/router.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/ingestion/router.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/ingestion" {label="ingestion" "platform/ingestion/router.ts" [label=<router.ts> tooltip="router.ts" URL="platform/ingestion/router.ts" fillcolor="#ddfeff"] } }
+    "platform/ingestion/router.ts" -> "platform/conductor/capabilities.ts"
+    "platform/ingestion/router.ts" -> "platform/core/workspace.ts"
+    "platform/ingestion/router.ts" -> "platform/ingestion/pdf-connector.ts"
+    "platform/ingestion/router.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/alert-hub.ts" [label=<alert-hub.ts> tooltip="alert-hub.ts" URL="platform/memory/alert-hub.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/alert-hub.ts" -> "buffer" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/alert-stream.test.ts" [label=<alert-stream.test.ts> tooltip="alert-stream.test.ts" URL="platform/memory/alert-stream.test.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/alert-stream.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/memory/alert-stream.test.ts" -> "platform/memory/alert-hub.ts"
+    "platform/memory/alert-stream.test.ts" -> "platform/memory/memory-routes.ts"
+    "platform/memory/alert-stream.test.ts" -> "platform/memory/store.ts"
+    "platform/memory/alert-stream.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/memory/alert-stream.test.ts" -> "events" [style="dashed" penwidth="1.0"]
+    "platform/memory/alert-stream.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/memory/alert-stream.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/memory/alert-stream.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/memory/alert-stream.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/memory-routes.test.ts" [label=<memory-routes.test.ts> tooltip="memory-routes.test.ts" URL="platform/memory/memory-routes.test.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/memory-routes.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/memory/memory-routes.test.ts" -> "platform/memory/memory-routes.ts"
+    "platform/memory/memory-routes.test.ts" -> "platform/memory/store.ts"
+    "platform/memory/memory-routes.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/memory/memory-routes.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/memory/memory-routes.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/memory/memory-routes.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/memory/memory-routes.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/memory-routes.ts" [label=<memory-routes.ts> tooltip="memory-routes.ts" URL="platform/memory/memory-routes.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/memory-routes.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/memory/memory-routes.ts" -> "platform/memory/alert-hub.ts"
+    "platform/memory/memory-routes.ts" -> "platform/memory/reconcile.ts"
+    "platform/memory/memory-routes.ts" -> "platform/memory/store.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/persistence.test.ts" [label=<persistence.test.ts> tooltip="persistence.test.ts" URL="platform/memory/persistence.test.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/persistence.test.ts" -> "platform/memory/reconcile.ts"
+    "platform/memory/persistence.test.ts" -> "platform/memory/store.ts"
+    "platform/memory/persistence.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/memory/persistence.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/memory/persistence.test.ts" -> "node:sqlite" [style="dashed" penwidth="1.0"]
+    "platform/memory/persistence.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/memory/persistence.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/memory/persistence.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/reconcile.ts" [label=<reconcile.ts> tooltip="reconcile.ts" URL="platform/memory/reconcile.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/store.test.ts" [label=<store.test.ts> tooltip="store.test.ts" URL="platform/memory/store.test.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/store.test.ts" -> "platform/memory/reconcile.ts"
+    "platform/memory/store.test.ts" -> "platform/memory/store.ts"
+    "platform/memory/store.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/memory/store.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/memory" {label="memory" "platform/memory/store.ts" [label=<store.ts> tooltip="store.ts" URL="platform/memory/store.ts" fillcolor="#ddfeff"] } }
+    "platform/memory/store.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/memory/store.ts" -> "node:sqlite" [style="dashed" penwidth="1.0"]
+    "platform/memory/store.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/decision-boundary.test.ts" [label=<decision-boundary.test.ts> tooltip="decision-boundary.test.ts" URL="platform/omniroute/decision-boundary.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/decision-boundary.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/decision-boundary.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/decision-boundary.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/edge-security.test.ts" [label=<edge-security.test.ts> tooltip="edge-security.test.ts" URL="platform/omniroute/edge-security.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/edge-security.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/omniroute/edge-security.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/edge-security.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/edge-security.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/edge-security.ts" [label=<edge-security.ts> tooltip="edge-security.ts" URL="platform/omniroute/edge-security.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/edge-security.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/evaluation-scheduler.test.ts" [label=<evaluation-scheduler.test.ts> tooltip="evaluation-scheduler.test.ts" URL="platform/omniroute/evaluation-scheduler.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/evaluation-scheduler.test.ts" -> "platform/omniroute/evaluation-scheduler.ts"
+    "platform/omniroute/evaluation-scheduler.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/evaluation-scheduler.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/evaluation-scheduler.ts" [label=<evaluation-scheduler.ts> tooltip="evaluation-scheduler.ts" URL="platform/omniroute/evaluation-scheduler.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/live-routing.integration.test.ts" [label=<live-routing.integration.test.ts> tooltip="live-routing.integration.test.ts" URL="platform/omniroute/live-routing.integration.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/conductor/agent-router.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/omniroute/providers/kafka-provider.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/omniroute/live-routing.integration.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/live-routing.integration.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/omniroute-gateway.test.ts" [label=<omniroute-gateway.test.ts> tooltip="omniroute-gateway.test.ts" URL="platform/omniroute/omniroute-gateway.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/omniroute-gateway.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/omniroute-gateway.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/omniroute-gateway.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/omniroute-gateway.ts" [label=<omniroute-gateway.ts> tooltip="omniroute-gateway.ts" URL="platform/omniroute/omniroute-gateway.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/omniroute-gateway.ts" -> "platform/conductor/live-anomaly.ts"
+    "platform/omniroute/omniroute-gateway.ts" -> "platform/conductor/stream-broker.ts"
+    "platform/omniroute/omniroute-gateway.ts" -> "platform/omniroute/edge-security.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/one-door.test.ts" [label=<one-door.test.ts> tooltip="one-door.test.ts" URL="platform/omniroute/one-door.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/one-door.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/omniroute/one-door.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/one-door.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/one-door.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/one-door.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" subgraph "cluster_platform/omniroute/providers" {label="providers" "platform/omniroute/providers/kafka-consumer.test.ts" [label=<kafka-consumer.test.ts> tooltip="kafka-consumer.test.ts" URL="platform/omniroute/providers/kafka-consumer.test.ts" fillcolor="#ddfeff"] } } }
+    "platform/omniroute/providers/kafka-consumer.test.ts" -> "platform/omniroute/providers/kafka-consumer.ts"
+    "platform/omniroute/providers/kafka-consumer.test.ts" -> "platform/omniroute/providers/kafka-wire.ts"
+    "platform/omniroute/providers/kafka-consumer.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/providers/kafka-consumer.test.ts" -> "net" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/providers/kafka-consumer.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" subgraph "cluster_platform/omniroute/providers" {label="providers" "platform/omniroute/providers/kafka-consumer.ts" [label=<kafka-consumer.ts> tooltip="kafka-consumer.ts" URL="platform/omniroute/providers/kafka-consumer.ts" fillcolor="#ddfeff"] } } }
+    "platform/omniroute/providers/kafka-consumer.ts" -> "platform/omniroute/providers/kafka-wire.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" subgraph "cluster_platform/omniroute/providers" {label="providers" "platform/omniroute/providers/kafka-provider.test.ts" [label=<kafka-provider.test.ts> tooltip="kafka-provider.test.ts" URL="platform/omniroute/providers/kafka-provider.test.ts" fillcolor="#ddfeff"] } } }
+    "platform/omniroute/providers/kafka-provider.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/providers/kafka-provider.test.ts" -> "platform/omniroute/providers/kafka-provider.ts"
+    "platform/omniroute/providers/kafka-provider.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/providers/kafka-provider.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" subgraph "cluster_platform/omniroute/providers" {label="providers" "platform/omniroute/providers/kafka-provider.ts" [label=<kafka-provider.ts> tooltip="kafka-provider.ts" URL="platform/omniroute/providers/kafka-provider.ts" fillcolor="#ddfeff"] } } }
+    "platform/omniroute/providers/kafka-provider.ts" -> "platform/omniroute/providers/kafka-consumer.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" subgraph "cluster_platform/omniroute/providers" {label="providers" "platform/omniroute/providers/kafka-wire.ts" [label=<kafka-wire.ts> tooltip="kafka-wire.ts" URL="platform/omniroute/providers/kafka-wire.ts" fillcolor="#ddfeff"] } } }
+    "platform/omniroute/providers/kafka-wire.ts" -> "net" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/rate-limit.test.ts" [label=<rate-limit.test.ts> tooltip="rate-limit.test.ts" URL="platform/omniroute/rate-limit.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/rate-limit.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/omniroute/rate-limit.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/rate-limit.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/rate-limit.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/rate-limit.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/tenant-router.test.ts" [label=<tenant-router.test.ts> tooltip="tenant-router.test.ts" URL="platform/omniroute/tenant-router.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/tenant-router.test.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/omniroute/tenant-router.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/omniroute/tenant-router.test.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/omniroute/tenant-router.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/tenant-router.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/throughput-meter.test.ts" [label=<throughput-meter.test.ts> tooltip="throughput-meter.test.ts" URL="platform/omniroute/throughput-meter.test.ts" fillcolor="#ddfeff"] } }
+    "platform/omniroute/throughput-meter.test.ts" -> "platform/omniroute/throughput-meter.ts"
+    "platform/omniroute/throughput-meter.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/omniroute/throughput-meter.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/omniroute" {label="omniroute" "platform/omniroute/throughput-meter.ts" [label=<throughput-meter.ts> tooltip="throughput-meter.ts" URL="platform/omniroute/throughput-meter.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" "platform/orchestration.mjs" [label=<orchestration.mjs> tooltip="orchestration.mjs" URL="platform/orchestration.mjs" ] }
+    subgraph "cluster_platform" {label="platform" "platform/orchestration.test.mjs" [label=<orchestration.test.mjs> tooltip="orchestration.test.mjs" URL="platform/orchestration.test.mjs" ] }
+    "platform/orchestration.test.mjs" -> "platform/orchestration.mjs"
+    "platform/orchestration.test.mjs" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/orchestration.test.mjs" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/.c1-probe.test.ts" [label=<.c1-probe.test.ts> tooltip=".c1-probe.test.ts" URL="platform/pi/.c1-probe.test.ts" fillcolor="#ccffcc"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/.s8-probe.test.ts" [label=<.s8-probe.test.ts> tooltip=".s8-probe.test.ts" URL="platform/pi/.s8-probe.test.ts" fillcolor="#ccffcc"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/approval-policy-composition.test.ts" [label=<approval-policy-composition.test.ts> tooltip="approval-policy-composition.test.ts" URL="platform/pi/approval-policy-composition.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/approval-policy-composition.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/approval-policy-composition.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/approval-policy-composition.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/approval-policy-composition.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/approval-policy-composition.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/approval-policy-composition.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/approval-policy-composition.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/approval-policy-composition.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/approval-policy-composition.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/approval.ts" [label=<approval.ts> tooltip="approval.ts" URL="platform/pi/approval.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/artifact-flow.test.ts" [label=<artifact-flow.test.ts> tooltip="artifact-flow.test.ts" URL="platform/pi/artifact-flow.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/artifact-flow.test.ts" -> "platform/core/index.ts"
+    "platform/pi/artifact-flow.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/artifact-flow.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/artifact-flow.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/artifact-flow.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/artifact-flow.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/artifact-flow.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/artifact-flow.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/c1-replanning-stored-failure.test.ts" [label=<c1-replanning-stored-failure.test.ts> tooltip="c1-replanning-stored-failure.test.ts" URL="platform/pi/c1-replanning-stored-failure.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "platform/core/state-machine.ts"
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/c1-replanning-stored-failure.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/command-position-corpus.test.ts" [label=<command-position-corpus.test.ts> tooltip="command-position-corpus.test.ts" URL="platform/pi/command-position-corpus.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/command-position-corpus.test.ts" -> "platform/core/index.ts"
+    "platform/pi/command-position-corpus.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/command-position-corpus.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/command-position-corpus.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/command-position-corpus.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/command-position-corpus.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/command-position-corpus.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/command-position-corpus.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/command-position-corpus.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/command-position-corpus.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/corelimits-execution-time.test.ts" [label=<corelimits-execution-time.test.ts> tooltip="corelimits-execution-time.test.ts" URL="platform/pi/corelimits-execution-time.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/corelimits-execution-time.test.ts" -> "platform/core/index.ts"
+    "platform/pi/corelimits-execution-time.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/corelimits-execution-time.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/d1-refusal-tiers.test.ts" [label=<d1-refusal-tiers.test.ts> tooltip="d1-refusal-tiers.test.ts" URL="platform/pi/d1-refusal-tiers.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/d1-refusal-tiers.test.ts" -> "platform/core/index.ts"
+    "platform/pi/d1-refusal-tiers.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/d1-refusal-tiers.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/d1-refusal-tiers.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/d1-refusal-tiers.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/d1-refusal-tiers.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/d1-refusal-tiers.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/d1-refusal-tiers.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/d1-refusal-tiers.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/d1-refusal-tiers.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/d4b-bridge-metadata.test.ts" [label=<d4b-bridge-metadata.test.ts> tooltip="d4b-bridge-metadata.test.ts" URL="platform/pi/d4b-bridge-metadata.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/d4b-bridge-metadata.test.ts" -> ".pi/extensions/platform-orchestrator.ts"
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-bridge-metadata.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/d4b-recovery-classification.test.ts" [label=<d4b-recovery-classification.test.ts> tooltip="d4b-recovery-classification.test.ts" URL="platform/pi/d4b-recovery-classification.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/d4b-recovery-classification.test.ts" -> "platform/core/index.ts"
+    "platform/pi/d4b-recovery-classification.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/d4b-recovery-classification.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/d4b-recovery-classification.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/d4b-recovery-classification.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-recovery-classification.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-recovery-classification.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-recovery-classification.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/d4b-recovery-classification.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f003-block-lifecycle.test.ts" [label=<f003-block-lifecycle.test.ts> tooltip="f003-block-lifecycle.test.ts" URL="platform/pi/f003-block-lifecycle.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f003-block-lifecycle.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/f003-block-lifecycle.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f003-block-lifecycle.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f003-block-lifecycle.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f003-block-lifecycle.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f003-block-lifecycle.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f003-block-lifecycle.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f003-block-lifecycle.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f003-block-lifecycle.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-attempt-signature-lifecycle.test.ts" [label=<f006-attempt-signature-lifecycle.test.ts> tooltip="f006-attempt-signature-lifecycle.test.ts" URL="platform/pi/f006-attempt-signature-lifecycle.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "platform/core/call-signature.ts"
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-attempt-signature-lifecycle.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-benign-nonzero-exit.test.ts" [label=<f006-benign-nonzero-exit.test.ts> tooltip="f006-benign-nonzero-exit.test.ts" URL="platform/pi/f006-benign-nonzero-exit.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/core/errors.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/core/recovery.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-benign-nonzero-exit.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-denial-certificate-shape.test.ts" [label=<f006-denial-certificate-shape.test.ts> tooltip="f006-denial-certificate-shape.test.ts" URL="platform/pi/f006-denial-certificate-shape.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-denial-certificate-shape.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-policy-denied.test.ts" [label=<f006-policy-denied.test.ts> tooltip="f006-policy-denied.test.ts" URL="platform/pi/f006-policy-denied.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/core/errors.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-policy-denied.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-denied.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-denied.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-denied.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-denied.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-policy-deny-kill-mechanism.test.ts" [label=<f006-policy-deny-kill-mechanism.test.ts> tooltip="f006-policy-deny-kill-mechanism.test.ts" URL="platform/pi/f006-policy-deny-kill-mechanism.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-policy-deny-kill-mechanism.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-recovery-diagnostics.test.ts" [label=<f006-recovery-diagnostics.test.ts> tooltip="f006-recovery-diagnostics.test.ts" URL="platform/pi/f006-recovery-diagnostics.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "platform/core/errors.ts"
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-recovery-diagnostics.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-retryability-propagation.test.ts" [label=<f006-retryability-propagation.test.ts> tooltip="f006-retryability-propagation.test.ts" URL="platform/pi/f006-retryability-propagation.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-retryability-propagation.test.ts" -> "platform/core/errors.ts"
+    "platform/pi/f006-retryability-propagation.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-retryability-propagation.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-retryability-propagation.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-retryability-propagation.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-retryability-propagation.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-sibling-refusal-kill.test.ts" [label=<f006-sibling-refusal-kill.test.ts> tooltip="f006-sibling-refusal-kill.test.ts" URL="platform/pi/f006-sibling-refusal-kill.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-sibling-refusal-kill.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-sibling-refusal-kill.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-sibling-refusal-kill.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-sibling-refusal-kill.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-strategy-consumer.test.ts" [label=<f006-strategy-consumer.test.ts> tooltip="f006-strategy-consumer.test.ts" URL="platform/pi/f006-strategy-consumer.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-strategy-consumer.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f006-strategy-consumer.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f006-strategy-consumer.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-strategy-consumer.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f006-strategy-fund-pins.test.ts" [label=<f006-strategy-fund-pins.test.ts> tooltip="f006-strategy-fund-pins.test.ts" URL="platform/pi/f006-strategy-fund-pins.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f006-strategy-fund-pins.test.ts" -> "platform/core/index.ts"
+    "platform/pi/f006-strategy-fund-pins.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f006-strategy-fund-pins.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/f008-budget-telemetry.test.ts" [label=<f008-budget-telemetry.test.ts> tooltip="f008-budget-telemetry.test.ts" URL="platform/pi/f008-budget-telemetry.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/f008-budget-telemetry.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/f008-budget-telemetry.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/f008-budget-telemetry.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/f008-budget-telemetry.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/f008-budget-telemetry.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/f008-budget-telemetry.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/f008-budget-telemetry.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/f008-budget-telemetry.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/f008-budget-telemetry.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/kernel-adapter-reentrancy.test.ts" [label=<kernel-adapter-reentrancy.test.ts> tooltip="kernel-adapter-reentrancy.test.ts" URL="platform/pi/kernel-adapter-reentrancy.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/kernel-adapter-reentrancy.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/kernel-adapter-reentrancy.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/kernel-adapter-reentrancy.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/kernel-adapter-reentrancy.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/kernel-adapter.test.ts" [label=<kernel-adapter.test.ts> tooltip="kernel-adapter.test.ts" URL="platform/pi/kernel-adapter.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/kernel-adapter.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/kernel-adapter.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/kernel-adapter.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/kernel-adapter.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/kernel-adapter.ts" [label=<kernel-adapter.ts> tooltip="kernel-adapter.ts" URL="platform/pi/kernel-adapter.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/kernel-adapter.ts" -> "platform/core/benign-exit.ts"
+    "platform/pi/kernel-adapter.ts" -> "platform/core/call-signature.ts"
+    "platform/pi/kernel-adapter.ts" -> "platform/core/index.ts"
+    "platform/pi/kernel-adapter.ts" -> "platform/pi/vault-tools.ts"
+    "platform/pi/kernel-adapter.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/kernel-lifecycle.test.ts" [label=<kernel-lifecycle.test.ts> tooltip="kernel-lifecycle.test.ts" URL="platform/pi/kernel-lifecycle.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/kernel-lifecycle.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/kernel-lifecycle.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/kernel-lifecycle.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/kernel-lifecycle.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/model-planner.test.ts" [label=<model-planner.test.ts> tooltip="model-planner.test.ts" URL="platform/pi/model-planner.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/model-planner.test.ts" -> "platform/core/errors.ts"
+    "platform/pi/model-planner.test.ts" -> "platform/pi/model-planner.ts"
+    "platform/pi/model-planner.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/model-planner.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/model-planner.ts" [label=<model-planner.ts> tooltip="model-planner.ts" URL="platform/pi/model-planner.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/model-planner.ts" -> "platform/core/index.ts"
+    "platform/pi/model-planner.ts" -> "platform/core/plan.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/path-boundary-corpus.test.ts" [label=<path-boundary-corpus.test.ts> tooltip="path-boundary-corpus.test.ts" URL="platform/pi/path-boundary-corpus.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/path-boundary-corpus.test.ts" -> "platform/core/index.ts"
+    "platform/pi/path-boundary-corpus.test.ts" -> "platform/core/limits.ts"
+    "platform/pi/path-boundary-corpus.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/path-boundary-corpus.test.ts" -> "platform/core/recovery.ts"
+    "platform/pi/path-boundary-corpus.test.ts" -> "platform/core/tool-paths.ts"
+    "platform/pi/path-boundary-corpus.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-boundary-corpus.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-boundary-corpus.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-boundary-corpus.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-boundary-corpus.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/path-extraction-corpus.test.ts" [label=<path-extraction-corpus.test.ts> tooltip="path-extraction-corpus.test.ts" URL="platform/pi/path-extraction-corpus.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/path-extraction-corpus.test.ts" -> "platform/core/index.ts"
+    "platform/pi/path-extraction-corpus.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/path-extraction-corpus.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/path-extraction-corpus.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/path-extraction-corpus.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/path-extraction-corpus.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-extraction-corpus.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-extraction-corpus.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-extraction-corpus.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/path-extraction-corpus.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/payload-position-tiering.test.ts" [label=<payload-position-tiering.test.ts> tooltip="payload-position-tiering.test.ts" URL="platform/pi/payload-position-tiering.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/payload-position-tiering.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/payload-position-tiering.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/payload-position-tiering.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/payload-position-tiering.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/payload-position-tiering.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/payload-position-tiering.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/payload-position-tiering.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/payload-position-tiering.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/payload-position-tiering.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/pi-coding-agent.d.ts" [label=<pi-coding-agent.d.ts> tooltip="pi-coding-agent.d.ts" URL="platform/pi/pi-coding-agent.d.ts" fillcolor="#ccffcc"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/policy-port.test.ts" [label=<policy-port.test.ts> tooltip="policy-port.test.ts" URL="platform/pi/policy-port.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/policy-port.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/policy-port.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/policy-port.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/policy-port.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/policy-port.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/policy-port.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/policy-port.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/policy-port.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/policy-port.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/project-config.test.ts" [label=<project-config.test.ts> tooltip="project-config.test.ts" URL="platform/pi/project-config.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/project-config.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/project-config.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/project-config.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/project-config.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/project-config.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/project-config.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/project-config.ts" [label=<project-config.ts> tooltip="project-config.ts" URL="platform/pi/project-config.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/project-config.ts" -> "platform/core/index.ts"
+    "platform/pi/project-config.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/project-config.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/project-config.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/recovery-limits-defaults.test.ts" [label=<recovery-limits-defaults.test.ts> tooltip="recovery-limits-defaults.test.ts" URL="platform/pi/recovery-limits-defaults.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/recovery-limits-defaults.test.ts" -> "platform/core/index.ts"
+    "platform/pi/recovery-limits-defaults.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/recovery-limits-defaults.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/recovery-limits-defaults.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/redaction-boundary.test.ts" [label=<redaction-boundary.test.ts> tooltip="redaction-boundary.test.ts" URL="platform/pi/redaction-boundary.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/redaction-boundary.test.ts" -> "platform/core/artifact.ts" [style="dashed"]
+    "platform/pi/redaction-boundary.test.ts" -> "platform/core/events.ts" [style="dashed"]
+    "platform/pi/redaction-boundary.test.ts" -> "platform/core/redaction.ts"
+    "platform/pi/redaction-boundary.test.ts" -> "platform/core/workspace.ts"
+    "platform/pi/redaction-boundary.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/redaction-boundary.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/redaction-boundary.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/redaction-boundary.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/pi/redaction-boundary.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/redaction-boundary.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/redaction-boundary.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/redaction-boundary.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/ruling3-refusal-budget.test.ts" [label=<ruling3-refusal-budget.test.ts> tooltip="ruling3-refusal-budget.test.ts" URL="platform/pi/ruling3-refusal-budget.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "platform/core/configured-policy.ts"
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/ruling3-refusal-budget.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/security-gap-r6-r7.test.ts" [label=<security-gap-r6-r7.test.ts> tooltip="security-gap-r6-r7.test.ts" URL="platform/pi/security-gap-r6-r7.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/security-gap-r6-r7.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/security-gap-r6-r7.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/security-gap-r6-r7.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/security-gap-r6-r7.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/security-gap-r6-r7.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/security-gap-r6-r7.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/security-gap-r6-r7.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/security-gap-r6-r7.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/security-gap-r6-r7.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/skill-authority.test.ts" [label=<skill-authority.test.ts> tooltip="skill-authority.test.ts" URL="platform/pi/skill-authority.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/skill-authority.test.ts" -> "platform/core/skill-catalog.ts"
+    "platform/pi/skill-authority.test.ts" -> "platform/skill-registry.mjs"
+    "platform/pi/skill-authority.test.ts" -> "platform/pi/approval.ts"
+    "platform/pi/skill-authority.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/skill-authority.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/skill-authority.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/skill-authority.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/skill-authority.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/skill-authority.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/skill-authority.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/skill-authority.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/skills-defensive-copy.test.ts" [label=<skills-defensive-copy.test.ts> tooltip="skills-defensive-copy.test.ts" URL="platform/pi/skills-defensive-copy.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/skills-defensive-copy.test.ts" -> "platform/skill-registry.mjs"
+    "platform/pi/skills-defensive-copy.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/skills-defensive-copy.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/skills-defensive-copy.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/skills-defensive-copy.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/skills-defensive-copy.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/skills-defensive-copy.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/smoke.test.ts" [label=<smoke.test.ts> tooltip="smoke.test.ts" URL="platform/pi/smoke.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/smoke.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/smoke.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/smoke.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/smoke.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/smoke.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/smoke.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/smoke.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/stream-termination.test.ts" [label=<stream-termination.test.ts> tooltip="stream-termination.test.ts" URL="platform/pi/stream-termination.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/stream-termination.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/stream-termination.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/stream-termination.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/stream-termination.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/terminal-refusal-echo.test.ts" [label=<terminal-refusal-echo.test.ts> tooltip="terminal-refusal-echo.test.ts" URL="platform/pi/terminal-refusal-echo.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/terminal-refusal-echo.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/terminal-refusal-echo.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/terminal-refusal-echo.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/terminal-refusal-echo.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/terminal-refusal-echo.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/terminal-refusal-echo.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/terminal-refusal-echo.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/terminal-refusal-echo.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/terminal-refusal-echo.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/tool-adapter.ts" [label=<tool-adapter.ts> tooltip="tool-adapter.ts" URL="platform/pi/tool-adapter.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/trusted-execution.test.ts" [label=<trusted-execution.test.ts> tooltip="trusted-execution.test.ts" URL="platform/pi/trusted-execution.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/trusted-execution.test.ts" -> "platform/core/index.ts"
+    "platform/pi/trusted-execution.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/trusted-execution.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/trusted-execution.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/trusted-execution.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/trusted-execution.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/trusted-execution.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/trusted-execution.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/trusted-execution.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/vault-boundary.test.ts" [label=<vault-boundary.test.ts> tooltip="vault-boundary.test.ts" URL="platform/pi/vault-boundary.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/vault-boundary.test.ts" -> "platform/core/index.ts"
+    "platform/pi/vault-boundary.test.ts" -> "platform/core/redaction.ts"
+    "platform/pi/vault-boundary.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/vault-boundary.test.ts" -> "platform/pi/vault-tools.ts"
+    "platform/pi/vault-boundary.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/vault-boundary.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/vault-boundary.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/vault-boundary.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/vault-boundary.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/vault-tools.ts" [label=<vault-tools.ts> tooltip="vault-tools.ts" URL="platform/pi/vault-tools.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/vault-tools.ts" -> "platform/core/errors.ts"
+    "platform/pi/vault-tools.ts" -> "platform/core/vault.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/write-approval.test.ts" [label=<write-approval.test.ts> tooltip="write-approval.test.ts" URL="platform/pi/write-approval.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/write-approval.test.ts" -> "platform/skill-registry.mjs"
+    "platform/pi/write-approval.test.ts" -> "platform/pi/approval.ts"
+    "platform/pi/write-approval.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/write-approval.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/write-approval.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/write-approval.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-approval.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-approval.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/write-byte-fail-closed.test.ts" [label=<write-byte-fail-closed.test.ts> tooltip="write-byte-fail-closed.test.ts" URL="platform/pi/write-byte-fail-closed.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/write-byte-fail-closed.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/write-byte-fail-closed.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/write-byte-fail-closed.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/write-byte-fail-closed.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/write-byte-fail-closed.test.ts" -> "platform/pi/vault-tools.ts"
+    "platform/pi/write-byte-fail-closed.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-byte-fail-closed.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-byte-fail-closed.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-byte-fail-closed.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-byte-fail-closed.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/pi" {label="pi" "platform/pi/write-scan-fail-closed.test.ts" [label=<write-scan-fail-closed.test.ts> tooltip="write-scan-fail-closed.test.ts" URL="platform/pi/write-scan-fail-closed.test.ts" fillcolor="#ddfeff"] } }
+    "platform/pi/write-scan-fail-closed.test.ts" -> "platform/core/policy-config.ts"
+    "platform/pi/write-scan-fail-closed.test.ts" -> "platform/pi/kernel-adapter.ts"
+    "platform/pi/write-scan-fail-closed.test.ts" -> "platform/pi/project-config.ts"
+    "platform/pi/write-scan-fail-closed.test.ts" -> "platform/pi/tool-adapter.ts"
+    "platform/pi/write-scan-fail-closed.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-scan-fail-closed.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-scan-fail-closed.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-scan-fail-closed.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/pi/write-scan-fail-closed.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" "platform/skill-conformance.test.mjs" [label=<skill-conformance.test.mjs> tooltip="skill-conformance.test.mjs" URL="platform/skill-conformance.test.mjs" ] }
+    "platform/skill-conformance.test.mjs" -> "platform/skill-registry.mjs"
+    "platform/skill-conformance.test.mjs" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/skill-conformance.test.mjs" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/skill-conformance.test.mjs" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/skill-conformance.test.mjs" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/skill-conformance.test.mjs" -> "path" [style="dashed" penwidth="1.0"]
+    "platform/skill-conformance.test.mjs" -> "url" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" "platform/skill-registry.d.mts" [label=<skill-registry.d.mts> tooltip="skill-registry.d.mts" URL="platform/skill-registry.d.mts" fillcolor="#ccffcc"] }
+    subgraph "cluster_platform" {label="platform" "platform/skill-registry.mjs" [label=<skill-registry.mjs> tooltip="skill-registry.mjs" URL="platform/skill-registry.mjs" ] }
+    "platform/skill-registry.mjs" -> "platform/core/skill-metadata.ts"
+    "platform/skill-registry.mjs" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/skill-registry.mjs" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" "platform/skill-registry.test.mjs" [label=<skill-registry.test.mjs> tooltip="skill-registry.test.mjs" URL="platform/skill-registry.test.mjs" ] }
+    "platform/skill-registry.test.mjs" -> "platform/skill-registry.mjs"
+    "platform/skill-registry.test.mjs" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/skill-registry.test.mjs" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/skill-registry.test.mjs" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/skill-registry.test.mjs" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/skill-registry.test.mjs" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/agent-registry.test.ts" [label=<agent-registry.test.ts> tooltip="agent-registry.test.ts" URL="platform/swarm/agent-registry.test.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/agent-registry.test.ts" -> "platform/swarm/agent-registry.ts"
+    "platform/swarm/agent-registry.test.ts" -> "platform/swarm/diagnostic-agent.ts"
+    "platform/swarm/agent-registry.test.ts" -> "platform/swarm/templates.ts"
+    "platform/swarm/agent-registry.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/swarm/agent-registry.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/agent-registry.ts" [label=<agent-registry.ts> tooltip="agent-registry.ts" URL="platform/swarm/agent-registry.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/agent-registry.ts" -> "platform/swarm/diagnostic-agent.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" subgraph "cluster_platform/swarm/agents" {label="agents" "platform/swarm/agents/sast-dast-parsers.ts" [label=<sast-dast-parsers.ts> tooltip="sast-dast-parsers.ts" URL="platform/swarm/agents/sast-dast-parsers.ts" fillcolor="#ddfeff"] } } }
+    "platform/swarm/agents/sast-dast-parsers.ts" -> "platform/swarm/agents/stream-harness.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" subgraph "cluster_platform/swarm/agents" {label="agents" "platform/swarm/agents/stream-harness.ts" [label=<stream-harness.ts> tooltip="stream-harness.ts" URL="platform/swarm/agents/stream-harness.ts" fillcolor="#ddfeff"] } } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/diagnostic-agent.ts" [label=<diagnostic-agent.ts> tooltip="diagnostic-agent.ts" URL="platform/swarm/diagnostic-agent.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/dynamic-registry.test.ts" [label=<dynamic-registry.test.ts> tooltip="dynamic-registry.test.ts" URL="platform/swarm/dynamic-registry.test.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/dynamic-registry.test.ts" -> "platform/swarm/agents/sast-dast-parsers.ts"
+    "platform/swarm/dynamic-registry.test.ts" -> "platform/swarm/agents/stream-harness.ts"
+    "platform/swarm/dynamic-registry.test.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/swarm/dynamic-registry.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/swarm/dynamic-registry.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/dynamic-registry.ts" [label=<dynamic-registry.ts> tooltip="dynamic-registry.ts" URL="platform/swarm/dynamic-registry.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/dynamic-registry.ts" -> "platform/swarm/agents/stream-harness.ts"
+    "platform/swarm/dynamic-registry.ts" -> "platform/swarm/diagnostic-agent.ts"
+    "platform/swarm/dynamic-registry.ts" -> "platform/swarm/safe-regex.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/e2e-dynamic-platform.test.ts" [label=<e2e-dynamic-platform.test.ts> tooltip="e2e-dynamic-platform.test.ts" URL="platform/swarm/e2e-dynamic-platform.test.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/e2e-dynamic-platform.test.ts" -> "platform/api/portal-routes.ts"
+    "platform/swarm/e2e-dynamic-platform.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/swarm/e2e-dynamic-platform.test.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/swarm/e2e-dynamic-platform.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/swarm/e2e-dynamic-platform.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/safe-regex.test.ts" [label=<safe-regex.test.ts> tooltip="safe-regex.test.ts" URL="platform/swarm/safe-regex.test.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/safe-regex.test.ts" -> "platform/swarm/safe-regex.ts"
+    "platform/swarm/safe-regex.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/swarm/safe-regex.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/safe-regex.ts" [label=<safe-regex.ts> tooltip="safe-regex.ts" URL="platform/swarm/safe-regex.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/swarm" {label="swarm" "platform/swarm/templates.ts" [label=<templates.ts> tooltip="templates.ts" URL="platform/swarm/templates.ts" fillcolor="#ddfeff"] } }
+    "platform/swarm/templates.ts" -> "platform/swarm/diagnostic-agent.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/test-support" {label="test-support" "platform/test-support/pdf-fixture.ts" [label=<pdf-fixture.ts> tooltip="pdf-fixture.ts" URL="platform/test-support/pdf-fixture.ts" fillcolor="#ddfeff"] } }
+    "platform/test-support/pdf-fixture.ts" -> "zlib" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/test-support" {label="test-support" "platform/test-support/temp-workspace.ts" [label=<temp-workspace.ts> tooltip="temp-workspace.ts" URL="platform/test-support/temp-workspace.ts" fillcolor="#ddfeff"] } }
+    "platform/test-support/temp-workspace.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/test-support/temp-workspace.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/test-support/temp-workspace.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/audit-sink.ts" [label=<audit-sink.ts> tooltip="audit-sink.ts" URL="platform/vault/audit-sink.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/capability.test.ts" [label=<capability.test.ts> tooltip="capability.test.ts" URL="platform/vault/capability.test.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/capability.test.ts" -> "platform/vault/capability.ts"
+    "platform/vault/capability.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/vault/capability.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/vault/capability.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/capability.ts" [label=<capability.ts> tooltip="capability.ts" URL="platform/vault/capability.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/capability.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/file-source.ts" [label=<file-source.ts> tooltip="file-source.ts" URL="platform/vault/file-source.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/file-source.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/metadata-read.test.ts" [label=<metadata-read.test.ts> tooltip="metadata-read.test.ts" URL="platform/vault/metadata-read.test.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/metadata-read.test.ts" -> "platform/vault/capability.ts"
+    "platform/vault/metadata-read.test.ts" -> "platform/vault/reader.ts"
+    "platform/vault/metadata-read.test.ts" -> "platform/vault/store.ts"
+    "platform/vault/metadata-read.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/vault/metadata-read.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/vault/metadata-read.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/osi.test.ts" [label=<osi.test.ts> tooltip="osi.test.ts" URL="platform/vault/osi.test.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/osi.test.ts" -> "platform/memory/store.ts"
+    "platform/vault/osi.test.ts" -> "platform/vault/osi.ts"
+    "platform/vault/osi.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/vault/osi.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/vault/osi.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/vault/osi.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/vault/osi.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/osi.ts" [label=<osi.ts> tooltip="osi.ts" URL="platform/vault/osi.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/reader.test.ts" [label=<reader.test.ts> tooltip="reader.test.ts" URL="platform/vault/reader.test.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/reader.test.ts" -> "platform/memory/store.ts"
+    "platform/vault/reader.test.ts" -> "platform/vault/capability.ts"
+    "platform/vault/reader.test.ts" -> "platform/vault/reader.ts"
+    "platform/vault/reader.test.ts" -> "platform/vault/store.ts"
+    "platform/vault/reader.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/vault/reader.test.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "platform/vault/reader.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/reader.ts" [label=<reader.ts> tooltip="reader.ts" URL="platform/vault/reader.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/reader.ts" -> "platform/vault/capability.ts"
+    "platform/vault/reader.ts" -> "platform/vault/store.ts"
+    "platform/vault/reader.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/store.test.ts" [label=<store.test.ts> tooltip="store.test.ts" URL="platform/vault/store.test.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/store.test.ts" -> "platform/vault/store.ts"
+    "platform/vault/store.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/vault/store.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/vault" {label="vault" "platform/vault/store.ts" [label=<store.ts> tooltip="store.ts" URL="platform/vault/store.ts" fillcolor="#ddfeff"] } }
+    "platform/vault/store.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/chart-assets.test.ts" [label=<chart-assets.test.ts> tooltip="chart-assets.test.ts" URL="platform/web/chart-assets.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/chart-assets.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/chart-assets.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/chart-assets.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/chart-assets.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/chart-assets.test.ts" -> "platform/web/server.ts"
+    "platform/web/chart-assets.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/chart-assets.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/chat-parse.test.ts" [label=<chat-parse.test.ts> tooltip="chat-parse.test.ts" URL="platform/web/chat-parse.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/chat-parse.test.ts" -> "platform/web/chat-parse.ts"
+    "platform/web/chat-parse.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/chat-parse.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/chat-parse.ts" [label=<chat-parse.ts> tooltip="chat-parse.ts" URL="platform/web/chat-parse.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/dashboard-route.test.ts" [label=<dashboard-route.test.ts> tooltip="dashboard-route.test.ts" URL="platform/web/dashboard-route.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/dashboard-route.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/dashboard-route.test.ts" -> "platform/web/server.ts"
+    "platform/web/dashboard-route.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/dashboard-route.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/dashboard-route.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/deployment.test.ts" [label=<deployment.test.ts> tooltip="deployment.test.ts" URL="platform/web/deployment.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/deployment.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/deployment.test.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "platform/web/deployment.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/deployment.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/export.test.ts" [label=<export.test.ts> tooltip="export.test.ts" URL="platform/web/export.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/export.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/export.test.ts" -> "platform/web/server.ts"
+    "platform/web/export.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/export.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/feedback.test.ts" [label=<feedback.test.ts> tooltip="feedback.test.ts" URL="platform/web/feedback.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/feedback.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/web/feedback.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/feedback.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/feedback.test.ts" -> "platform/conductor/schema-memory.ts"
+    "platform/web/feedback.test.ts" -> "platform/web/feedback.ts"
+    "platform/web/feedback.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/feedback.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/web/feedback.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/feedback.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/web/feedback.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/feedback.ts" [label=<feedback.ts> tooltip="feedback.ts" URL="platform/web/feedback.ts" fillcolor="#ddfeff"] } }
+    "platform/web/feedback.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/web/feedback.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/learning-memory.test.ts" [label=<learning-memory.test.ts> tooltip="learning-memory.test.ts" URL="platform/web/learning-memory.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/learning-memory.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/learning-memory.test.ts" -> "platform/web/server.ts"
+    "platform/web/learning-memory.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/learning-memory.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/web/learning-memory.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/learning-memory.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/page-navigation.test.ts" [label=<page-navigation.test.ts> tooltip="page-navigation.test.ts" URL="platform/web/page-navigation.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/page-navigation.test.ts" -> "platform/web/page.ts"
+    "platform/web/page-navigation.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/page-navigation.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/page.ts" [label=<page.ts> tooltip="page.ts" URL="platform/web/page.ts" fillcolor="#ddfeff"] } }
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/portal-mount.test.ts" [label=<portal-mount.test.ts> tooltip="portal-mount.test.ts" URL="platform/web/portal-mount.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/portal-mount.test.ts" -> "platform/memory/store.ts"
+    "platform/web/portal-mount.test.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/web/portal-mount.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/portal-mount.test.ts" -> "platform/web/server.ts"
+    "platform/web/portal-mount.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/portal-mount.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-app-harness.ts" [label=<react-app-harness.ts> tooltip="react-app-harness.ts" URL="platform/web/react-app-harness.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-app-harness.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-app-harness.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-app-parses.test.ts" [label=<react-app-parses.test.ts> tooltip="react-app-parses.test.ts" URL="platform/web/react-app-parses.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-app-parses.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/react-app-parses.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-app-parses.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-app-parses.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-app-runs.test.ts" [label=<react-app-runs.test.ts> tooltip="react-app-runs.test.ts" URL="platform/web/react-app-runs.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-app-runs.test.ts" -> "platform/web/react-app-harness.ts"
+    "platform/web/react-app-runs.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/react-app-runs.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-app-runs.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-app-runs.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-charts.test.ts" [label=<react-charts.test.ts> tooltip="react-charts.test.ts" URL="platform/web/react-charts.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-charts.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-charts.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-charts.test.ts" -> "platform/conductor/schema-memory.ts" [style="dashed"]
+    "platform/web/react-charts.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-charts.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-charts.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-chat-first.test.ts" [label=<react-chat-first.test.ts> tooltip="react-chat-first.test.ts" URL="platform/web/react-chat-first.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-chat-first.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-chat-first.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-chat-first.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-chat-first.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-chat-first.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-chat-refresh.test.ts" [label=<react-chat-refresh.test.ts> tooltip="react-chat-refresh.test.ts" URL="platform/web/react-chat-refresh.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-chat-refresh.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-chat-refresh.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-chat-refresh.test.ts" -> "platform/conductor/schema-memory.ts" [style="dashed"]
+    "platform/web/react-chat-refresh.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-chat-refresh.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-chat-refresh.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-chat.test.ts" [label=<react-chat.test.ts> tooltip="react-chat.test.ts" URL="platform/web/react-chat.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-chat.test.ts" -> "platform/web/chat-parse.ts"
+    "platform/web/react-chat.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/react-chat.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-chat.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-chat.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-forecast.test.ts" [label=<react-forecast.test.ts> tooltip="react-forecast.test.ts" URL="platform/web/react-forecast.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-forecast.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-forecast.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-forecast.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-forecast.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-forecast.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-report.test-support.ts" [label=<react-report.test-support.ts> tooltip="react-report.test-support.ts" URL="platform/web/react-report.test-support.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-report.test-support.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-report.test-support.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-report.test-support.ts" -> "platform/conductor/schema-memory.ts" [style="dashed"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-report.test.ts" [label=<react-report.test.ts> tooltip="react-report.test.ts" URL="platform/web/react-report.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-report.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-report.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-report.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/react-report.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-report.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-report.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-report.ts" [label=<react-report.ts> tooltip="react-report.ts" URL="platform/web/react-report.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-report.ts" -> "platform/conductor/conversation.ts"
+    "platform/web/react-report.ts" -> "platform/conductor/forecasting.ts"
+    "platform/web/react-report.ts" -> "platform/conductor/synthesis.ts"
+    "platform/web/react-report.ts" -> "platform/web/chat-parse.ts"
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-unified-composer.test.ts" [label=<react-unified-composer.test.ts> tooltip="react-unified-composer.test.ts" URL="platform/web/react-unified-composer.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-unified-composer.test.ts" -> "platform/web/react-app-harness.ts" [style="dashed"]
+    "platform/web/react-unified-composer.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/react-unified-composer.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-unified-composer.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-unified-composer.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/react-visual-first.test.ts" [label=<react-visual-first.test.ts> tooltip="react-visual-first.test.ts" URL="platform/web/react-visual-first.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/react-visual-first.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/react-visual-first.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/react-visual-first.test.ts" -> "platform/conductor/conversation.ts"
+    "platform/web/react-visual-first.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/react-visual-first.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/react-visual-first.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/report-noise.test.ts" [label=<report-noise.test.ts> tooltip="report-noise.test.ts" URL="platform/web/report-noise.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/report-noise.test.ts" -> "platform/conductor/bottleneck-report.ts"
+    "platform/web/report-noise.test.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/report-noise.test.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/report-noise.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/report-noise.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/server-boundary.test.ts" [label=<server-boundary.test.ts> tooltip="server-boundary.test.ts" URL="platform/web/server-boundary.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/server-boundary.test.ts" -> "platform/web/page.ts"
+    "platform/web/server-boundary.test.ts" -> "platform/web/server.ts"
+    "platform/web/server-boundary.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/server-boundary.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/web/server-boundary.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/server-boundary.test.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "platform/web/server-boundary.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/server.test.ts" [label=<server.test.ts> tooltip="server.test.ts" URL="platform/web/server.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/server.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/server.test.ts" -> "platform/web/server.ts"
+    "platform/web/server.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/server.test.ts" -> "fs/promises" [style="dashed" penwidth="1.0"]
+    "platform/web/server.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/server.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/server.ts" [label=<server.ts> tooltip="server.ts" URL="platform/web/server.ts" fillcolor="#ddfeff"] } }
+    "platform/web/server.ts" -> "platform/api/portal-routes.ts"
+    "platform/web/server.ts" -> "platform/conductor/bottlenecks.ts"
+    "platform/web/server.ts" -> "platform/conductor/capabilities.ts"
+    "platform/web/server.ts" -> "platform/conductor/conductor.ts"
+    "platform/web/server.ts" -> "platform/conductor/conversation.ts" [style="dashed"]
+    "platform/web/server.ts" -> "platform/conductor/schema-memory.ts" [style="dashed"]
+    "platform/web/server.ts" -> "platform/conductor/semantics.ts"
+    "platform/web/server.ts" -> "platform/conductor/session-store.ts"
+    "platform/web/server.ts" -> "platform/core/workspace.ts"
+    "platform/web/server.ts" -> "platform/egress/webhook-dispatcher.ts"
+    "platform/web/server.ts" -> "platform/memory/alert-hub.ts"
+    "platform/web/server.ts" -> "platform/memory/memory-routes.ts"
+    "platform/web/server.ts" -> "platform/omniroute/edge-security.ts"
+    "platform/web/server.ts" -> "platform/omniroute/evaluation-scheduler.ts"
+    "platform/web/server.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "platform/web/server.ts" -> "platform/swarm/dynamic-registry.ts"
+    "platform/web/server.ts" -> "platform/web/feedback.ts"
+    "platform/web/server.ts" -> "platform/web/page.ts" [style="dashed"]
+    "platform/web/server.ts" -> "platform/web/react-report.ts" [style="dashed"]
+    "platform/web/server.ts" -> "http" [style="dashed" penwidth="1.0"]
+    "platform/web/server.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/session-routing.test.ts" [label=<session-routing.test.ts> tooltip="session-routing.test.ts" URL="platform/web/session-routing.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/session-routing.test.ts" -> "platform/conductor/session-store.ts"
+    "platform/web/session-routing.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/session-routing.test.ts" -> "platform/web/react-app-harness.ts"
+    "platform/web/session-routing.test.ts" -> "platform/web/react-report.test-support.ts"
+    "platform/web/session-routing.test.ts" -> "platform/web/react-report.ts"
+    "platform/web/session-routing.test.ts" -> "platform/web/server.ts"
+    "platform/web/session-routing.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/session-routing.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "platform/web/session-routing.test.ts" -> "path" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/v2-category-resolution.test.ts" [label=<v2-category-resolution.test.ts> tooltip="v2-category-resolution.test.ts" URL="platform/web/v2-category-resolution.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/v2-category-resolution.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/v2-category-resolution.test.ts" -> "platform/web/server.ts"
+    "platform/web/v2-category-resolution.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/v2-category-resolution.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_platform" {label="platform" subgraph "cluster_platform/web" {label="web" "platform/web/v2-top-categories.test.ts" [label=<v2-top-categories.test.ts> tooltip="v2-top-categories.test.ts" URL="platform/web/v2-top-categories.test.ts" fillcolor="#ddfeff"] } }
+    "platform/web/v2-top-categories.test.ts" -> "platform/test-support/temp-workspace.ts"
+    "platform/web/v2-top-categories.test.ts" -> "platform/web/server.ts"
+    "platform/web/v2-top-categories.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "platform/web/v2-top-categories.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    "readline" [label=<readline> tooltip="readline" URL="https://nodejs.org/api/readline.html" color="grey" fontcolor="grey"]
+    subgraph "cluster_scripts" {label="scripts" "scripts/demo.ts" [label=<demo.ts> tooltip="demo.ts" URL="scripts/demo.ts" fillcolor="#ddfeff"] }
+    "scripts/demo.ts" -> "platform/api/schema-routes.ts"
+    "scripts/demo.ts" -> "platform/conductor/live-anomaly.ts"
+    "scripts/demo.ts" -> "platform/egress/webhook-dispatcher.ts"
+    "scripts/demo.ts" -> "platform/omniroute/edge-security.ts"
+    "scripts/demo.ts" -> "platform/omniroute/omniroute-gateway.ts"
+    "scripts/demo.ts" -> "platform/swarm/dynamic-registry.ts"
+    subgraph "cluster_scripts" {label="scripts" "scripts/dev-boot.mjs" [label=<dev-boot.mjs> tooltip="dev-boot.mjs" URL="scripts/dev-boot.mjs" ] }
+    "scripts/dev-boot.mjs" -> "scripts/dev-endpoints.ts"
+    "scripts/dev-boot.mjs" -> "child_process" [style="dashed" penwidth="1.0"]
+    "scripts/dev-boot.mjs" -> "crypto" [style="dashed" penwidth="1.0"]
+    "scripts/dev-boot.mjs" -> "fs" [style="dashed" penwidth="1.0"]
+    "scripts/dev-boot.mjs" -> "path" [style="dashed" penwidth="1.0"]
+    "scripts/dev-boot.mjs" -> "url" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_scripts" {label="scripts" "scripts/dev-endpoints.ts" [label=<dev-endpoints.ts> tooltip="dev-endpoints.ts" URL="scripts/dev-endpoints.ts" fillcolor="#ddfeff"] }
+    subgraph "cluster_scripts" {label="scripts" "scripts/flood-args.ts" [label=<flood-args.ts> tooltip="flood-args.ts" URL="scripts/flood-args.ts" fillcolor="#ddfeff"] }
+    "scripts/flood-args.ts" -> "scripts/dev-endpoints.ts"
+    subgraph "cluster_scripts" {label="scripts" "scripts/generate-synthetic-data.test.ts" [label=<generate-synthetic-data.test.ts> tooltip="generate-synthetic-data.test.ts" URL="scripts/generate-synthetic-data.test.ts" fillcolor="#ddfeff"] }
+    "scripts/generate-synthetic-data.test.ts" -> "scripts/dev-endpoints.ts"
+    "scripts/generate-synthetic-data.test.ts" -> "scripts/flood-args.ts"
+    "scripts/generate-synthetic-data.test.ts" -> "assert/strict" [style="dashed" penwidth="1.0"]
+    "scripts/generate-synthetic-data.test.ts" -> "node:test" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_scripts" {label="scripts" "scripts/generate-synthetic-data.ts" [label=<generate-synthetic-data.ts> tooltip="generate-synthetic-data.ts" URL="scripts/generate-synthetic-data.ts" fillcolor="#ddfeff"] }
+    "scripts/generate-synthetic-data.ts" -> "scripts/flood-args.ts"
+    "scripts/generate-synthetic-data.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "scripts/generate-synthetic-data.ts" -> "path" [style="dashed" penwidth="1.0"]
+    "scripts/generate-synthetic-data.ts" -> "url" [style="dashed" penwidth="1.0"]
+    subgraph "cluster_scripts" {label="scripts" "scripts/triage-agent-client.ts" [label=<triage-agent-client.ts> tooltip="triage-agent-client.ts" URL="scripts/triage-agent-client.ts" fillcolor="#ddfeff"] }
+    "scripts/triage-agent-client.ts" -> "platform/memory/store.ts"
+    "scripts/triage-agent-client.ts" -> "platform/omniroute/edge-security.ts"
+    "scripts/triage-agent-client.ts" -> "platform/test-support/temp-workspace.ts"
+    "scripts/triage-agent-client.ts" -> "platform/vault/capability.ts"
+    "scripts/triage-agent-client.ts" -> "platform/web/server.ts"
+    "scripts/triage-agent-client.ts" -> "child_process" [style="dashed" penwidth="1.0"]
+    "scripts/triage-agent-client.ts" -> "crypto" [style="dashed" penwidth="1.0"]
+    "scripts/triage-agent-client.ts" -> "fs" [style="dashed" penwidth="1.0"]
+    "scripts/triage-agent-client.ts" -> "os" [style="dashed" penwidth="1.0"]
+    "scripts/triage-agent-client.ts" -> "path" [style="dashed" penwidth="1.0"]
+    "stream" [label=<stream> tooltip="stream" URL="https://nodejs.org/api/stream.html" color="grey" fontcolor="grey"]
+    "string_decoder" [label=<string_decoder> tooltip="string_decoder" URL="https://nodejs.org/api/string_decoder.html" color="grey" fontcolor="grey"]
+    "url" [label=<url> tooltip="url" URL="https://nodejs.org/api/url.html" color="grey" fontcolor="grey"]
+    "zlib" [label=<zlib> tooltip="zlib" URL="https://nodejs.org/api/zlib.html" color="grey" fontcolor="grey"]
+}

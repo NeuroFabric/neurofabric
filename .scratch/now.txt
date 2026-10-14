@@ -1,0 +1,148 @@
+platform/conductor/conductor.test.ts(120,62): error TS2345: Argument of type '{}' is not assignable to parameter of type 'AgentContext'.
+platform/conductor/conversation-suggestions.test.ts(102,60): error TS2339: Property 'columns' does not exist on type 'never'.
+platform/conductor/conversation-suggestions.test.ts(44,61): error TS4104: The type 'readonly string[]' is 'readonly' and cannot be assigned to the mutable type 'string[]'.
+platform/conductor/data-health.test.ts(51,3): error TS2322: Type 'string' is not assignable to type 'number'.
+platform/conductor/multivariate-synthesis.test.ts(28,5): error TS2740: Type '{ column: string; mean: number; min: number; max: number; measured: number; dirty: number; empty: number; outliers: number; }' is missing the following properties from type 'NumericColumnStat': missing, dirtyExamples, spread, outlierMin, and 8 more.
+platform/conductor/multivariate-synthesis.test.ts(29,5): error TS2740: Type '{ column: string; mean: number; min: number; max: number; measured: number; dirty: number; empty: number; outliers: number; }' is missing the following properties from type 'NumericColumnStat': missing, dirtyExamples, spread, outlierMin, and 8 more.
+platform/conductor/pega-alerts.test.ts(123,16): error TS18048: 'pega1' is possibly 'undefined'.
+platform/conductor/pega-alerts.test.ts(124,16): error TS18048: 'pega5' is possibly 'undefined'.
+platform/conductor/pega-alerts.test.ts(125,16): error TS18048: 'pega11' is possibly 'undefined'.
+platform/conductor/pega-alerts.test.ts(32,18): error TS7006: Parameter 'code' implicitly has an 'any' type.
+platform/conductor/pega-alerts.test.ts(32,24): error TS7006: Parameter 'elapsed' implicitly has an 'any' type.
+platform/conductor/pega-alerts.test.ts(32,33): error TS7006: Parameter 'host' implicitly has an 'any' type.
+platform/conductor/pega-alerts.test.ts(32,39): error TS7006: Parameter 'time' implicitly has an 'any' type.
+platform/conductor/pega-alerts.test.ts(36,27): error TS7006: Parameter 'rows' implicitly has an 'any' type.
+platform/conductor/synthesis.test.ts(153,7): error TS2741: Property 'histogram' is missing in type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: number; ... 6 more ...; method: "IQR"; }' but required in type 'NumericColumnStat'.
+platform/conductor/synthesis.test.ts(154,7): error TS2741: Property 'histogram' is missing in type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: number; ... 6 more ...; method: "IQR"; }' but required in type 'NumericColumnStat'.
+platform/conductor/synthesis.test.ts(190,5): error TS2322: Type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: number; ... 6 more ...; method: "IQR"; }[]' is not assignable to type 'readonly NumericColumnStat[]'.
+platform/conductor/synthesis.test.ts(207,5): error TS2322: Type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: number; ... 6 more ...; method: "IQR"; }[]' is not assignable to type 'readonly NumericColumnStat[]'.
+platform/conductor/synthesis.test.ts(36,9): error TS2741: Property 'histogram' is missing in type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: number; ... 6 more ...; method: "IQR"; }' but required in type 'NumericColumnStat'.
+platform/conductor/synthesis.test.ts(76,13): error TS2741: Property 'histogram' is missing in type '{ column: string; measured: number; missing: number; empty: number; dirty: number; dirtyExamples: never[]; min: number; max: number; mean: number; spread: number; outliers: number; outlierMax: null; outlierMin: null; ... 5 more ...; method: "IQR"; }' but required in type 'NumericColumnStat'.
+platform/core/bounded-scan-truncation.test.ts(114,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/core/bounded-scan-truncation.test.ts(126,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/core/bounded-scan-truncation.test.ts(63,5): error TS2739: Type '{ maxAttempts: number; }' is missing the following properties from type 'RetryPolicy': backoffMs, maxBackoffMs
+platform/core/bounded-scan-truncation.test.ts(65,5): error TS2322: Type '"READ_ONLY" | "SIDE_EFFECTING"' is not assignable to type 'SideEffect'.
+platform/core/core.test.ts(115,63): error TS2551: Property 'execution' does not exist on type 'CoreError'. Did you mean 'executionId'?
+platform/core/core.test.ts(150,23): error TS2322: Type '"history"' is not assignable to type '"tool" | "instruction" | "task" | "plan" | "step" | "skill" | "observation" | "artifact" | "memory" | "conversation"'.
+platform/core/corelimits-enforcement.test.ts(119,8): error TS2352: Conversion of type 'CoreLimits' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(129,5): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(144,5): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(171,20): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: true; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(172,20): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(188,20): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: true; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(189,16): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(190,17): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(207,5): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: true; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(224,5): error TS2352: Conversion of type '{ id: string; content: string; scope: string; estimatedTokens: number; priority: number; required: false; }' to type 'ContextSource' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/corelimits-enforcement.test.ts(240,68): error TS2554: Expected 1-2 arguments, but got 0.
+platform/core/corelimits-enforcement.test.ts(253,59): error TS2554: Expected 1-2 arguments, but got 0.
+platform/core/corelimits-enforcement.test.ts(266,80): error TS2554: Expected 1-2 arguments, but got 0.
+platform/core/corelimits-enforcement.test.ts(270,76): error TS2554: Expected 1-2 arguments, but got 0.
+platform/core/corelimits-enforcement.test.ts(280,80): error TS2554: Expected 1-2 arguments, but got 0.
+platform/core/corelimits-enforcement.test.ts(41,100): error TS2352: Conversion of type '{ name: string; description: string; sideEffect: "SIDE_EFFECTING"; riskLevel: RiskLevel; idempotency: "IDEMPOTENT"; input: {}; }' to type 'ToolDescriptor' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/core/limit-profiles.test.ts(13,42): error TS2698: Spread types may only be created from object types.
+platform/core/policy-config.test.ts(78,6): error TS2322: Type '[]' is not assignable to type 'Record<string, unknown>'.
+platform/core/policy.test.ts(259,40): error TS2345: Argument of type '{ tool: ToolDescriptor; }' is not assignable to parameter of type 'Partial<PolicyRequest> & { input: unknown; }'.
+platform/core/policy.test.ts(260,40): error TS2345: Argument of type '{ tool: ToolDescriptor; }' is not assignable to parameter of type 'Partial<PolicyRequest> & { input: unknown; }'.
+platform/core/redaction.test.ts(288,28): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+platform/core/redaction.test.ts(290,18): error TS2345: Argument of type '{ eventId: `${string}-${string}-${string}-${string}-${string}`; type: string; taskId: string; correlationId: string; timestamp: string; payload: Record<string, unknown>; }' is not assignable to parameter of type 'PlatformEventRecord'.
+platform/core/redaction.test.ts(291,18): error TS2345: Argument of type '{ eventId: `${string}-${string}-${string}-${string}-${string}`; type: string; taskId: string; correlationId: string; timestamp: string; payload: Record<string, unknown>; }' is not assignable to parameter of type 'PlatformEventRecord'.
+platform/core/state-machine.test.ts(94,48): error TS2345: Argument of type 'string' is not assignable to parameter of type 'TaskStatus'.
+platform/ingestion/router.test.ts(118,23): error TS2339: Property 'csv' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(119,20): error TS2339: Property 'csv' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(119,39): error TS7006: Parameter 'p' implicitly has an 'any' type.
+platform/ingestion/router.test.ts(159,20): error TS2339: Property 'csv' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(159,39): error TS7006: Parameter 'p' implicitly has an 'any' type.
+platform/ingestion/router.test.ts(71,27): error TS2339: Property 'csv' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(72,23): error TS2339: Property 'csv' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(80,27): error TS2339: Property 'pdf' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(90,23): error TS2339: Property 'needs' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/ingestion/router.test.ts(92,37): error TS2339: Property 'file' does not exist on type '{ readonly ok: true; readonly kind: "csv"; readonly detection: Detection; readonly csv: CsvReadResult; } | { readonly ok: true; readonly kind: "pdf"; readonly detection: Detection; readonly pdf: PdfReadResult; } | { ...; }'.
+platform/pi/approval-policy-composition.test.ts(249,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/approval-policy-composition.test.ts(307,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/approval-policy-composition.test.ts(450,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/artifact-flow.test.ts(197,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/artifact-flow.test.ts(40,64): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/c1-replanning-stored-failure.test.ts(123,36): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/c1-replanning-stored-failure.test.ts(145,18): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/c1-replanning-stored-failure.test.ts(203,71): error TS2345: Argument of type 'string' is not assignable to parameter of type 'Record<string, unknown>'.
+platform/pi/c1-replanning-stored-failure.test.ts(209,30): error TS2341: Property 'transitionLog' is private and only accessible within class 'KernelAdapter'.
+platform/pi/command-position-corpus.test.ts(297,44): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/corelimits-execution-time.test.ts(50,51): error TS2345: Argument of type '{ retryCount: number; replanCount: number; depth: number; elapsedMs: number; limits: RecoveryLimits; idempotency: Idempotency; }' is not assignable to parameter of type '{ failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number | undefined; depth: number; idempotency: Idempotency; attemptMatchesLastFailure?: boolean | undefined; elapsedMs?: number | undefined; violation?: "block" | ... 1 more ... | undefined; tier?: DenialTie...'.
+platform/pi/d1-refusal-tiers.test.ts(87,18): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/d4b-bridge-metadata.test.ts(119,16): error TS2571: Object is of type 'unknown'.
+platform/pi/d4b-bridge-metadata.test.ts(149,16): error TS2571: Object is of type 'unknown'.
+platform/pi/d4b-recovery-classification.test.ts(70,24): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f003-block-lifecycle.test.ts(410,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f003-block-lifecycle.test.ts(412,32): error TS2345: Argument of type 'string' is not assignable to parameter of type 'PlatformEvent'.
+platform/pi/f006-attempt-signature-lifecycle.test.ts(213,47): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-benign-nonzero-exit.test.ts(202,69): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-denial-certificate-shape.test.ts(115,21): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-denial-certificate-shape.test.ts(118,21): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-policy-denied.test.ts(102,66): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-policy-deny-kill-mechanism.test.ts(77,69): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-recovery-diagnostics.test.ts(54,24): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-retryability-propagation.test.ts(49,24): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-sibling-refusal-kill.test.ts(78,69): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-sibling-refusal-kill.test.ts(80,24): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f006-strategy-consumer.test.ts(62,18): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/f008-budget-telemetry.test.ts(69,66): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-adapter-reentrancy.test.ts(448,44): error TS2871: This expression is always nullish.
+platform/pi/kernel-lifecycle.test.ts(114,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(136,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(137,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(201,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(25,64): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(288,24): error TS2341: Property 'toolExecutionCount' is private and only accessible within class 'KernelAdapter'.
+platform/pi/kernel-lifecycle.test.ts(288,44): error TS2871: This expression is always nullish.
+platform/pi/kernel-lifecycle.test.ts(304,54): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(308,26): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/kernel-lifecycle.test.ts(94,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/path-boundary-corpus.test.ts(135,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(140,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(145,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(175,82): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(258,90): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(271,82): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(297,82): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/path-boundary-corpus.test.ts(436,43): error TS2345: Argument of type '{ limits: CoreLimits; failure: "POLICY_DENIED"; depth: number; idempotency: "IDEMPOTENT"; violation: "block"; }' is not assignable to parameter of type '{ failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number | undefined; depth: number; idempotency: Idempotency; attemptMatchesLastFailure?: boolean | undefined; elapsedMs?: number | undefined; violation?: "block" | ... 1 more ... | undefined; tier?: DenialTie...'.
+platform/pi/path-boundary-corpus.test.ts(447,45): error TS2345: Argument of type '{ limits: CoreLimits; failure: "POLICY_DENIED"; depth: number; idempotency: "IDEMPOTENT"; }' is not assignable to parameter of type '{ failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number | undefined; depth: number; idempotency: Idempotency; attemptMatchesLastFailure?: boolean | undefined; elapsedMs?: number | undefined; violation?: "block" | ... 1 more ... | undefined; tier?: DenialTie...'.
+platform/pi/path-boundary-corpus.test.ts(468,45): error TS2345: Argument of type '{ limits: CoreLimits; failure: "POLICY_DENIED"; depth: number; idempotency: "IDEMPOTENT"; violation: "abort"; }' is not assignable to parameter of type '{ failure: FailureCategory; limits: RecoveryLimits; retryCount: number; replanCount: number; strategyCount?: number | undefined; depth: number; idempotency: Idempotency; attemptMatchesLastFailure?: boolean | undefined; elapsedMs?: number | undefined; violation?: "block" | ... 1 more ... | undefined; tier?: DenialTie...'.
+platform/pi/path-extraction-corpus.test.ts(298,42): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/payload-position-tiering.test.ts(65,18): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/policy-port.test.ts(483,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/redaction-boundary.test.ts(155,52): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/redaction-boundary.test.ts(214,24): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+platform/pi/redaction-boundary.test.ts(257,41): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/redaction-boundary.test.ts(40,49): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/redaction-boundary.test.ts(86,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/redaction-boundary.test.ts(99,52): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/ruling3-refusal-budget.test.ts(60,5): error TS2741: Property 'mode' is missing in type '{ evaluate: () => { decision: "ALLOW"; }; evaluateWithApproval: () => Promise<{ decision: "ALLOW"; }>; }' but required in type 'PolicyEngine'.
+platform/pi/skill-authority.test.ts(226,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/stream-termination.test.ts(149,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/stream-termination.test.ts(33,33): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/stream-termination.test.ts(43,33): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/stream-termination.test.ts(53,33): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(126,67): error TS2345: Argument of type 'string' is not assignable to parameter of type 'Record<string, unknown>'.
+platform/pi/terminal-refusal-echo.test.ts(172,33): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(191,20): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(195,31): error TS2339: Property 'refusal' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(201,33): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(220,31): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(221,32): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(231,20): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(275,20): error TS2339: Property 'reason' does not exist on type 'PolicyDecision'.
+platform/pi/terminal-refusal-echo.test.ts(98,64): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/trusted-execution.test.ts(130,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/trusted-execution.test.ts(89,37): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/trusted-execution.test.ts(92,42): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/vault-boundary.test.ts(17,25): error TS2305: Module '"../core/redaction.ts"' has no exported member 'VaultEvent'.
+platform/pi/write-approval.test.ts(110,34): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/write-approval.test.ts(89,39): error TS2554: Expected 0 arguments, but got 1.
+platform/pi/write-scan-fail-closed.test.ts(315,12): error TS2345: Argument of type 'PolicyDecision' is not assignable to parameter of type '{ reason?: string | undefined; }'.
+platform/web/chat-parse.test.ts(121,40): error TS2345: Argument of type 'string' is not assignable to parameter of type '"category" | "time" | "source" | "duration" | "threshold" | "alias" | "status" | "message"'.
+platform/web/feedback.test.ts(12,15): error TS2305: Module '"./feedback.ts"' has no exported member 'CsvReadResult'.
+platform/web/react-chat-first.test.ts(133,27): error TS18048: 'greeting' is possibly 'undefined'.
+platform/web/react-chat-first.test.ts(133,52): error TS18048: 'greeting' is possibly 'undefined'.
+platform/web/v2-category-resolution.test.ts(59,56): error TS2352: Conversion of type 'Promise<unknown>' to type '{ status: string; reply?: { text: string; } | undefined; failure?: { reason: string; } | undefined; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+platform/web/v2-category-resolution.test.ts(91,19): error TS2339: Property 'cwd' does not exist on type '{ server: RunningWedge; post: (route: string, body: unknown) => Promise<{ status: string; reply?: { text: string; } | undefined; failure?: { reason: string; } | undefined; }>; }'.

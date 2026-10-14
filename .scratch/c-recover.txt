@@ -1,0 +1,66 @@
+feat(web): the chat-first surface, recovered and finished
+
+Resumes from a dirty tree. The layout was rewritten last session; the tests
+around it were not reconciled. Both are done, and the reconciliation turned out
+to be worth more than the tests it fixed.
+
+*** A REAL REGRESSION THE UNFINISHED WORK HAD INTRODUCED ***
+
+Moving the composer from a live-only sidebar into the primary layout gave the
+STANDALONE artifact one too. That file is opened over file:// by people with no
+server behind it, and its own policy is connect-src 'none': every question asked
+of it would be refused by the document's own rules, and a text box that
+swallows every sentence silently is worse than no text box.
+
+Fixed with a `live` flag on the payload, which gates the control, AND a runtime
+`if (!D.live) return;` guard in the handler, which is not redundant. The gate
+stops a control being OFFERED. The guard stops the call HAPPENING if the control
+is reached another way -- a keyboard handler, a suggestion chip restored from a
+cache, or a later edit that renders the composer unconditionally again. A page
+whose policy forbids network should not contain a fetch it can only be prevented
+from making by remembering not to call it.
+
+*** TWO TESTS THAT WERE ASSERTING THE WRONG THING ***
+
+"the standalone page makes no network call" asserted the STRING /api/feedback was
+absent. That was true only while the chat lived in a live-only sidebar; the
+chat-first pivot made it false, and the test would have "passed" if I had deleted
+the composer instead of gating it. It now asserts the GUARD, which is the actual
+property and the one that survives a future edit -- a string check fails the
+moment somebody reuses the handler.
+
+"a refusal is never silently applied" asserted a local `if (!parsed.ok)` gate in
+the page. The gate MOVED to the server router, which is where the single
+implementation of "what does this sentence mean" now lives. What did not move is
+the consequence: /api/feedback is still reached only from inside the branch
+where the parse succeeded, and the ordering is asserted.
+
+*** A FRAGILITY A NEW TEST FOUND ***
+
+The TOP-N cap on the category chart lived at the DATA BOUNDARY, so it held only
+for the callers that remembered to apply it. The rewritten visual-first file
+passed a 20-category ranking straight to the router and got a 20-bar chart --
+which renders as a grey stripe rather than a chart. The cap now lives in the
+widget builder, so every caller gets the same promise and the assertion sits
+with the reason.
+
+*** THE LAYOUT TESTS, AND WHAT THEY NOW ASSERT ***
+
+react-visual-first.test.ts asserted a page ORDER: stat cards, charts,
+disclosures, TOP=5. That order is gone on purpose -- replacing a sidebar chat
+with a sidebar dashboard would be replacing the complaint with its mirror
+image. It now asserts the three claims that survived and still decide whether
+the product shows data or performs it: the charts are real Chart.js
+configurations drawn into a canvas, the numbers are ALSO text, and the library is
+pinned with a survivable failure.
+
+react-report.test.ts asserted a severity <select> and a depth toggle. A chat
+that is asked "what is wrong with this file" and returns the findings IS the
+severity filter, with a language instead of a dropdown. The test now asserts the
+property underneath both -- user input changes state, and that state reaches the
+render.
+
+Layout claims moved to react-chat-first.test.ts, which asserts the conversation
+is the primary surface and the charts are inside it.
+
+Suite: 1022 passing, 0 failing. Kernel FROZEN.

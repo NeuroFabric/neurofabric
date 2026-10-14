@@ -1,0 +1,162 @@
+
+/* ===================================================================== *
+ * THE RECORD PANEL. Where the record and the running system disagree.
+ * ===================================================================== *
+ *
+ * RULE 3 IS A COLOUR DECISION, AND IT IS THE REASON THIS BLOCK EXISTS.
+ *
+ * ADR-005 section 9 says a recorded breach and a live breach must look
+ * different ON PURPOSE, because a four-hour-old alert rendered in the same ink
+ * as a breach happening now is the specific dishonesty the two-truths contract
+ * exists to prevent. So `chip--recorded-breach` is deliberately FLAT -- no
+ * pulse, no glow, a muted outline -- while the live strip's breach keeps its
+ * pulse. Two treatments for the same word is the requirement, not an
+ * inconsistency.
+ *
+ * The corollary is a rule for whoever edits this next: NOTHING IN THIS BLOCK MAY
+ * ANIMATE. An animation on a recorded value is a claim that it is happening now,
+ * and these values are not.
+ */
+
+.record {
+  /* A DIFFERENT GROUND from `.panel`, so the block reads as separate even
+   * before a word is read. The separation is structural, not a caption. */
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 0 0 var(--gap);
+}
+
+.record h3 {
+  /* "From the record" is a source label, not a heading to be skipped past, so it
+   * is set at heading weight and never reduced to the muted treatment a caption
+   * would get. */
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+
+.record__summary {
+  margin: 0.6rem 0 0.9rem;
+  font-weight: 600;
+}
+
+.record__subhead {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Corruption is the one thing here that means something is WRONG rather than
+ * something CHANGED, so it is the only row that gets the bad ink on its border.
+ * It is never merged into the difference list -- that is the whole discipline. */
+.card--corruption {
+  border-left: 3px solid var(--critical);
+}
+
+.card--difference {
+  border-left: 3px solid var(--muted);
+}
+
+/* The word on a legal difference is deliberately plain. A chip that shouted
+ * would train the operator to read every chip the same way, which is how a
+ * genuine corruption gets skimmed with it. */
+.chip {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chip--legal {
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.chip--corruption {
+  color: var(--critical);
+  border-color: color-mix(in srgb, var(--critical) 55%, var(--line));
+}
+
+.chip--seen {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-color: var(--line);
+  white-space: normal;
+}
+
+/* RULE 3, IN INK. Flat on purpose: no animation, no glow, dated by the text
+ * beside it. `chip--recorded-clear` is quieter still -- a record of something
+ * that was fine four hours ago is not news and must not look like it. */
+.chip--recorded-breach {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.chip--recorded-clear {
+  color: var(--muted);
+  border-color: var(--line);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* THE TWO SIDES OF A DISAGREEMENT, IN THEIR OWN COLUMNS.
+ *
+ * Row-level structural separation (ADR-005 section 9, rule 1): "Recorded" and
+ * "Live" are column headings, repeated on every row, so the labels cannot be
+ * scrolled past once and then assumed four rows down.
+ */
+.kv--twotruths {
+  grid-template-columns: max-content minmax(0, 1fr);
+  border-left: 2px solid var(--line);
+  padding-left: 0.7rem;
+  margin: 0.5rem 0;
+}
+
+.kv--twotruths dt {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+}
+
+.diff__action {
+  margin: 0.5rem 0 0.4rem;
+}
+
+.diff__ack {
+  margin: 0;
+}
+
+/* The record's own view of the past: one line per agent, age on every line, and
+ * the closing sentence that says none of it is the current reading. */
+.record__verdicts {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.record__verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  list-style: none;
+  font-size: 0.85rem;
+}
+
+.record__agent {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--ink);
+}

@@ -1,0 +1,61 @@
+feat(ui): build dynamic schema-driven dashboard rendering engine
+
+DynamicDashboard.tsx and AgentSelector.tsx. There is no agent id, domain or
+schema shape named anywhere in either file. A new agent renders with no edit
+here at all, and there is a test that says so using an agent this project has
+never heard of.
+
+=== WHAT THE SCHEMA DOES NOT CONTAIN, AND SO WHAT IS NOT DRAWN ===
+
+A schema describes RULES. It does not carry observations: a threshold rule says
+"fire above 1000", and nothing anywhere says the current value is 1043.
+
+So the threshold visualizer draws the CONFIGURED THRESHOLD and labels it
+"no reading yet", and takes observed values through a separate `readings`
+prop. It does not draw a bar at a height inferred from the schema, because a bar
+at an invented height is a picture of a number nobody measured, and a dashboard
+whose numbers are decorative is the one failure this platform's entire claim is
+against. Pinned by a test asserting BREACHED is ABSENT with no reading supplied
+and PRESENT when one is.
+
+The bar's scale is the threshold itself, not twice the threshold. A track whose
+full width means "2x the limit" would make a rule at 1 and a rule at 100000 draw
+the same picture, and then full width would mean nothing at all.
+
+Widgets render as cards stating what feeds them. The portal config says a widget
+is a `feed` for agent X over `recent`; it does not carry the findings, so the
+card says "fed by X" instead of drawing a plausible empty chart.
+
+=== TESTS WITHOUT A BROWSER, WITHOUT jsdom ===
+
+`renderToStaticMarkup` from `react-dom/server` runs in plain node and renders
+real React output, throwing on anything React cannot render. That is why these
+are not snapshots and why the project still installs no DOM implementation:
+23 tests assert specific claims on a string produced by actually executing
+React.
+
+What this CANNOT test is stated in the file rather than left to be discovered:
+interaction, layout and focus. A click handler can be broken and this suite stay
+green. The selector's onChange is therefore the one piece of Task 3 with no
+automated coverage, and it is called out rather than implied.
+
+=== THREE TEST BUGS I WROTE AND FIXED, recorded because two were instructive ===
+
+- Asserting the idle dashboard says "Portal" when its title was populated. The
+  component was right; the assertion was wrong. There is now a separate test for
+  the genuine empty-title fallback.
+- Asserting the capped issue banner reports eight issues when it correctly
+  reports the TOTAL and lists eight. Capping a list and understating its size
+  are different behaviours; the test now pins both.
+- Asserting the selector does not contain the string "selected" when the CORRECT
+  output is the none option carrying `selected=""` because the named agent is
+  absent. A test asserting the absence of a substring the component must emit
+  is a test that would have failed the correct implementation.
+
+The selector is a native `<select>` rather than a bespoke control: it is
+keyboard-operable, screen-reader-labelled and mobile-native without a line being
+written here, and re-implementing any of those is how a control ends up
+reachable by mouse only.
+
+Frontend `tsc --noEmit`: 0 errors. 125 tests pass (76 client, 25 store, 23
+components, 1 pre-existing).

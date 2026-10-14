@@ -1,0 +1,1 @@
+orchestrator write-path probe — this file confirms the orchestrator's own write tool functions while subagent write paths are degraded.

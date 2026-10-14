@@ -1,0 +1,123 @@
+   * A refused credential is not a degraded dashboard. It is a question only a
+   * person can answer, and it is asked ONCE, in place of the screen whose data
+   * could never arrive. Returning early here is what makes the two states visibly
+   * distinct rather than merely differently bad: without it the operator gets a
+   * shell with refused-field panels and a live panel that can only ever say
+   * "unreachable", which is precisely the screenshot this replaces.
+   *
+   * Both variants live in `RefusalScreen`, reachable without an effect, so what
+   * is asserted about them is what an operator would actually see.
+   */
+  if (live.credentialRequired) {
+    return (
+      <RefusalScreen
+        state={live.state}
+        {...(onCredentialRequired === undefined ? {} : { onCredentialRequired })}
+        onRetry={reload}
+      />
+    );
+  }
+
+  // THE INSTALL TRANSPORT, offered only when the source can actually install.
+  // Same runtime check as the front door: a cast would offer a form that 404s.
+  const installSource = hasDemoTransport(source) ? source : undefined;
+
+  /**
+   * After a successful install: reload the roster, then SELECT the new agent and
+   * load its rules.
+   *
+   * Without the select step the agent appears in the list and nothing else
+   * happens, which is the half-loop this replaces. The id from the server is
+   * composite (tenant/name) and is exactly what the roster will carry, so it is
+   * used verbatim rather than reconstructed.
+   */
+  const afterInstall = useCallback(
+    (agentId: string) => {
+      void (async () => {
+        await store.load(source);
+        const composite = store.getState().agents.find((a) => a.id === agentId || a.id.endsWith(`/${agentId}`))?.id ?? agentId;
+        store.select(composite);
+        await store.loadSchema(source, composite);
+      })();
+    },
+    [store, source],
+  );
+
+  return (
+    <div className="app">
+      {/* THE STATUS LINE, FIRST, ABOVE EVERYTHING.
+          *
+          "Visible without scrolling" is the requirement, and putting it here
+          * rather than in the side panel is what satisfies it. A fault you have
+          * to scroll to find is a fault an operator misses, and the state that
+          * must never be ambiguous is the one that costs the most to reach. */}
+      <LivenessStrip
+        liveness={livenessOf({
+          credentialRequired: live.credentialRequired,
+          lastUpdated: live.snapshot?.at ?? null,
+          now,
+          loading: live.loading,
+          records: live.snapshot?.verdict?.records ?? null,
+          // ADR-003: the rate decides whether the feed is LIVE. Without this the
+          // strip said "Live, just now" beside "0 events/sec" after a burst.
+          rate: live.snapshot?.throughput?.eventsPerSecond ?? null,
+        })}
+        lastUpdated={live.snapshot?.at ?? null}
+        now={now}
+        credentialState={live.state}
+        fault={live.error}
+        records={live.snapshot?.verdict?.records ?? null}
+      />
+
+      <header className="app__bar">
+        {/* THE PRODUCT'S NAME, CENTRED. It was "Command Center" in the left
+            gutter, which is a description of a component rather than a product
+            -- and the word "Neurofebric" appeared nowhere on screen at all. The
+            class carries the centring so the change is one line of CSS rather
+            than a layout rewrite. */}
+        <div className="app__identity">
+          <h1 className="app__wordmark">Neurofebric</h1>
+        </div>
+        <div className="app__meta">
+          <p className="muted">
+            {liveSource === undefined ? "schema-driven · " : "schema-driven · live · "}
+            {state.agents.length} agent{state.agents.length === 1 ? "" : "s"}
+          </p>
+          <div className="app__actions">
+            {/* The CLASS still carries the machine state, for styling and for the
+                test that asserts on it. Only the word a person reads changes. */}
+            <span className={`pill pill--${state.status}`} data-status={state.status}>
+              {statusWord(state.status)}
+            </span>
+            <button type="button" onClick={reload}>
+              Reload
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <nav className="app__select" aria-label="Agent selection">
+        <AgentSelector
+          agents={state.agents}
+          selectedAgentId={state.selectedAgentId}
+          loading={state.schemaLoading}
+          onSelect={select}
+        />
+      </nav>
+
+      <main className="app__main">
+        <DynamicDashboard config={state} readings={readings} install={installSource} onInstalled={afterInstall} {...(diagnostics === undefined ? {} : { diagnostics })} />
+        <aside className="app__side">
+          <LiveStreamView
+            verdict={live.snapshot?.verdict ?? null}
+            throughput={live.snapshot?.throughput ?? null}
+            error={live.error ?? undefined}
+            loading={live.loading}
+            idle={live.snapshot !== null && live.snapshot.verdict !== null && live.snapshot.verdict.records === 0}
+            demo={demo}
+          />
+          <AlertCenter alerts={alerts} verdict={live.snapshot?.verdict ?? null} />
+        </aside>
+      </main>
+    </div>
+  );

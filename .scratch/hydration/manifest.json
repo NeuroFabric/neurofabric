@@ -1,0 +1,95 @@
+{
+  "seed": 20261004,
+  "rows": 2000,
+  "spikes": 12,
+  "datasets": {
+    "db_query_times": {
+      "file": "db_query_times.csv",
+      "rows": 2000,
+      "value_column": "elapsed_ms",
+      "injected_spikes": 12,
+      "observed_max": 2304.26,
+      "observed_median": 24.895,
+      "max_over_median": 92.5591484233782,
+      "columns": [
+        "query_id",
+        "db_host",
+        "elapsed_ms",
+        "rows_returned",
+        "plan_hash",
+        "started_at"
+      ]
+    },
+    "splunk_events": {
+      "file": "splunk_events.csv",
+      "rows": 2000,
+      "value_column": "bytes_out",
+      "injected_spikes": 12,
+      "observed_max": 281155.4,
+      "observed_median": 1590.1,
+      "max_over_median": 176.81617508332812,
+      "columns": [
+        "_time",
+        "source",
+        "sourcetype",
+        "host",
+        "event_id",
+        "bytes_out",
+        "severity"
+      ]
+    },
+    "apache_access": {
+      "file": "apache_access.csv",
+      "rows": 2000,
+      "value_column": "request_time_us",
+      "injected_spikes": 12,
+      "observed_max": 16446071.2,
+      "observed_median": 10069.150000000001,
+      "max_over_median": 1633.3127622490476,
+      "columns": [
+        "ts",
+        "remote_host",
+        "method",
+        "path",
+        "status",
+        "bytes",
+        "request_time_us"
+      ]
+    },
+    "pega_traces": {
+      "file": "pega_traces.csv",
+      "rows": 2000,
+      "value_column": "elapsed_time",
+      "injected_spikes": 12,
+      "observed_max": 26789.4,
+      "observed_median": 402.85,
+      "max_over_median": 66.49968971081047,
+      "columns": [
+        "service",
+        "pega_time",
+        "alert_code",
+        "elapsed_time",
+        "threshold",
+        "rule_name"
+      ]
+    },
+    "vugen_metrics": {
+      "file": "vugen_metrics.csv",
+      "rows": 2000,
+      "value_column": "elapsed_ms",
+      "injected_spikes": 12,
+      "observed_max": 19125.79,
+      "observed_median": 220.98000000000002,
+      "max_over_median": 86.5498687664042,
+      "columns": [
+        "transaction_name",
+        "sample_at",
+        "elapsed_ms",
+        "think_time_ms",
+        "hits",
+        "passed",
+        "failed"
+      ]
+    }
+  }
+}

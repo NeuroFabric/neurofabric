@@ -1,0 +1,167 @@
+{
+  "id": "042dc0d2-94bd-4c6f-9760-b5baf1c1a532",
+  "created": "2026-10-03T00:32:05.277Z",
+  "updated": "2026-10-03T00:32:10.808Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "show me the worst hour",
+      "at": "2026-10-03T00:32:05.277Z"
+    },
+    {
+      "role": "agent",
+      "text": "This file has no readable timestamps, so there is no hour to rank. If it has a time column and I did not recognise it, say so and I will read it that way.",
+      "widgets": [],
+      "suggestions": [
+        "what is wrong with this file?",
+        "tell me what this file is for",
+        "are there any complex anomalies?",
+        "how did you read the columns?"
+      ],
+      "at": "2026-10-03T00:32:05.293Z"
+    },
+    {
+      "role": "user",
+      "text": "what are the top categories",
+      "at": "2026-10-03T00:32:08.435Z"
+    },
+    {
+      "role": "agent",
+      "text": "I could not find a categorical column in this file, so there is nothing to rank. If a column of yours groups things -- a channel, a region, a status -- tell me in plain English and I will use it: say \"channel is the category\".",
+      "widgets": [],
+      "suggestions": [
+        "what is wrong with this file?",
+        "tell me what this file is for",
+        "are there any complex anomalies?",
+        "how did you read the columns?"
+      ],
+      "at": "2026-10-03T00:32:08.448Z"
+    },
+    {
+      "role": "user",
+      "text": "what is wrong with this file",
+      "at": "2026-10-03T00:32:10.789Z"
+    },
+    {
+      "role": "agent",
+      "text": "14 findings. The worst is a severe finding in col_15: 9,999,999.99 against a fence of 3. I asked the forecasting agent about col_15 and it could not project it -- I have no hourly readings for col_15, so there is nothing to project.. That is a projection of a trend, not a measurement of what will happen.",
+      "widgets": [
+        {
+          "kind": "findings",
+          "title": "Findings",
+          "note": "14 in total, worst first.",
+          "payload": {
+            "anomalies": [
+              {
+                "column": "col_7",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "1 value(s) past the 1.5x fence, worst 2.949",
+                "factor": 0.628667341991293
+              },
+              {
+                "column": "col_7",
+                "severity": "warning",
+                "kind": "type mismatch",
+                "detail": "1 cell(s) hold something that is not a number, e.g. oops_wrong_type",
+                "factor": null
+              },
+              {
+                "column": "col_15",
+                "severity": "critical",
+                "kind": "extreme value",
+                "detail": "9,999,999.99 against a fence of 3",
+                "factor": 3262069.9232296934
+              },
+              {
+                "column": "col_10",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "1 value(s) past the 1.5x fence, worst 3.853",
+                "factor": 0.7581658286969075
+              },
+              {
+                "column": "col_10",
+                "severity": "info",
+                "kind": "missing values",
+                "detail": "1 empty cell(s)",
+                "factor": null
+              },
+              {
+                "column": "col_16",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "4 value(s) past the 1.5x fence, worst 3.926",
+                "factor": 0.839644259512502
+              },
+              {
+                "column": "col_17",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "1 value(s) past the 1.5x fence, worst 3.243",
+                "factor": 0.7046156614231968
+              },
+              {
+                "column": "col_18",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "5 value(s) past the 1.5x fence, worst 3.138",
+                "factor": 0.8027429344495914
+              },
+              {
+                "column": "col_18",
+                "severity": "info",
+                "kind": "missing values",
+                "detail": "1 empty cell(s)",
+                "factor": null
+              },
+              {
+                "column": "col_19",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "3 value(s) past the 1.5x fence, worst 3.079",
+                "factor": 0.6727638072639152
+              },
+              {
+                "column": "col_2",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "5 value(s) past the 1.5x fence, worst 2.985",
+                "factor": 0.6320305891171973
+              },
+              {
+                "column": "col_3",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "2 value(s) past the 1.5x fence, worst 3.152",
+                "factor": 0.6769703357783722
+              },
+              {
+                "column": "col_3",
+                "severity": "info",
+                "kind": "missing values",
+                "detail": "1 empty cell(s)",
+                "factor": null
+              },
+              {
+                "column": "col_6",
+                "severity": "warning",
+                "kind": "marginal value",
+                "detail": "1 value(s) past the 1.5x fence, worst 3.11",
+                "factor": 0.6112297667259161
+              }
+            ]
+          }
+        }
+      ],
+      "suggestions": [
+        "what is wrong with this file?",
+        "tell me what this file is for",
+        "are there any complex anomalies?",
+        "how did you read the columns?"
+      ],
+      "at": "2026-10-03T00:32:10.808Z"
+    }
+  ],
+  "corrections": []
+}
